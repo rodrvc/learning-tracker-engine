@@ -10,14 +10,22 @@ from __future__ import annotations
 from typing import Final
 
 #: Cuántos intentos recientes forman la ventana ponderada (SPEC §2.2 paso 3).
-WINDOW: Final[int] = 5
+#: 8 y no 5: el usuario responde preguntas sueltas, no exámenes completos, y con
+#: una ventana corta una sola respuesta movía demasiado el nivel.
+WINDOW: Final[int] = 8
 
 #: Intentos mínimos para salir de UNASSESSED (SPEC §2.2 paso 2).
 MIN_ATTEMPTS: Final[int] = 2
 
 #: Días tras los cuales el peso de lo aprendido se reduce a la mitad
-#: (SPEC §2.2 paso 5).
-DECAY_HALF_LIFE_DAYS: Final[float] = 30.0
+#: (SPEC §2.2 paso 5). 90 y no 30: el estudio se extiende a lo largo de meses y
+#: una semivida corta hundía un tema por un solo mes sin tocarlo.
+DECAY_HALF_LIFE_DAYS: Final[float] = 90.0
+
+#: Suelo del factor de retención (SPEC §2.2 paso 5). Se aplica SOLO a
+#: ``retention``, NUNCA al ``raw``. Es lo que permite al score distinguir
+#: "lo abandoné" (raw alto x 0.40) de "no lo sé" (raw bajo).
+RETENTION_FLOOR: Final[float] = 0.40
 
 #: Umbral inferior de COMPETENT (SPEC §2.2 paso 6). Comparación con >=.
 THRESHOLD_COMPETENT: Final[float] = 0.85
@@ -27,6 +35,11 @@ THRESHOLD_LEARNING: Final[float] = 0.60
 
 #: Días naturales distintos con intentos exigidos para MASTERED (SPEC §2.2 paso 7).
 MASTERY_MIN_DAYS: Final[int] = 2
+
+#: ``raw`` mínimo para ascender a MASTERED (SPEC §2.2 paso 7). Es 0.95 y no
+#: 1.0 porque con ventana 8 exigir perfección obligaría a 8 aciertos
+#: consecutivos y a purgar cualquier fallo con 8 intentos más. Ver SPEC §2.4.
+MASTERY_MIN_RAW: Final[float] = 0.95
 
 #: Días entre primer y último intento exigidos para MASTERED (SPEC §2.2 paso 7).
 MASTERY_MIN_SPAN_DAYS: Final[int] = 7

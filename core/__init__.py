@@ -20,8 +20,10 @@ from .clock import Clock, FixedClock, OffsetClock
 from .constants import (
     DECAY_HALF_LIFE_DAYS,
     MASTERY_MIN_DAYS,
+    MASTERY_MIN_RAW,
     MASTERY_MIN_SPAN_DAYS,
     MIN_ATTEMPTS,
+    RETENTION_FLOOR,
     SCHEDULE_DAYS,
     THRESHOLD_COMPETENT,
     THRESHOLD_LEARNING,
@@ -93,9 +95,11 @@ __all__ = [
     "WINDOW",
     "MIN_ATTEMPTS",
     "DECAY_HALF_LIFE_DAYS",
+    "RETENTION_FLOOR",
     "THRESHOLD_COMPETENT",
     "THRESHOLD_LEARNING",
     "MASTERY_MIN_DAYS",
     "MASTERY_MIN_SPAN_DAYS",
+    "MASTERY_MIN_RAW",
     "SCHEDULE_DAYS",
 ]

@@ -104,7 +104,7 @@ persiste.
 | `score` | `float` | Puntuación continua 0.0–1.0 que produce el nivel (§2.2). Permite comparar dos objetivos del mismo nivel. |
 | `total_attempts` | `int` | Intentos con `at <= as_of`. |
 | `correct_attempts` | `int` | De esos, cuántos `correct=True`. |
-| `recent_window` | `tuple[bool, ...]` | Los últimos `N=5` resultados hasta `as_of`, **del más antiguo al más reciente**. |
+| `recent_window` | `tuple[bool, ...]` | Los últimos `N=8` resultados hasta `as_of`, **del más antiguo al más reciente**. |
 | `first_attempt_at` | `datetime \| None` | — |
 | `last_attempt_at` | `datetime \| None` | — |
 | `distinct_days` | `int` | Número de **días naturales distintos** con al menos un intento. |
@@ -125,11 +125,13 @@ máquina y en cualquier orden de inserción.
 
 | Constante | Valor | Qué es |
 | --- | --- | --- |
-| `WINDOW` | `5` | Cuántos intentos recientes forman la ventana. |
+| `WINDOW` | `8` | Cuántos intentos recientes forman la ventana. |
 | `MIN_ATTEMPTS` | `2` | Mínimo de intentos para salir de `UNASSESSED`. |
-| `DECAY_HALF_LIFE_DAYS` | `30` | Cada 30 días sin actividad, el peso de un intento se reduce a la mitad. |
+| `DECAY_HALF_LIFE_DAYS` | `90` | Cada 90 días sin actividad, la retención se reduce a la mitad. |
+| `RETENTION_FLOOR` | `0.40` | Suelo del factor de retención. **Solo afecta a `retention`, nunca al `raw`.** |
 | `MASTERY_MIN_DAYS` | `2` | Días naturales distintos con intentos exigidos para `MASTERED`. |
 | `MASTERY_MIN_SPAN_DAYS` | `7` | Días entre el primer y el último intento exigidos para `MASTERED`. |
+| `MASTERY_MIN_RAW` | `0.95` | `raw` mínimo para ascender a `MASTERED` (ver §2.4). |
 
 ### 2.2 Paso a paso
 
@@ -149,8 +151,12 @@ Toma los últimos `min(n, WINDOW)` intentos de la lista ordenada. Llamemos `w` a
 su tamaño. Asigna a cada uno un **peso posicional**: el más reciente pesa `w`,
 el siguiente `w-1`, … y el más antiguo de la ventana pesa `1`.
 
-Ejemplo con `w=5`, de más antiguo a más reciente: pesos `1, 2, 3, 4, 5`
-(suma 15).
+Ejemplo con `w=8`, de más antiguo a más reciente: pesos
+`1, 2, 3, 4, 5, 6, 7, 8` (suma **36**).
+
+Una ventana de 8 y no de 5 porque el usuario responde **preguntas sueltas**, no
+exámenes completos: con ventana corta una sola respuesta movía demasiado el
+nivel. Con 8, subir exige evidencia sostenida.
 
 **Paso 4 — Puntuación cruda.**
 
@@ -166,12 +172,34 @@ tendencia se refleje: fallar lo último pesa más que haber fallado al principio
 Sea `gap = (as_of - last_attempt_at)` en días (fraccionarios, no redondeados).
 
 ```
-retention = 0.5 ** (gap / DECAY_HALF_LIFE_DAYS)
+retention = max(RETENTION_FLOOR, 0.5 ** (gap / DECAY_HALF_LIFE_DAYS))
 score     = raw * retention
 ```
 
-El conocimiento se oxida. Un objetivo perfecto que lleva 60 días sin tocarse
-tiene `score = 1.0 * 0.25 = 0.25`. Si `gap <= 0`, `retention = 1.0`.
+Si `gap <= 0`, `retention = 1.0`.
+
+El conocimiento se oxida, pero no se evapora. Dos matices decisivos:
+
+**El suelo se aplica SOLO a `retention`, nunca al `raw`.** Esta es la razón de
+ser del suelo: el tiempo puede bajarte de dominado a débil, **pero no a cero**.
+
+| Situación | `raw` | `retention` | `score` | Lectura |
+| --- | --- | --- | --- | --- |
+| Dominado y abandonado un año | 1.00 | 0.40 (suelo) | **0.400** | "lo abandoné" |
+| Se falla siempre, recién visto | 0.10 | 1.00 | **0.100** | "no lo sé" |
+| Se falla siempre y abandonado | 0.10 | 0.40 (suelo) | **0.040** | ambas cosas |
+
+Sin el suelo, ambos casos convergían a ~0 y el score no podía distinguir *lo
+dejé aparcado* de *nunca lo entendí*, que exigen acciones distintas: repasar
+frente a estudiar de cero.
+
+**Tabla de retención** (verificada, `HL=90`, suelo `0.40`):
+
+| `gap` | 0 d | 7 d | 15 d | 30 d | 60 d | 90 d | 180 d | 365 d |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `retention` | 1.000 | 0.948 | 0.891 | 0.794 | 0.630 | 0.500 | 0.400 | 0.400 |
+
+A partir de ~119 días el suelo domina y la retención ya no baja más.
 
 **Paso 6 — Umbrales.** El `score` se traduce a nivel:
 
@@ -190,15 +218,44 @@ condiciones de sostenimiento en el tiempo:
 
 1. `distinct_days >= MASTERY_MIN_DAYS` (2), y
 2. `(last_attempt_at - first_attempt_at) >= MASTERY_MIN_SPAN_DAYS` (7 días), y
-3. ningún fallo en la ventana reciente (`raw == 1.0`).
+3. `raw >= MASTERY_MIN_RAW` (0.95) — ver §2.4 sobre por qué 0.95 y no 1.0.
 
 Si no las cumple, se queda en `COMPETENT`. No se puede dominar algo en una
 tarde: es la traducción numérica de "evidencia en ≥2 sesiones separadas".
 
+### 2.4 Por qué `MASTERED` exige `raw >= 0.95` y no `raw == 1.0`
+
+Al pasar la ventana de 5 a 8 se revisó si los umbrales seguían teniendo
+sentido. **Los umbrales de nivel (0.85 / 0.60) se mantienen**: siguen siendo
+alcanzables y bien espaciados con ventana 8 — 5 aciertos finales de 8 dan
+`raw = 0.833`, 6 dan `0.917`. No hay razón para moverlos.
+
+**El criterio de `MASTERED` sí se ajustó**, de `raw == 1.0` a `raw >= 0.95`.
+Con ventana 5, exigir perfección significaba 5 aciertos seguidos. Con ventana
+8 significa **8 aciertos consecutivos sin un solo fallo**, y además cualquier
+fallo tarda **8 intentos más** en salir de la ventana. El efecto medido:
+
+| Ventana | `raw` | ¿`raw == 1.0`? | ¿`raw >= 0.95`? |
+| --- | --- | --- | --- |
+| 8 aciertos | 1.000 | sí | sí |
+| 7 aciertos + 1 fallo en la posición **más antigua** (peso 1) | 0.972 | no | **sí** |
+| 7 aciertos + 1 fallo en la penúltima posición más antigua (peso 2) | 0.944 | no | no |
+
+Con `raw == 1.0`, un único fallo antiguo y ya casi purgado bloqueaba el ascenso
+durante ocho intentos más, lo que hacía `MASTERED` prácticamente inalcanzable
+para quien responde preguntas sueltas. `0.95` deja pasar exactamente ese caso —
+un fallo residual en la posición de menor peso — y sigue rechazando cualquier
+fallo más reciente. Las otras dos condiciones (≥2 días distintos, span ≥7 días)
+no se tocan: son las que impiden dominar algo en una tarde.
+
+Nótese además que `MASTERED` exige `score >= 0.85`, y con `raw = 1.0` el score
+cae por debajo de 0.85 a los **21 días** de inactividad. `MASTERED` sigue
+siendo, por diseño, un estado que hay que sostener.
+
 ### 2.3 Resumen ejecutable en una línea
 
-> Nivel = umbral(recencia_ponderada(últimos 5) × decaimiento(días sin tocar)),
-> con `MASTERED` reservado a lo perfecto y sostenido ≥7 días.
+> Nivel = umbral(recencia_ponderada(últimos 8) × decaimiento con suelo 0.40),
+> con `MASTERED` reservado a lo casi perfecto y sostenido ≥7 días.
 
 ---
 
@@ -208,16 +265,19 @@ Escenario canónico. Objetivo `X`, cinco intentos en **días consecutivos** para
 que el decaimiento sea casi neutro. `as_of` = el instante del último intento en
 cada fila, así que `gap = 0` y `retention = 1.0` (salvo la última fila).
 
-| # | Fecha | Resultado | Ventana (viejo→nuevo) | Pesos | Aciertos/Total | `raw` | `score` | **Nivel** |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | 2026-01-01 | mal | `[F]` | — | — | — | 0.00 | `UNASSESSED` (n=1 < 2) |
-| 2 | 2026-01-02 | mal | `[F,F]` | 1,2 | 0 / 3 | 0.000 | 0.000 | `WEAK` |
-| 3 | 2026-01-03 | mal | `[F,F,F]` | 1,2,3 | 0 / 6 | 0.000 | 0.000 | `WEAK` |
-| 4 | 2026-01-04 | **bien** | `[F,F,F,C]` | 1,2,3,4 | 4 / 10 | 0.400 | 0.400 | `WEAK` |
-| 5 | 2026-01-05 | mal | `[F,F,F,C,F]` | 1,2,3,4,5 | 4 / 15 | 0.267 | 0.267 | `WEAK` |
+| # | Fecha | Resultado | Ventana (viejo→nuevo) | Aciertos/Total | `raw` | `score` | **Nivel** |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | 2026-01-01 | mal | `[F]` | — | — | 0.000 | `UNASSESSED` (n=1 < 2) |
+| 2 | 2026-01-02 | mal | `[F,F]` | 0 / 3 | 0.000 | 0.000 | `WEAK` |
+| 3 | 2026-01-03 | mal | `[F,F,F]` | 0 / 6 | 0.000 | 0.000 | `WEAK` |
+| 4 | 2026-01-04 | **bien** | `[F,F,F,C]` | 4 / 10 | 0.400 | 0.400 | `WEAK` |
+| 5 | 2026-01-05 | mal | `[F,F,F,C,F]` | 4 / 15 | 0.267 | 0.267 | `WEAK` |
+
+Obsérvese que con solo 5 intentos la ventana (que admite 8) aún no está llena:
+los pesos son `1..n`, no `1..8`.
 
 Comprobación de la fila 4: el único acierto es el más reciente de una ventana de
-4, luego pesa `4`. Suma de pesos `1+2+3+4 = 10`. `raw = 4/10 = 0.4`.
+4, luego pesa `4`. Suma de pesos `1+2+3+4 = 10`. `raw = 4/10 = 0.400`.
 
 Comprobación de la fila 5: la ventana es de 5, el acierto quedó en penúltima
 posición y pesa `4`. Suma de pesos `1+2+3+4+5 = 15`. `raw = 4/15 = 0.2667`.
@@ -233,25 +293,50 @@ luego una recaída, y todo eso es consultable.
 
 Sigamos el mismo objetivo para ver el ascenso.
 
-| # | Fecha | Resultado | Ventana | `raw` | `score` | **Nivel** | Nota |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| 6 | 2026-01-06 | bien | `[F,F,C,F,C]` | 3+5 / 15 = 0.533 | 0.533 | `WEAK` | aún por debajo de 0.60 |
-| 7 | 2026-01-07 | bien | `[F,C,F,C,C]` | 2+4+5 / 15 = 0.733 | 0.733 | `LEARNING` | cruza 0.60 |
-| 8 | 2026-01-08 | bien | `[C,F,C,C,C]` | 1+3+4+5 / 15 = 0.867 | 0.867 | `COMPETENT` | cruza 0.85 |
-| 9 | 2026-01-09 | bien | `[F,C,C,C,C]` | 2+3+4+5 / 15 = 0.933 | 0.933 | `COMPETENT` | el fallo antiguo aún pesa |
-| 10 | 2026-01-10 | bien | `[C,C,C,C,C]` | 15/15 = 1.000 | 1.000 | **`MASTERED`** | span 01-01→01-10 = 9 días ≥ 7 ✔, 10 días distintos ≥ 2 ✔, `raw=1.0` ✔ |
+Se siguen sumando aciertos sueltos, uno por día. La ventana se llena en la
+fila 8 (8 intentos) y a partir de ahí desplaza por la cola.
+
+| # | Fecha | Resultado | Ventana (viejo→nuevo) | Aciertos/Total | `raw` | `score` | **Nivel** | Nota |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 6 | 2026-01-06 | bien | `[F,F,F,C,F,C]` | 10 / 21 | 0.476 | 0.476 | `WEAK` | aún por debajo de 0.60 |
+| 7 | 2026-01-07 | bien | `[F,F,F,C,F,C,C]` | 17 / 28 | 0.607 | 0.607 | `LEARNING` | cruza 0.60 |
+| 8 | 2026-01-08 | bien | `[F,F,F,C,F,C,C,C]` | 25 / 36 | 0.694 | 0.694 | `LEARNING` | ventana llena (8) |
+| 9 | 2026-01-09 | bien | `[F,F,C,F,C,C,C,C]` | 29 / 36 | 0.806 | 0.806 | `LEARNING` | sale el `F` más antiguo |
+| 10 | 2026-01-10 | bien | `[F,C,F,C,C,C,C,C]` | 32 / 36 | 0.889 | 0.889 | `COMPETENT` | cruza 0.85 |
+| 11 | 2026-01-11 | bien | `[C,F,C,C,C,C,C,C]` | 34 / 36 | 0.944 | 0.944 | `COMPETENT` | `raw < 0.95`, aún no `MASTERED` |
+| 12 | 2026-01-12 | bien | `[F,C,C,C,C,C,C,C]` | 35 / 36 | 0.972 | 0.972 | **`MASTERED`** | `raw ≥ 0.95` ✔ · span 01-01→01-12 = 11 d ≥ 7 ✔ · 12 días distintos ≥ 2 ✔ |
+| 13 | 2026-01-13 | bien | `[C,C,C,C,C,C,C,C]` | 36 / 36 | 1.000 | 1.000 | **`MASTERED`** | ventana perfecta |
+
+Comprobación de la fila 12: el único fallo está en la posición más antigua, con
+peso `1`; los aciertos suman `2+3+4+5+6+7+8 = 35` sobre `36`. `raw = 0.9722`.
+Es exactamente el caso que motiva el umbral `0.95` de §2.4: con `raw == 1.0`
+habría hecho falta un día más.
+
+**Nótese cuánto más exigente es la subida con ventana 8.** Hicieron falta 7
+aciertos consecutivos para pasar de `WEAK` a `COMPETENT`, y 9 para `MASTERED`.
+Con ventana 5 bastaban 3 y 5. Eso es justo lo que se buscaba: que el nivel no
+se mueva con una sola respuesta.
 
 Y el efecto del olvido, sin ningún intento nuevo:
 
+Partiendo de la fila 13 (`raw = 1.000`, último intento 2026-01-13):
+
 | Consulta `as_of` | `gap` | `retention` | `score` | **Nivel** |
 | --- | --- | --- | --- | --- |
-| 2026-01-10 | 0 d | 1.000 | 1.000 | `MASTERED` |
-| 2026-02-09 | 30 d | 0.500 | 0.500 | `WEAK` |
-| 2026-03-11 | 60 d | 0.250 | 0.250 | `WEAK` |
+| 2026-01-13 | 0 d | 1.000 | 1.000 | `MASTERED` |
+| 2026-01-20 | 7 d | 0.948 | 0.948 | `MASTERED` |
+| 2026-02-03 | 21 d | 0.851 | 0.851 | `COMPETENT` |
+| 2026-02-12 | 30 d | 0.794 | 0.794 | `LEARNING` |
+| 2026-03-14 | 60 d | 0.630 | 0.630 | `LEARNING` |
+| 2026-04-13 | 90 d | 0.500 | 0.500 | `WEAK` |
+| 2026-07-12 | 180 d | 0.400 | 0.400 | `WEAK` (suelo) |
+| 2027-01-13 | 365 d | 0.400 | 0.400 | `WEAK` (suelo) |
 
 Nótese que `MASTERED` **se pierde** por inactividad sin registrar ningún
 intento nuevo: el nivel es función de la fecha de consulta, no un sello
-permanente.
+permanente. Pero el descenso **se detiene en 0.400**: un año después el motor
+sigue distinguiendo este tema (dominado y abandonado) de uno que nunca se supo.
+El olvido lo degrada a `WEAK`, no lo borra.
 
 ### 3.2 Regla general de la evolución
 
@@ -259,9 +344,37 @@ permanente.
   hacia arriba; expulsa por la cola el intento más antiguo de la ventana.
 - Un **fallo** hace lo mismo hacia abajo. Un fallo no borra el historial ni
   reinicia nada: reduce el `score` en proporción a su peso.
-- El paso del tiempo sin intentos **solo baja** el `score`, nunca lo sube.
-- **Nada es irreversible.** Cinco aciertos consecutivos recuperan siempre
-  `raw = 1.0` sea cual sea el pasado, porque la ventana solo mira 5.
+- El paso del tiempo sin intentos **solo baja** el `score`, nunca lo sube, y
+  nunca por debajo de `raw × 0.40`.
+- **Nada es irreversible.** Ocho aciertos consecutivos recuperan siempre
+  `raw = 1.0` sea cual sea el pasado, porque la ventana solo mira 8.
+- **Registrar un intento pone el `gap` a 0** y por tanto `retention = 1.0`.
+  Responder una sola pregunta, aunque sea fallándola, detiene el decaimiento en
+  seco: el objetivo vuelve a valorarse por lo que se sabe, no por lo que hace
+  que no se toca.
+
+### 3.3 El caso "pregunta suelta"
+
+**El motor no requiere exámenes.** Una única respuesta a una única pregunta es
+un `Attempt` completo, válido y suficiente. No hay concepto de "sesión mínima",
+ni de quiz que haya que completar, ni intentos que deban agruparse: `kind` es
+informativo y no cambia ningún cálculo.
+
+Esto es deliberado, porque así estudia el usuario: preguntas parceladas a lo
+largo de semanas, no simulacros completos. Dos consecuencias que conviene tener
+presentes:
+
+1. **Una respuesta suelta mueve poco el nivel** — es el motivo de la ventana de
+   8. Hacen falta varias respuestas consistentes para cambiar de nivel, que es
+   la definición operativa de "evidencia sostenida".
+2. **Una respuesta suelta frena el decaimiento por completo.** Como `retention`
+   depende solo de `last_attempt_at`, un intento aislado resetea el `gap` a 0.
+   Un tema tocado ayer se valora al 100% de su `raw`, aunque el intento anterior
+   fuese de hace tres meses.
+
+De los dos efectos se sigue la lectura correcta: **contestar una pregunta suelta
+mantiene vivo un tema, pero no lo promociona.** Subir de nivel exige volumen;
+no bajar solo exige constancia.
 
 ---
 
@@ -274,6 +387,10 @@ corromper** (§8, fallo 3).
 ### 4.1 La escalera
 
 `SCHEDULE_DAYS = [1, 3, 7, 14, 30]`
+
+(El `30` de aquí son días de la escalera de repaso y no tiene relación con
+`DECAY_HALF_LIFE_DAYS = 90`, que gobierna el olvido. Son dos mecanismos
+distintos.)
 
 ### 4.2 Regla
 
@@ -297,8 +414,8 @@ corromper** (§8, fallo 3).
 `is_due(as_of) == (next_review_at is not None and next_review_at <= as_of)`.
 
 Aplicado al ejemplo de §3: tras la fila 5 (fallo del 2026-01-05), `S=0`, luego
-`next_review_at = 2026-01-06`. Tras la fila 10, `S=5` y nivel `MASTERED`, luego
-`30 × 2 = 60` días → `2026-03-11`.
+`next_review_at = 2026-01-06`. Tras la fila 13 (2026-01-13), `S=8` y nivel
+`MASTERED`, luego `30 × 2 = 60` días → `2026-03-14`.
 
 ---
 
@@ -385,6 +502,7 @@ es visible, simplemente no basta para asignar nivel.
 ### C3 — Dos intentos el mismo día
 Cuentan como **dos intentos independientes**. No se colapsan, no se promedian.
 Ambos entran en la ventana con pesos distintos según su orden temporal.
+Es el caso normal cuando se responden varias preguntas sueltas seguidas.
 Para `distinct_days` cuentan como **un solo día** (se comparan fechas
 naturales, no instantes) — lo cual afecta al ascenso a `MASTERED`.
 Si tienen el **mismo `at` exacto**, se ordenan por `attempt_id` ascendente.
@@ -398,9 +516,14 @@ antes**. Esto es correcto: se ha añadido información sobre el pasado, no se ha
 alterado el pasado. `recorded_at` deja constancia de la inserción tardía.
 
 ### C5 — Hueco largo sin actividad
-El decaimiento se aplica sin límite inferior salvo el matemático: `score` tiende
-a 0 pero nunca es negativo. Un objetivo `MASTERED` con 90 días de hueco tiene
-`retention = 0.5**3 = 0.125` y por tanto `score <= 0.125` ⇒ `WEAK`.
+El decaimiento **tiene suelo**: `retention` nunca baja de `RETENTION_FLOOR`
+(0.40), y por tanto `score` nunca baja de `raw × 0.40`. Un objetivo con
+`raw = 1.0` y 90 días de hueco tiene `retention = 0.500` ⇒ `score = 0.500` ⇒
+`WEAK`; con 365 días tiene `retention = 0.400` ⇒ `score = 0.400`, y ahí se
+queda por mucho que pase el tiempo.
+
+El suelo es lo que impide que "abandonado" y "nunca aprendido" colapsen al
+mismo número (§2.2 paso 5).
 `next_review_at` queda muy en el pasado, así que `is_due = True` y aparece el
 primero en `get_due` por ser el más vencido. **El motor nunca "olvida" al
 objetivo ni lo archiva por sí solo.**
@@ -528,7 +651,7 @@ Todos son *dataclasses* congeladas (`frozen=True`): inmutables por construcción
 
 | Función | Qué hace |
 | --- | --- |
-| `compute_score(attempts, as_of)` | Pasos 1–5 de §2.2. |
+| `compute_score(attempts, as_of)` | Pasos 1–5 de §2.2, con suelo de retención. |
 | `compute_level(score, attempts, as_of)` | Pasos 6–7 de §2.2. |
 | `compute_state(objective_id, attempts, as_of)` | El `ObjectiveState` completo. |
 | `compute_next_review(attempts, level)` | §4. |

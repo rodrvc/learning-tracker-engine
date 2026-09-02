@@ -51,7 +51,7 @@ def attempts_until(
 
 
 def recent_window(attempts: Sequence[Attempt]) -> tuple[bool, ...]:
-    """Los últimos ``WINDOW`` resultados, del más antiguo al más reciente.
+    """Los últimos ``WINDOW`` (8) resultados, del más antiguo al más reciente.
 
     Args:
         attempts: intentos ya ordenados y ya cortados por ``as_of``.
@@ -68,7 +68,10 @@ def weighted_raw_score(window: Sequence[bool]) -> float:
 
     El más reciente de la ventana pesa ``len(window)``, el anterior uno menos,
     y así hasta ``1``. ``raw`` es la suma de los pesos de los aciertos dividida
-    por la suma de todos los pesos.
+    por la suma de todos los pesos. Con la ventana llena (8) los pesos son
+    ``1..8`` y suman 36; con menos intentos, ``1..n``.
+
+    **El suelo de retención NO se aplica aquí.** ``raw`` puede valer 0.0.
 
     Ponderar por recencia es lo que hace que la tendencia se vea: un fallo
     reciente duele más que uno antiguo, sin necesidad de reiniciar nada.
@@ -88,15 +91,20 @@ def retention_factor(
 ) -> float:
     """Decaimiento por inactividad. SPEC §2.2 paso 5.
 
-    ``0.5 ** (gap_en_dias / DECAY_HALF_LIFE_DAYS)``, con ``gap`` fraccionario.
-    Si ``gap <= 0`` (o no hay intentos), devuelve ``1.0``.
+    ``max(RETENTION_FLOOR, 0.5 ** (gap_en_dias / DECAY_HALF_LIFE_DAYS))``, con
+    ``gap`` fraccionario. Si ``gap <= 0`` (o no hay intentos), devuelve ``1.0``.
 
-    Modela que el conocimiento se oxida: un objetivo perfecto sin tocar en 60
-    días vale un cuarto. Es lo que permite que ``MASTERED`` se pierda sin
-    registrar ningún intento nuevo, solo por el paso del tiempo.
+    Modela que el conocimiento se oxida, pero **con suelo**: el factor nunca
+    baja de ``RETENTION_FLOOR`` (0.40). El suelo se aplica aquí y solo aquí,
+    **nunca al** ``raw``: por eso el tiempo puede degradar un tema de dominado a
+    débil, pero no a cero, y el ``score`` conserva la distinción entre "lo
+    abandoné" (raw alto x 0.40) y "no lo sé" (raw bajo).
+
+    Registrar cualquier intento pone ``gap`` a 0 y devuelve ``1.0``: una sola
+    pregunta suelta detiene el decaimiento (SPEC §3.3).
 
     Returns:
-        Un factor en (0.0, 1.0].
+        Un factor en [RETENTION_FLOOR, 1.0].
     """
     raise NotImplementedError
 
@@ -141,8 +149,8 @@ def compute_level(
 
     Un ``COMPETENT`` asciende a ``MASTERED`` solo si además cumple las tres
     condiciones de sostenimiento del paso 7: ``distinct_days >= 2``, span entre
-    primer y último intento ``>= 7`` días, y ninguna falla en la ventana. No se
-    domina algo en una tarde.
+    primer y último intento ``>= 7`` días, y ``raw >= MASTERY_MIN_RAW`` (0.95,
+    no 1.0 — el porqué está en SPEC §2.4). No se domina algo en una tarde.
 
     Args:
         score: el valor de :func:`compute_score`.
