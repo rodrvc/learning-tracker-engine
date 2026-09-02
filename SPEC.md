@@ -249,8 +249,20 @@ fallo más reciente. Las otras dos condiciones (≥2 días distintos, span ≥7 
 no se tocan: son las que impiden dominar algo en una tarde.
 
 Nótese además que `MASTERED` exige `score >= 0.85`, y con `raw = 1.0` el score
-cae por debajo de 0.85 a los **21 días** de inactividad. `MASTERED` sigue
-siendo, por diseño, un estado que hay que sostener.
+cae por debajo de 0.85 a los **22 días** de inactividad (el cruce exacto está
+en `gap = 21.1019` días: a día 21 el score es 0.8507 y el objetivo **sigue
+siendo** `MASTERED`; a día 22 es 0.8441 y cae directamente a `LEARNING`, porque
+por debajo de 0.85 no hay ningún tramo intermedio — `COMPETENT` solo existe
+como escalón cuando el `raw` no llega a 0.95). `MASTERED` sigue siendo, por
+diseño, un estado que hay que sostener.
+
+Conviene subrayar por qué el decaimiento **puede** hacer perder `MASTERED`
+aunque las tres condiciones de sostenimiento del paso 7 sean inmunes al paso
+del tiempo: `retention` no toca ni el `raw`, ni `distinct_days`, ni el span, así
+que esas tres siguen cumpliéndose para siempre. Lo único que cae es el `score`,
+y con él la condición previa de ser candidato (`score >= 0.85`) del paso 6. Un
+objetivo abandonado deja de ser `MASTERED` por dejar de ser `COMPETENT`, no por
+dejar de estar sostenido.
 
 ### 2.3 Resumen ejecutable en una línea
 
@@ -325,7 +337,8 @@ Partiendo de la fila 13 (`raw = 1.000`, último intento 2026-01-13):
 | --- | --- | --- | --- | --- |
 | 2026-01-13 | 0 d | 1.000 | 1.000 | `MASTERED` |
 | 2026-01-20 | 7 d | 0.948 | 0.948 | `MASTERED` |
-| 2026-02-03 | 21 d | 0.851 | 0.851 | `COMPETENT` |
+| 2026-02-03 | 21 d | 0.851 | 0.851 | `MASTERED` |
+| 2026-02-04 | 22 d | 0.844 | 0.844 | `LEARNING` |
 | 2026-02-12 | 30 d | 0.794 | 0.794 | `LEARNING` |
 | 2026-03-14 | 60 d | 0.630 | 0.630 | `LEARNING` |
 | 2026-04-13 | 90 d | 0.500 | 0.500 | `WEAK` |
