@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "learning-tracker"
+version = "0.1.0"
+description = "Motor de seguimiento de aprendizaje: intentos, niveles y repaso espaciado. El contrato vive en SPEC.md."
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[tool.setuptools]
+packages = ["core", "store"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-q --strict-markers"
+markers = [
+    "spec: verifica una regla concreta de SPEC.md",
+    "invariant: verifica una invariante de SPEC.md §6",
+    "edge: verifica un caso límite de SPEC.md §7",
+]
