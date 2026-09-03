@@ -8,9 +8,14 @@ de los sistemas anteriores.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Sequence
 
+from .constants import (
+    MASTERY_INTERVAL_MULTIPLIER,
+    MAX_INTERVAL_DAYS,
+    SCHEDULE_DAYS,
+)
 from .models import Attempt, Level
 
 
@@ -32,7 +37,12 @@ def trailing_success_run(attempts: Sequence[Attempt]) -> int:
     Returns:
         ``0`` si el último intento fue fallo o si no hay intentos.
     """
-    raise NotImplementedError
+    run = 0
+    for attempt in reversed(attempts):
+        if not attempt.correct:
+            break
+        run += 1
+    return run
 
 
 def interval_days(success_run: int, level: Level) -> int:
@@ -50,7 +60,11 @@ def interval_days(success_run: int, level: Level) -> int:
     Returns:
         Días, siempre ``>= 1``.
     """
-    raise NotImplementedError
+    index = 0 if success_run == 0 else min(success_run - 1, len(SCHEDULE_DAYS) - 1)
+    days = SCHEDULE_DAYS[index]
+    if level is Level.MASTERED:
+        days = min(days * MASTERY_INTERVAL_MULTIPLIER, MAX_INTERVAL_DAYS)
+    return days
 
 
 def compute_next_review(
@@ -68,7 +82,10 @@ def compute_next_review(
         ``None`` si no hay intentos. Un objetivo sin evidencia no está
         "vencido", está sin empezar, y se lista aparte (SPEC §5.2, C1).
     """
-    raise NotImplementedError
+    if not attempts:
+        return None
+    days = interval_days(trailing_success_run(attempts), level)
+    return attempts[-1].at + timedelta(days=days)
 
 
 def is_due(next_review_at: datetime | None, as_of: datetime) -> bool:
@@ -76,4 +93,4 @@ def is_due(next_review_at: datetime | None, as_of: datetime) -> bool:
 
     ``next_review_at is not None and next_review_at <= as_of``.
     """
-    raise NotImplementedError
+    return next_review_at is not None and next_review_at <= as_of
