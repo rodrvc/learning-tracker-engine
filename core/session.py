@@ -66,7 +66,7 @@ class SessionRecorder:
 
     def _now(self) -> datetime:
         """``now()`` del reloj **del tracker** (SPEC I2)."""
-        return self._tracker._clock.now()
+        return self._tracker.clock.now()
 
     @property
     def session_id(self) -> str:

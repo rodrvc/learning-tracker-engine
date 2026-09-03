@@ -69,6 +69,15 @@ class LearningTracker:
         """Perfil sobre el que opera este tracker."""
         return self._profile_id
 
+    @property
+    def clock(self) -> Clock:
+        """El reloj inyectado, expuesto para colaboradores como ``SessionRecorder``.
+
+        Solo lectura. Sigue siendo I2: el ``Clock`` lo eligió quien construyó
+        el tracker; exponerlo no abre ninguna puerta al reloj de sistema.
+        """
+        return self._clock
+
     def _resolve(self, as_of: datetime | None) -> datetime:
         """``as_of`` explícito, o ``clock.now()`` si es ``None`` (SPEC §9.4)."""
         return self._clock.now() if as_of is None else as_of

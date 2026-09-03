@@ -86,6 +86,17 @@ def tracker(profiles, attempts, clock) -> LearningTracker:
     return LearningTracker(PID, profiles, attempts, clock)
 
 
+# ------------------------------------------------------------------ clock
+
+
+@pytest.mark.spec
+def test_clock_property_is_the_injected_clock(profiles, attempts, clock):
+    """§9.4 / I2: ``tracker.clock`` es exactamente el ``Clock`` inyectado."""
+    tracker = LearningTracker(PID, profiles, attempts, clock)
+    assert tracker.clock is clock
+    assert tracker.clock.now() == d(10)
+
+
 # --------------------------------------------------------- record_attempt
 
 
