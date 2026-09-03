@@ -45,7 +45,7 @@ class FixedClock:
 
     def now(self) -> datetime:
         """Devuelve :attr:`moment`, siempre el mismo."""
-        raise NotImplementedError
+        return self.moment
 
 
 @dataclass(frozen=True)
@@ -66,11 +66,11 @@ class OffsetClock:
 
     def now(self) -> datetime:
         """``base.now() + offset``."""
-        raise NotImplementedError
+        return self.base.now() + self.offset
 
     def advanced(self, delta: timedelta) -> "OffsetClock":
         """Un nuevo reloj con ``delta`` adicional de desplazamiento.
 
         Inmutable: no modifica este reloj, devuelve otro.
         """
-        raise NotImplementedError
+        return OffsetClock(base=self.base, offset=self.offset + delta)

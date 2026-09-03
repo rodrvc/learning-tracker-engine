@@ -17,11 +17,16 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from typing import Sequence
+from uuid import uuid4
 
 from .clock import Clock
+from .constants import DEFAULT_STALE_DAYS
+from .errors import DuplicateAttemptError, InvalidRangeError
+from .leveling import compute_state
 from .models import (
     Attempt,
     AttemptKind,
+    ConsistencyCheck,
     ConsistencyReport,
     Level,
     ObjectiveState,
@@ -54,7 +59,30 @@ class LearningTracker:
         attempts: AttemptStore,
         clock: Clock,
     ) -> None:
-        raise NotImplementedError
+        self._profile_id = profile_id
+        self._profiles = profiles
+        self._attempts = attempts
+        self._clock = clock
+
+    @property
+    def profile_id(self) -> str:
+        """Perfil sobre el que opera este tracker."""
+        return self._profile_id
+
+    def _resolve(self, as_of: datetime | None) -> datetime:
+        """``as_of`` explícito, o ``clock.now()`` si es ``None`` (SPEC §9.4)."""
+        return self._clock.now() if as_of is None else as_of
+
+    def _state(self, objective_id: str, as_of: datetime) -> ObjectiveState:
+        """Envuelve :func:`compute_state` sobre lo que devuelve el store (I4).
+
+        El corte es por ``at`` (``until=as_of``) y lo aplica el store; el
+        tracker no recalcula nada por su cuenta.
+        """
+        history = self._attempts.list_for_objective(
+            self._profile_id, objective_id, until=as_of
+        )
+        return compute_state(objective_id, history, as_of)
 
     # ---------------------------------------------------------------- escritura
 
@@ -100,7 +128,27 @@ class LearningTracker:
             InvalidAttemptError: ``at`` naive, o ``confidence`` fuera de rango.
             StorageError: la escritura no se pudo completar.
         """
-        raise NotImplementedError
+        # C8: el objetivo debe existir. get_objective lanza si no; jamás se
+        # autocrea.
+        self._profiles.get_objective(self._profile_id, objective_id)
+        if attempt_id is None:
+            attempt_id = uuid4().hex
+        elif self._attempts.exists(attempt_id):
+            # C9: el store también lo rechaza, pero se comprueba aquí para que
+            # el contrato no dependa del backend.
+            raise DuplicateAttemptError(attempt_id)
+        attempt = Attempt(
+            attempt_id=attempt_id,
+            objective_id=objective_id,
+            at=at,
+            correct=correct,
+            kind=kind,
+            confidence=confidence,
+            note=note,
+            recorded_at=self._clock.now(),
+        )
+        # I8: si append falla, la excepción se propaga. Nunca se devuelve None.
+        return self._attempts.append(self._profile_id, attempt)
 
     def record_series(
         self,
@@ -126,7 +174,12 @@ class LearningTracker:
         Returns:
             Los intentos creados, en orden.
         """
-        raise NotImplementedError
+        return [
+            self.record_attempt(
+                objective_id, correct=result, at=start + step * index, kind=kind
+            )
+            for index, result in enumerate(results)
+        ]
 
     def session(self, session_id: str | None = None) -> SessionRecorder:
         """Abre una sesión de registro (SPEC §9.6).
@@ -136,7 +189,7 @@ class LearningTracker:
         es ``EMPTY`` y queda constancia visible de que la sesión pasó en blanco
         (defensa contra el fallo 4).
         """
-        raise NotImplementedError
+        return SessionRecorder(self, session_id=session_id)
 
     # ---------------------------------------------------------------- consulta
 
@@ -154,13 +207,14 @@ class LearningTracker:
                 objetivo que existe pero no tiene intentos **no** es un error:
                 devuelve ``UNASSESSED`` (SPEC C1).
         """
-        raise NotImplementedError
+        return self.get_state(objective_id, as_of).level
 
     def get_state(
         self, objective_id: str, as_of: datetime | None = None
     ) -> ObjectiveState:
         """El estado completo de un objetivo en una fecha. SPEC §1.5."""
-        raise NotImplementedError
+        self._profiles.get_objective(self._profile_id, objective_id)
+        return self._state(objective_id, self._resolve(as_of))
 
     def get_state_at(
         self, objective_id: str, as_of: datetime
@@ -182,13 +236,17 @@ class LearningTracker:
         recalcula en cada consulta; un sistema con nivel almacenado no puede
         responder esta pregunta.
         """
-        raise NotImplementedError
+        return self.get_state(objective_id, as_of)
 
     def get_all_states(
         self, as_of: datetime | None = None
     ) -> list[ObjectiveState]:
         """El estado de todos los objetivos del perfil, por ``objective_id``."""
-        raise NotImplementedError
+        moment = self._resolve(as_of)
+        return [
+            self._state(objective.objective_id, moment)
+            for objective in self._profiles.list_objectives(self._profile_id)
+        ]
 
     def get_due(
         self, as_of: datetime | None = None, limit: int | None = None
@@ -203,7 +261,18 @@ class LearningTracker:
         :meth:`get_unstarted`. Mezclar "nunca lo he visto" con "toca repasarlo"
         oculta el material sin cubrir.
         """
-        raise NotImplementedError
+        moment = self._resolve(as_of)
+        due = [s for s in self.get_all_states(moment) if s.is_due]
+        # is_due garantiza next_review_at no nulo. Más vencido = mayor
+        # (as_of - next_review_at); se ordena por su negativo ascendente.
+        due.sort(
+            key=lambda s: (
+                -(moment - s.next_review_at),  # type: ignore[operator]
+                s.score,
+                s.objective_id,
+            )
+        )
+        return due if limit is None else due[:limit]
 
     def get_unstarted(
         self, as_of: datetime | None = None
@@ -213,7 +282,7 @@ class LearningTracker:
         Hace visible el material no cubierto, que de otro modo es invisible:
         un objetivo sin intentos no genera ninguna señal por sí solo.
         """
-        raise NotImplementedError
+        return [s for s in self.get_all_states(as_of) if s.total_attempts == 0]
 
     def get_stale(
         self, as_of: datetime | None = None, days: int | None = None
@@ -228,7 +297,14 @@ class LearningTracker:
             as_of: fecha de corte; ``None`` usa ``clock.now()``.
             days: umbral de inactividad; ``None`` usa ``DEFAULT_STALE_DAYS``.
         """
-        raise NotImplementedError
+        threshold = DEFAULT_STALE_DAYS if days is None else days
+        # Solo objetivos con historial: los que nunca tuvieron intentos van en
+        # get_unstarted (SPEC §8, fallo 4, capa 2).
+        return [
+            s
+            for s in self.get_all_states(as_of)
+            if s.days_since_last is not None and s.days_since_last > threshold
+        ]
 
     def get_timeline(
         self,
@@ -246,7 +322,17 @@ class LearningTracker:
         Raises:
             InvalidRangeError: si ``start > end`` o ``step <= 0``.
         """
-        raise NotImplementedError
+        if start > end:
+            raise InvalidRangeError(f"start > end: {start} > {end}")
+        if step <= timedelta(0):
+            raise InvalidRangeError(f"step debe ser positivo: {step}")
+        self._profiles.get_objective(self._profile_id, objective_id)
+        states: list[ObjectiveState] = []
+        moment = start
+        while moment <= end:
+            states.append(self._state(objective_id, moment))
+            moment += step
+        return states
 
     def compare_states(
         self, objective_id: str, earlier: datetime, later: datetime
@@ -260,15 +346,46 @@ class LearningTracker:
         Raises:
             InvalidRangeError: si ``earlier > later``.
         """
-        raise NotImplementedError
+        if earlier > later:
+            raise InvalidRangeError(f"earlier > later: {earlier} > {later}")
+        before = self.get_state(objective_id, earlier)
+        after = self.get_state(objective_id, later)
+        score_delta = after.score - before.score
+        return StateComparison(
+            objective_id=objective_id,
+            earlier=before,
+            later=after,
+            level_delta=int(after.level) - int(before.level),
+            score_delta=score_delta,
+            improved=score_delta > 0,
+            regressed=score_delta < 0,
+        )
 
     def get_summary(self, as_of: datetime | None = None) -> ProfileSummary:
         """Agregado del perfil en una fecha. SPEC §9.4."""
-        raise NotImplementedError
+        moment = self._resolve(as_of)
+        states = self.get_all_states(moment)
+        by_level = {level: 0 for level in Level}
+        for state in states:
+            by_level[state.level] += 1
+        total = len(states)
+        assessed = total - by_level[Level.UNASSESSED]
+        return ProfileSummary(
+            profile_id=self._profile_id,
+            as_of=moment,
+            total_objectives=total,
+            by_level=by_level,
+            assessed_objectives=assessed,
+            unstarted_objectives=sum(1 for s in states if s.total_attempts == 0),
+            due_objectives=sum(1 for s in states if s.is_due),
+            total_attempts=len(self._attempts.list_all(self._profile_id, until=moment)),
+            mean_score=(sum(s.score for s in states) / total) if total else 0.0,
+            coverage=(assessed / total) if total else 0.0,
+        )
 
     def get_profile(self) -> Profile:
         """El perfil sobre el que opera este tracker."""
-        raise NotImplementedError
+        return self._profiles.get_profile(self._profile_id)
 
     # ------------------------------------------------------------ verificación
 
@@ -297,7 +414,99 @@ class LearningTracker:
             pasaron **y** se comprobó al menos un objetivo: no haber
             encontrado errores por no haber mirado nada no es estar bien.
         """
-        raise NotImplementedError
+        moment = self._resolve(as_of)
+        profile = self._profiles.get_profile(self._profile_id)
+        objectives = self._profiles.list_objectives(self._profile_id)
+        # Lado "store": la lectura global del perfil, agrupada por objetivo.
+        # Lado "recalculado": compute_state sobre la lectura por objetivo.
+        # Son dos caminos de lectura distintos; se comparan sus NUMEROS (I9).
+        listed = self._attempts.list_all(self._profile_id, until=moment)
+        count_by_objective: dict[str, int] = {}
+        correct_by_objective: dict[str, int] = {}
+        for attempt in listed:
+            count_by_objective[attempt.objective_id] = (
+                count_by_objective.get(attempt.objective_id, 0) + 1
+            )
+            correct_by_objective[attempt.objective_id] = (
+                correct_by_objective.get(attempt.objective_id, 0)
+                + int(attempt.correct)
+            )
+
+        checks: list[ConsistencyCheck] = []
+
+        def add(name: str, expected: float, actual: float, detail: str) -> None:
+            checks.append(
+                ConsistencyCheck(
+                    name=name,
+                    expected=expected,
+                    actual=actual,
+                    passed=expected == actual,
+                    detail=detail,
+                )
+            )
+
+        recalculated_total = 0
+        recalculated_correct = 0
+        for objective in objectives:
+            oid = objective.objective_id
+            state = self._state(oid, moment)
+            recalculated_total += state.total_attempts
+            recalculated_correct += state.correct_attempts
+            add(
+                "attempt_count",
+                state.total_attempts,
+                count_by_objective.get(oid, 0),
+                f"{oid}: intentos recalculados vs listados en el store",
+            )
+            add(
+                "correct_sum",
+                state.correct_attempts,
+                correct_by_objective.get(oid, 0),
+                f"{oid}: aciertos recalculados vs sumados en el store",
+            )
+
+        # Perfil entero.
+        add(
+            "profile_attempt_count",
+            recalculated_total,
+            len(listed),
+            "suma de intentos recalculados vs list_all del store",
+        )
+        add(
+            "profile_correct_sum",
+            recalculated_correct,
+            sum(1 for a in listed if a.correct),
+            "suma de aciertos recalculados vs list_all del store",
+        )
+        # count() del store contra su propia lectura completa (sin corte:
+        # count no acepta as_of). Detecta un contador que miente.
+        everything = self._attempts.list_all(self._profile_id)
+        add(
+            "store_count",
+            len(everything),
+            self._attempts.count(self._profile_id),
+            "len(list_all) vs count() del store",
+        )
+        add(
+            "unique_attempt_ids",
+            len(everything),
+            len({a.attempt_id for a in everything}),
+            "intentos vs attempt_id únicos: si difieren, hay duplicados",
+        )
+        add(
+            "orphan_attempts",
+            0,
+            sum(1 for a in everything if a.objective_id not in profile.objectives),
+            "intentos cuyo objective_id no existe en el perfil",
+        )
+
+        checked = len(objectives)
+        return ConsistencyReport(
+            ok=checked >= 1 and all(c.passed for c in checks),
+            checks=tuple(checks),
+            objectives_checked=checked,
+            as_of=moment,
+        )
 
     def rebuild(self, as_of: datetime | None = None) -> int:
         """Recalcula toda proyección derivada desde el historial. SPEC I6.
@@ -310,4 +519,7 @@ class LearningTracker:
         Returns:
             Cuántos objetivos se recalcularon.
         """
-        raise NotImplementedError
+        # No hay caché ni índice que borrar: el estado siempre se deriva del
+        # historial (I4). Recalcular todo es la operación completa, y devolver
+        # el conteo deja constancia de que se recorrió el perfil entero.
+        return len(self.get_all_states(as_of))
