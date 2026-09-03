@@ -18,6 +18,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum, IntEnum
 
+from .errors import InvalidAttemptError
+
 
 class AttemptKind(str, Enum):
     """De qué tipo de evidencia procede un intento.
@@ -136,6 +138,42 @@ class Attempt:
     confidence: float | None = None
     note: str | None = None
     recorded_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        """Valida el intento al construirlo. Ver SPEC §1.3.
+
+        Un ``Attempt`` mal formado no debe llegar nunca al store: como es
+        inmutable, un dato inválido persistido sería inválido para siempre.
+        Todas las violaciones lanzan :class:`InvalidAttemptError`.
+        """
+        if not isinstance(self.attempt_id, str) or not self.attempt_id.strip():
+            raise InvalidAttemptError("attempt_id no puede estar vacío")
+        if not isinstance(self.objective_id, str) or not self.objective_id.strip():
+            raise InvalidAttemptError("objective_id no puede estar vacío")
+        _require_aware(self.at, "at")
+        if self.recorded_at is not None:
+            _require_aware(self.recorded_at, "recorded_at")
+        if not isinstance(self.correct, bool):
+            raise InvalidAttemptError("correct debe ser bool")
+        if not isinstance(self.kind, AttemptKind):
+            raise InvalidAttemptError(f"kind inválido: {self.kind!r}")
+        if self.confidence is not None:
+            if isinstance(self.confidence, bool) or not isinstance(
+                self.confidence, (int, float)
+            ):
+                raise InvalidAttemptError("confidence debe ser un número o None")
+            if not 0.0 <= self.confidence <= 1.0:
+                raise InvalidAttemptError(
+                    f"confidence fuera de [0, 1]: {self.confidence!r}"
+                )
+
+
+def _require_aware(value: datetime, name: str) -> None:
+    """Exige un ``datetime`` aware (SPEC §1.3): sin zona horaria no hay orden."""
+    if not isinstance(value, datetime):
+        raise InvalidAttemptError(f"{name} debe ser datetime, no {type(value).__name__}")
+    if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:
+        raise InvalidAttemptError(f"{name} debe llevar zona horaria (aware)")
 
 
 @dataclass(frozen=True)
@@ -298,7 +336,7 @@ class ConsistencyReport:
     @property
     def failures(self) -> tuple[ConsistencyCheck, ...]:
         """Solo los checks que no pasaron."""
-        raise NotImplementedError
+        return tuple(check for check in self.checks if not check.passed)
 
 
 @dataclass(frozen=True)
