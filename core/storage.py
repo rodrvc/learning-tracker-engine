@@ -33,11 +33,16 @@ class AttemptStore(Protocol):
       escritura sea irrelevante (SPEC C4).
     """
 
-    def append(self, attempt: Attempt) -> Attempt:
-        """Persiste un intento y lo devuelve tal como quedó guardado.
+    def append(self, profile_id: str, attempt: Attempt) -> Attempt:
+        """Persiste un intento bajo un perfil y lo devuelve tal como quedó.
+
+        ``profile_id`` va en la llamada y no en :class:`~core.models.Attempt`
+        (SPEC §1.3 no lo incluye): es el store quien indexa por perfil, igual
+        que en ``list_for_objective``, ``list_all`` y ``count``.
 
         Raises:
-            DuplicateAttemptError: si el ``attempt_id`` ya existe.
+            DuplicateAttemptError: si el ``attempt_id`` ya existe, en
+                **cualquier** perfil (SPEC C9).
             StorageError: si la escritura no pudo completarse.
         """
         ...
