@@ -17,7 +17,6 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-import core.tracker as tracker_module
 from core.clock import FixedClock, OffsetClock
 from core.constants import DEFAULT_STALE_DAYS
 from core.errors import (
@@ -36,8 +35,10 @@ from core.models import (
     Objective,
     ObjectiveState,
     Profile,
+    SessionStatus,
     StateComparison,
 )
+from core.session import SessionRecorder
 from core.tracker import LearningTracker
 from store import InMemoryAttemptStore, InMemoryProfileStore
 
@@ -208,26 +209,29 @@ def test_record_series_unknown_objective_raises(tracker):
 
 
 @pytest.mark.spec
-def test_session_builds_session_recorder_with_tracker_and_id(tracker, monkeypatch):
-    """§9.6: ``session()`` es la factoría de ``SessionRecorder``.
+def test_session_returns_working_session_recorder(tracker, attempts):
+    """§9.6: ``session()`` devuelve un ``SessionRecorder`` real y funcional.
 
-    Los internos del recorder son otro ticket (ACU-199); aquí solo se verifica
-    que el tracker construye el objeto con la firma acordada.
+    Los internos del recorder se prueban en ``test_session.py``; aquí solo que
+    la factoría del tracker entrega el objeto correcto, con el id pedido y
+    ``started_at`` tomado del reloj del tracker.
     """
-    built: dict = {}
-
-    class FakeRecorder:
-        def __init__(self, tracker, session_id=None, started_at=None):
-            built["tracker"] = tracker
-            built["session_id"] = session_id
-            built["started_at"] = started_at
-
-    monkeypatch.setattr(tracker_module, "SessionRecorder", FakeRecorder)
     recorder = tracker.session("s-1")
-    assert isinstance(recorder, FakeRecorder)
-    assert built == {"tracker": tracker, "session_id": "s-1", "started_at": None}
-    tracker.session()
-    assert built["session_id"] is None
+    assert isinstance(recorder, SessionRecorder)
+    assert recorder.session_id == "s-1"
+    assert recorder.started_at == d(10)
+    with recorder as s:
+        s.record(O1, correct=True, at=d(0))
+    assert s.report.status is SessionStatus.RECORDED
+    assert s.report.attempts_recorded == 1
+    assert attempts.count(PID) == 1
+
+
+@pytest.mark.spec
+def test_session_generates_id_when_none(tracker):
+    a, b = tracker.session(), tracker.session()
+    assert a.session_id and b.session_id
+    assert a.session_id != b.session_id
 
 
 # ------------------------------------------------- get_level / get_state

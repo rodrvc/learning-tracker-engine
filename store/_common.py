@@ -1,7 +1,7 @@
 """Reglas de contrato compartidas por todos los backends.
 
 Orden (SPEC C4), corte por ``at`` (SPEC §5.1), duplicados (SPEC C9) y
-validación mínima. Que vivan en un único sitio garantiza que memoria y JSON se
+validación mínima (solo lo que ``Attempt`` no valida por sí mismo). Que vivan en un único sitio garantiza que memoria y JSON se
 comporten igual: un test que pasa contra uno pasa contra el otro.
 """
 
@@ -14,39 +14,23 @@ from core.errors import DuplicateAttemptError, InvalidAttemptError
 from core.models import Attempt, Objective, Profile
 
 
-def _is_aware(moment: datetime) -> bool:
-    return moment.tzinfo is not None and moment.tzinfo.utcoffset(moment) is not None
-
-
 def validate_attempt(
     profile_id: str, attempt: Attempt, existing: Mapping[str, object]
 ) -> None:
-    """Rechaza intentos mal formados o con ``attempt_id`` repetido.
+    """Rechaza intentos con ``profile_id`` vacío o ``attempt_id`` repetido.
+
+    La forma del propio ``Attempt`` (ids no vacíos, ``at`` aware,
+    ``confidence`` en [0, 1]) la garantiza ``Attempt.__post_init__`` en
+    ``core/models.py``: un ``Attempt`` mal formado no llega a construirse.
+    Aquí solo queda lo que el modelo no puede saber.
 
     Raises:
-        InvalidAttemptError: ``profile_id``/``attempt_id``/``objective_id``
-            vacíos, ``at`` naive o ``confidence`` fuera de [0, 1].
+        InvalidAttemptError: ``profile_id`` vacío.
         DuplicateAttemptError: ya hay un intento con ese id (SPEC C9). Se
             comprueba **antes** de escribir nada: reintentar no duplica.
     """
     if not profile_id:
         raise InvalidAttemptError("profile_id vacío")
-    if not attempt.attempt_id:
-        raise InvalidAttemptError("attempt_id vacío")
-    if not attempt.objective_id:
-        raise InvalidAttemptError("objective_id vacío")
-    if not isinstance(attempt.at, datetime) or not _is_aware(attempt.at):
-        raise InvalidAttemptError(
-            f"at debe ser un datetime aware: {attempt.at!r}"
-        )
-    if attempt.recorded_at is not None and not _is_aware(attempt.recorded_at):
-        raise InvalidAttemptError(
-            f"recorded_at debe ser aware si se indica: {attempt.recorded_at!r}"
-        )
-    if attempt.confidence is not None and not 0.0 <= attempt.confidence <= 1.0:
-        raise InvalidAttemptError(
-            f"confidence fuera de [0, 1]: {attempt.confidence!r}"
-        )
     if attempt.attempt_id in existing:
         raise DuplicateAttemptError(attempt.attempt_id)
 
