@@ -361,6 +361,54 @@ def test_distinct_attempt_days_compara_fechas_naturales():
     assert distinct_attempt_days([]) == 0
 
 
+@pytest.mark.edge
+def test_distinct_attempt_days_con_zonas_mixtas_usa_la_fecha_utc():
+    # C3: "mismo día" es la misma fecha en UTC del instante, no la fecha en la
+    # zona con que se registró cada intento. 23:00-05:00 del día 1 es
+    # 04:00Z del día 2, media hora antes de 04:30Z: un solo día.
+    minus5 = timezone(timedelta(hours=-5))
+    same_utc_day = [
+        attempt(0, True, datetime(2026, 1, 1, 23, 0, tzinfo=minus5)),
+        attempt(1, True, datetime(2026, 1, 2, 4, 30, tzinfo=timezone.utc)),
+    ]
+    assert same_utc_day[0].at.date() != same_utc_day[1].at.date()
+    assert distinct_attempt_days(same_utc_day) == 1
+    # Caso inverso: misma fecha local en zonas distintas, distinto día UTC.
+    # 23:30-05:00 del día 1 es 04:30Z del día 2; 01:00+00:00 es el día 1.
+    same_local_date = [
+        attempt(0, True, datetime(2026, 1, 1, 23, 30, tzinfo=minus5)),
+        attempt(1, True, datetime(2026, 1, 1, 1, 0, tzinfo=timezone.utc)),
+    ]
+    assert same_local_date[0].at.date() == same_local_date[1].at.date()
+    assert distinct_attempt_days(same_local_date) == 2
+
+
+@pytest.mark.spec
+def test_paso7_dias_distintos_se_cuentan_en_utc_no_en_fecha_local():
+    # Ocho aciertos dentro del mismo día UTC (raw = 1.0 >= 0.95), anotados en
+    # zonas alternas de modo que sus fechas locales son dos distintas. Contar
+    # días por fecha local daría distinct_days == 2; en UTC es 1, luego no hay
+    # ascenso a MASTERED. (Un span >= 7 días dentro de un mismo día UTC es
+    # imposible, así que aquí también falla la condición 2; lo que fija este
+    # test es la zona de referencia de la condición 1.)
+    minus5 = timezone(timedelta(hours=-5))
+    plus9 = timezone(timedelta(hours=9))
+    base = datetime(2026, 1, 2, 6, 0, tzinfo=timezone.utc)
+    history = [
+        attempt(i, True, (base + i * timedelta(hours=2)).astimezone(minus5 if i % 2 else plus9))
+        for i in range(WINDOW)
+    ]
+    assert len({a.at.date() for a in history}) == 2
+    assert len({a.at.astimezone(timezone.utc).date() for a in history}) == 1
+    assert distinct_attempt_days(history) == 1 < MASTERY_MIN_DAYS
+    as_of = history[-1].at
+    score = compute_score(history, as_of)
+    assert score >= THRESHOLD_COMPETENT
+    assert weighted_raw_score(recent_window(history)) >= MASTERY_MIN_RAW
+    assert compute_level(score, history, as_of) is Level.COMPETENT
+    assert compute_state(OBJ, history, as_of).distinct_days == 1
+
+
 # ---------------------------------------------------------------------------
 # §3 y §3.1 — tests de aceptación, número a número contra la tabla
 # ---------------------------------------------------------------------------

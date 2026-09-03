@@ -10,7 +10,7 @@ intuición discrepan, gana la spec.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Sequence
 
 from .constants import (
@@ -149,8 +149,14 @@ def distinct_attempt_days(attempts: Sequence[Attempt]) -> int:
     Compara **fechas naturales**, no instantes: dos intentos del mismo día
     cuentan como un día (SPEC C3). Alimenta la condición de sostenimiento de
     ``MASTERED``.
+
+    El día natural es la **fecha en UTC** del instante ``at``, sea cual sea la
+    zona con que se registró (SPEC seccion 2.2 paso 7 y C3). Si se usara la
+    fecha en la zona propia de cada intento, dos intentos separados media hora
+    pero anotados en zonas distintas podrían contar como dos días, y el
+    resultado dependería de cómo se expresó la fecha y no de cuándo ocurrió.
     """
-    return len({a.at.date() for a in attempts})
+    return len({a.at.astimezone(timezone.utc).date() for a in attempts})
 
 
 def compute_level(

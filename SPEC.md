@@ -216,7 +216,9 @@ exactamente `0.60` es `LEARNING`.
 Un candidato `COMPETENT` sube a `MASTERED` **solo si además** cumple las tres
 condiciones de sostenimiento en el tiempo:
 
-1. `distinct_days >= MASTERY_MIN_DAYS` (2), y
+1. `distinct_days >= MASTERY_MIN_DAYS` (2), donde un día natural es la fecha
+   **en UTC** del instante `at`, independientemente de la zona con que se
+   registró, y
 2. `(last_attempt_at - first_attempt_at) >= MASTERY_MIN_SPAN_DAYS` (7 días), y
 3. `raw >= MASTERY_MIN_RAW` (0.95) — ver §2.4 sobre por qué 0.95 y no 1.0.
 
@@ -517,7 +519,10 @@ Cuentan como **dos intentos independientes**. No se colapsan, no se promedian.
 Ambos entran en la ventana con pesos distintos según su orden temporal.
 Es el caso normal cuando se responden varias preguntas sueltas seguidas.
 Para `distinct_days` cuentan como **un solo día** (se comparan fechas
-naturales, no instantes) — lo cual afecta al ascenso a `MASTERED`.
+naturales, no instantes) — lo cual afecta al ascenso a `MASTERED`. "Mismo
+día" es **misma fecha en UTC** del instante `at`, no la fecha en la zona con
+que se registró cada intento: dos intentos a `23:00-05:00` y `04:30+00:00`
+del mismo día UTC son un solo día.
 Si tienen el **mismo `at` exacto**, se ordenan por `attempt_id` ascendente.
 
 ### C4 — Intentos insertados fuera de orden cronológico
