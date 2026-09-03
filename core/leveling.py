@@ -4,18 +4,29 @@ Nada aquí toca el store ni el reloj: entran una lista de :class:`Attempt` y un
 ``as_of``, sale un número o un nivel. Esa pureza es lo que hace el motor
 testeable sin infraestructura y lo que garantiza el determinismo (SPEC I3).
 
-**La lógica está en SPEC §2.2, paso a paso y con números.** Estos stubs solo
-fijan las firmas. Quien implemente debe seguir la spec literalmente; si la spec
-y una intuición discrepan, gana la spec.
+**La lógica está en SPEC §2.2, paso a paso y con números.** Si la spec y una
+intuición discrepan, gana la spec.
 """
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Sequence
 
+from .constants import (
+    DECAY_HALF_LIFE_DAYS,
+    MASTERY_MIN_DAYS,
+    MASTERY_MIN_RAW,
+    MASTERY_MIN_SPAN_DAYS,
+    MIN_ATTEMPTS,
+    RETENTION_FLOOR,
+    SCORE_PRECISION,
+    THRESHOLD_COMPETENT,
+    THRESHOLD_LEARNING,
+    WINDOW,
+)
 from .models import Attempt, Level, ObjectiveState
-
+from .scheduling import compute_next_review, is_due
 
 def order_attempts(attempts: Sequence[Attempt]) -> list[Attempt]:
     """Ordena por ``at`` ascendente, desempatando por ``attempt_id``.
@@ -29,7 +40,7 @@ def order_attempts(attempts: Sequence[Attempt]) -> list[Attempt]:
     Returns:
         Una lista nueva ordenada. No muta la entrada.
     """
-    raise NotImplementedError
+    return sorted(attempts, key=lambda a: (a.at, a.attempt_id))
 
 
 def attempts_until(
@@ -47,7 +58,7 @@ def attempts_until(
     Returns:
         Los intentos vigentes en esa fecha, ordenados.
     """
-    raise NotImplementedError
+    return order_attempts([a for a in attempts if a.at <= as_of])
 
 
 def recent_window(attempts: Sequence[Attempt]) -> tuple[bool, ...]:
@@ -60,7 +71,7 @@ def recent_window(attempts: Sequence[Attempt]) -> tuple[bool, ...]:
         Tupla de booleanos (``True`` = acierto). Vacía si no hay intentos, y
         más corta que ``WINDOW`` si hay menos intentos que eso.
     """
-    raise NotImplementedError
+    return tuple(a.correct for a in attempts[-WINDOW:])
 
 
 def weighted_raw_score(window: Sequence[bool]) -> float:
@@ -73,9 +84,6 @@ def weighted_raw_score(window: Sequence[bool]) -> float:
 
     **El suelo de retención NO se aplica aquí.** ``raw`` puede valer 0.0.
 
-    Ponderar por recencia es lo que hace que la tendencia se vea: un fallo
-    reciente duele más que uno antiguo, sin necesidad de reiniciar nada.
-
     Args:
         window: resultados del más antiguo al más reciente. **El orden es
             significativo.**
@@ -83,7 +91,11 @@ def weighted_raw_score(window: Sequence[bool]) -> float:
     Returns:
         Un valor en [0.0, 1.0]. Con ventana vacía, ``0.0``.
     """
-    raise NotImplementedError
+    if not window:
+        return 0.0
+    weights = range(1, len(window) + 1)
+    correct_weight = sum(w for w, ok in zip(weights, window) if ok)
+    return correct_weight / sum(weights)
 
 
 def retention_factor(
@@ -94,19 +106,17 @@ def retention_factor(
     ``max(RETENTION_FLOOR, 0.5 ** (gap_en_dias / DECAY_HALF_LIFE_DAYS))``, con
     ``gap`` fraccionario. Si ``gap <= 0`` (o no hay intentos), devuelve ``1.0``.
 
-    Modela que el conocimiento se oxida, pero **con suelo**: el factor nunca
-    baja de ``RETENTION_FLOOR`` (0.40). El suelo se aplica aquí y solo aquí,
-    **nunca al** ``raw``: por eso el tiempo puede degradar un tema de dominado a
-    débil, pero no a cero, y el ``score`` conserva la distinción entre "lo
-    abandoné" (raw alto x 0.40) y "no lo sé" (raw bajo).
-
-    Registrar cualquier intento pone ``gap`` a 0 y devuelve ``1.0``: una sola
-    pregunta suelta detiene el decaimiento (SPEC §3.3).
+    El suelo se aplica aquí y solo aquí, **nunca al** ``raw``.
 
     Returns:
         Un factor en [RETENTION_FLOOR, 1.0].
     """
-    raise NotImplementedError
+    if last_attempt_at is None:
+        return 1.0
+    gap_days = _days_between(last_attempt_at, as_of)
+    if gap_days <= 0:
+        return 1.0
+    return max(RETENTION_FLOOR, 0.5 ** (gap_days / DECAY_HALF_LIFE_DAYS))
 
 
 def compute_score(attempts: Sequence[Attempt], as_of: datetime) -> float:
@@ -125,7 +135,12 @@ def compute_score(attempts: Sequence[Attempt], as_of: datetime) -> float:
     Returns:
         Un valor en [0.0, 1.0].
     """
-    raise NotImplementedError
+    ordered = attempts_until(attempts, as_of)
+    if len(ordered) < MIN_ATTEMPTS:
+        return 0.0
+    raw = weighted_raw_score(recent_window(ordered))
+    retention = retention_factor(ordered[-1].at, as_of)
+    return round(raw * retention, SCORE_PRECISION)
 
 
 def distinct_attempt_days(attempts: Sequence[Attempt]) -> int:
@@ -135,7 +150,7 @@ def distinct_attempt_days(attempts: Sequence[Attempt]) -> int:
     cuentan como un día (SPEC C3). Alimenta la condición de sostenimiento de
     ``MASTERED``.
     """
-    raise NotImplementedError
+    return len({a.at.date() for a in attempts})
 
 
 def compute_level(
@@ -143,21 +158,26 @@ def compute_level(
 ) -> Level:
     """Traduce ``score`` a :class:`Level`. SPEC §2.2 pasos 2, 6 y 7.
 
-    Umbrales cerrados por abajo (``>=``): ``0.85`` es ``COMPETENT``, ``0.60``
-    es ``LEARNING``, por debajo ``WEAK``, y menos de ``MIN_ATTEMPTS`` intentos
-    es ``UNASSESSED``.
-
-    Un ``COMPETENT`` asciende a ``MASTERED`` solo si además cumple las tres
-    condiciones de sostenimiento del paso 7: ``distinct_days >= 2``, span entre
-    primer y último intento ``>= 7`` días, y ``raw >= MASTERY_MIN_RAW`` (0.95,
-    no 1.0 — el porqué está en SPEC §2.4). No se domina algo en una tarde.
+    Umbrales cerrados por abajo (``>=``). Menos de ``MIN_ATTEMPTS`` intentos es
+    ``UNASSESSED``. Un ``COMPETENT`` asciende a ``MASTERED`` solo si además
+    cumple las tres condiciones de sostenimiento del paso 7.
 
     Args:
         score: el valor de :func:`compute_score`.
         attempts: se necesitan para las condiciones de sostenimiento.
         as_of: fecha de corte.
     """
-    raise NotImplementedError
+    ordered = attempts_until(attempts, as_of)
+    if len(ordered) < MIN_ATTEMPTS:
+        return Level.UNASSESSED
+    score = round(score, SCORE_PRECISION)
+    if score < THRESHOLD_LEARNING:
+        return Level.WEAK
+    if score < THRESHOLD_COMPETENT:
+        return Level.LEARNING
+    if _is_sustained(ordered):
+        return Level.MASTERED
+    return Level.COMPETENT
 
 
 def compute_state(
@@ -165,9 +185,8 @@ def compute_state(
 ) -> ObjectiveState:
     """Construye el :class:`ObjectiveState` completo. SPEC §1.5 y §2.
 
-    Es la función central del motor: todo lo demás la envuelve. Función pura,
-    luego el mismo historial y el mismo ``as_of`` dan siempre el mismo estado,
-    hoy y dentro de un año (SPEC I3, §5.1).
+    Función pura: el mismo historial y el mismo ``as_of`` dan siempre el mismo
+    estado (SPEC I3, §5.1).
 
     Args:
         objective_id: identificador del objetivo.
@@ -176,4 +195,47 @@ def compute_state(
         as_of: fecha de corte. Puede ser anterior al primer intento (C6) o
             futura (C7); ambas son legales.
     """
-    raise NotImplementedError
+    ordered = attempts_until(attempts, as_of)
+    first_at = ordered[0].at if ordered else None
+    last_at = ordered[-1].at if ordered else None
+    score = compute_score(ordered, as_of)
+    level = compute_level(score, ordered, as_of)
+    next_review_at = compute_next_review(ordered, level)
+    return ObjectiveState(
+        objective_id=objective_id,
+        as_of=as_of,
+        level=level,
+        score=score,
+        total_attempts=len(ordered),
+        correct_attempts=sum(1 for a in ordered if a.correct),
+        recent_window=recent_window(ordered),
+        first_attempt_at=first_at,
+        last_attempt_at=last_at,
+        distinct_days=distinct_attempt_days(ordered),
+        days_since_last=(
+            _days_between(last_at, as_of) if last_at is not None else None
+        ),
+        retention=retention_factor(last_at, as_of),
+        next_review_at=next_review_at,
+        is_due=is_due(next_review_at, as_of),
+    )
+
+
+def _days_between(start: datetime, end: datetime) -> float:
+    """Días fraccionarios de ``start`` a ``end`` (negativo si ``end`` es antes)."""
+    return (end - start) / timedelta(days=1)
+
+
+def _is_sustained(ordered: Sequence[Attempt]) -> bool:
+    """Las tres condiciones de sostenimiento de SPEC §2.2 paso 7.
+
+    Args:
+        ordered: intentos ya ordenados y cortados por ``as_of``, no vacíos.
+    """
+    raw = weighted_raw_score(recent_window(ordered))
+    span = ordered[-1].at - ordered[0].at
+    return (
+        distinct_attempt_days(ordered) >= MASTERY_MIN_DAYS
+        and span >= timedelta(days=MASTERY_MIN_SPAN_DAYS)
+        and raw >= MASTERY_MIN_RAW
+    )
