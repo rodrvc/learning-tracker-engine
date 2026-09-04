@@ -14,6 +14,7 @@ sin reloj de sistema, sin dependencias de cuándo se ejecuta la suite.
 
 from __future__ import annotations
 
+import argparse
 import ast
 import io
 import json
@@ -24,7 +25,7 @@ from pathlib import Path
 import pytest
 
 from core.clock import FixedClock
-from ui import cli
+from ui import cli, datadir
 from ui.cli import EXIT_CHECK_FAILED, EXIT_ERROR, EXIT_OK, run
 
 UI_DIR = Path(cli.__file__).resolve().parent
@@ -426,3 +427,224 @@ def test_ui_never_calls_datetime_now_directly() -> None:
     for source in UI_DIR.glob("*.py"):
         text = source.read_text(encoding="utf-8")
         assert "datetime.now(" not in text and "utcnow(" not in text, source.name
+
+
+# --------------------------------------------------------------- dónde viven los datos
+
+
+#: Store de perfiles vacío, en el formato real en disco.
+_EMPTY_PROFILES = '{"version": 1, "profiles": []}'
+
+
+def _env(**extra: str) -> dict[str, str]:
+    """Entorno sintético: nunca se lee el real, ni siquiera para heredar."""
+    return dict(extra)
+
+
+@pytest.mark.spec
+def test_default_data_dir_en_macos(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    assert datadir.default_data_dir("darwin", _env(), home) == (
+        home / "Library" / "Application Support" / "learning-tracker"
+    )
+
+
+@pytest.mark.spec
+def test_default_data_dir_en_linux_sigue_xdg(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    assert datadir.default_data_dir("linux", _env(), home) == (
+        home / ".local" / "share" / "learning-tracker"
+    )
+    xdg = tmp_path / "xdg"
+    assert datadir.default_data_dir(
+        "linux", _env(XDG_DATA_HOME=str(xdg)), home
+    ) == xdg / "learning-tracker"
+
+
+@pytest.mark.edge
+def test_xdg_data_home_vacia_se_ignora(tmp_path: Path) -> None:
+    """Una variable definida pero vacía no es una ruta: se usa el default."""
+    home = tmp_path / "home"
+    assert datadir.default_data_dir("linux", _env(XDG_DATA_HOME=""), home) == (
+        home / ".local" / "share" / "learning-tracker"
+    )
+
+
+@pytest.mark.spec
+def test_precedencia_data_gana_a_entorno_gana_a_default(tmp_path: Path) -> None:
+    home, env_dir, flag_dir = tmp_path / "home", tmp_path / "env", tmp_path / "flag"
+    env = _env(LEARNING_TRACKER_DATA=str(env_dir))
+    assert datadir.resolve_data_dir(None, "darwin", _env(), home) == (
+        home / "Library" / "Application Support" / "learning-tracker"
+    )
+    assert datadir.resolve_data_dir(None, "darwin", env, home) == env_dir
+    assert datadir.resolve_data_dir(str(flag_dir), "darwin", env, home) == flag_dir
+
+
+@pytest.mark.edge
+def test_la_variable_de_entorno_vacia_no_gana(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    assert datadir.default_data_dir("linux", _env(LEARNING_TRACKER_DATA=""), home) == (
+        home / ".local" / "share" / "learning-tracker"
+    )
+
+
+def _data_help(parser: argparse.ArgumentParser) -> str:
+    """Texto de ayuda de ``--data``, antes de que argparse lo re-indente."""
+    (action,) = [a for a in parser._actions if a.dest == "data"]
+    return action.help or ""
+
+
+@pytest.mark.spec
+def test_el_help_de_data_muestra_el_default_efectivo(tmp_path: Path) -> None:
+    home, env_dir = tmp_path / "home", tmp_path / "env"
+    # Sobre el help sin formatear: argparse re-parte y re-indenta las líneas
+    # largas, y una ruta de usuario es larga.
+    macos = _data_help(cli.build_parser(datadir.describe_default("darwin", _env(), home)))
+    assert str(home / "Library" / "Application Support" / "learning-tracker") in macos
+    con_var = _data_help(
+        cli.build_parser(
+            datadir.describe_default("linux", _env(LEARNING_TRACKER_DATA=str(env_dir)), home)
+        )
+    )
+    assert str(env_dir) in con_var and "LEARNING_TRACKER_DATA" in con_var
+
+
+@pytest.mark.spec
+def test_el_directorio_de_datos_se_crea_solo_para_su_dueno(tmp_path: Path) -> None:
+    target = tmp_path / "padre" / "datos"
+    datadir.ensure_data_dir(target)
+    assert target.is_dir()
+    assert target.stat().st_mode & 0o777 == 0o700
+
+
+@pytest.mark.spec
+def test_run_usa_el_default_del_so_sin_data(tmp_path: Path) -> None:
+    """Sin ``--data`` ni variable, los datos van al directorio del SO, no al cwd."""
+    home, cwd = tmp_path / "home", tmp_path / "cwd"
+    cwd.mkdir()
+    out, err = io.StringIO(), io.StringIO()
+    code = run(
+        ["profile", "create", PROFILE, "--name", "AI-103"],
+        out,
+        err,
+        clock=FixedClock(NOW),
+        platform="darwin",
+        environ={},
+        home=home,
+        cwd=cwd,
+    )
+    destino = home / "Library" / "Application Support" / "learning-tracker"
+    assert code == EXIT_OK, err.getvalue()
+    assert (destino / cli.PROFILES_FILE).exists()
+    assert not (cwd / "data").exists()
+
+
+@pytest.mark.spec
+def test_run_respeta_la_variable_de_entorno(tmp_path: Path) -> None:
+    home, cwd, env_dir = tmp_path / "home", tmp_path / "cwd", tmp_path / "env"
+    cwd.mkdir()
+    out, err = io.StringIO(), io.StringIO()
+    code = run(
+        ["profile", "create", PROFILE, "--name", "AI-103"],
+        out,
+        err,
+        clock=FixedClock(NOW),
+        platform="darwin",
+        environ={"LEARNING_TRACKER_DATA": str(env_dir)},
+        home=home,
+        cwd=cwd,
+    )
+    assert code == EXIT_OK, err.getvalue()
+    assert (env_dir / cli.PROFILES_FILE).exists()
+    assert not (home / "Library").exists()
+
+
+def _legacy(tmp_path: Path) -> tuple[Path, Path, Path]:
+    """cwd con un ``./data`` heredado que ya tiene datos, y un home limpio."""
+    cwd, home = tmp_path / "cwd", tmp_path / "home"
+    (cwd / "data").mkdir(parents=True)
+    (cwd / "data" / cli.PROFILES_FILE).write_text(_EMPTY_PROFILES, encoding="utf-8")
+    return cwd, home, cwd / "data"
+
+
+@pytest.mark.spec
+def test_avisa_de_los_datos_heredados_sin_mover_nada(tmp_path: Path) -> None:
+    cwd, home, legacy = _legacy(tmp_path)
+    out, err = io.StringIO(), io.StringIO()
+    code = run(
+        ["profile", "list"],
+        out,
+        err,
+        clock=FixedClock(NOW),
+        platform="darwin",
+        environ={},
+        home=home,
+        cwd=cwd,
+    )
+    destino = home / "Library" / "Application Support" / "learning-tracker"
+    assert code == EXIT_OK
+    mensaje = err.getvalue()
+    assert str(legacy.resolve()) in mensaje and str(destino.resolve()) in mensaje
+    assert "mv " in mensaje and "mkdir -p" in mensaje
+    # El aviso es un aviso: los datos siguen donde estaban y no se copiaron.
+    assert (legacy / cli.PROFILES_FILE).read_text(encoding="utf-8") == _EMPTY_PROFILES
+    assert not (destino / cli.PROFILES_FILE).exists()
+
+
+@pytest.mark.spec
+def test_no_avisa_si_el_destino_ya_tiene_datos(tmp_path: Path) -> None:
+    cwd, home, _ = _legacy(tmp_path)
+    destino = home / "Library" / "Application Support" / "learning-tracker"
+    destino.mkdir(parents=True)
+    (destino / cli.PROFILES_FILE).write_text(_EMPTY_PROFILES, encoding="utf-8")
+    out, err = io.StringIO(), io.StringIO()
+    code = run(
+        ["profile", "list"],
+        out,
+        err,
+        clock=FixedClock(NOW),
+        platform="darwin",
+        environ={},
+        home=home,
+        cwd=cwd,
+    )
+    assert code == EXIT_OK and err.getvalue() == ""
+
+
+@pytest.mark.spec
+def test_no_avisa_si_se_paso_data_o_la_variable(tmp_path: Path) -> None:
+    cwd, home, _ = _legacy(tmp_path)
+    explicito = tmp_path / "explicito"
+    for extra, environ in (
+        (["--data", str(explicito)], {}),
+        ([], {"LEARNING_TRACKER_DATA": str(explicito)}),
+    ):
+        out, err = io.StringIO(), io.StringIO()
+        code = run(
+            [*extra, "profile", "list"],
+            out,
+            err,
+            clock=FixedClock(NOW),
+            platform="darwin",
+            environ=environ,
+            home=home,
+            cwd=cwd,
+        )
+        assert code == EXIT_OK and err.getvalue() == ""
+
+
+@pytest.mark.edge
+def test_no_avisa_si_el_data_heredado_esta_vacio_o_no_existe(tmp_path: Path) -> None:
+    cwd, home = tmp_path / "cwd", tmp_path / "home"
+    (cwd / "data").mkdir(parents=True)  # existe pero sin ningún *.json
+    destino = home / "Library" / "Application Support" / "learning-tracker"
+    assert datadir.migration_notice(cwd, destino) is None
+    assert datadir.migration_notice(tmp_path / "otro", destino) is None
+
+
+@pytest.mark.edge
+def test_no_avisa_si_el_destino_es_el_propio_data_heredado(tmp_path: Path) -> None:
+    """``LEARNING_TRACKER_DATA`` apuntando al ``./data`` de siempre: nada que migrar."""
+    cwd, _, legacy = _legacy(tmp_path)
+    assert datadir.migration_notice(cwd, legacy) is None

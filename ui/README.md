@@ -5,13 +5,27 @@ de `LearningTracker`. Esta capa **no calcula nada**: muestra lo que el motor
 responde. No importa `core.leveling` ni `core.scheduling`, y no lee intentos
 del store por su cuenta (un test con AST lo verifica).
 
+## Instalacion
+
+```sh
+pip install .          # deja el ejecutable learning-tracker en el PATH
+learning-tracker --help
+```
+
+Sin instalar, desde la raiz del repo, `python -m ui ...` hace exactamente lo
+mismo. Los ejemplos de abajo usan `python -m ui`; cambia el prefijo por
+`learning-tracker` si lo instalaste.
+
 ## Uso
 
 ```
-python -m ui [--data DIR] [--profile ID] [--as-of ISO8601] COMANDO ...
+learning-tracker [--data DIR] [--profile ID] [--as-of ISO8601] COMANDO ...
+python -m ui      [--data DIR] [--profile ID] [--as-of ISO8601] COMANDO ...
 ```
 
-- `--data DIR`: directorio con `profiles.json` y `attempts.json` (default `./data`).
+- `--data DIR`: directorio con `profiles.json` y `attempts.json`. Sin este
+  argumento se usa el directorio del usuario en el sistema operativo (ver
+  "Donde viven los datos").
 - `--profile ID`: perfil sobre el que se opera. Obligatorio salvo en `profile`.
 - `--as-of ISO8601`: fecha de consulta. Si falta se usa el reloj del sistema.
   Una fecha sin zona horaria se asume UTC; se acepta el sufijo `Z`.
@@ -36,6 +50,45 @@ Comandos:
 Códigos de salida: `0` ok; `1` solo en `check` cuando `ok=False`; `2` error de
 uso o de dominio (`UnknownObjectiveError`, `DuplicateAttemptError`,
 `InvalidAttemptError`, `StorageError`...). Nunca un traceback.
+
+## Donde viven los datos
+
+Los datos son del usuario, no del repo: viven en la carpeta estandar de su
+sistema operativo, no en un `./data` relativo al directorio actual (asi la CLI
+abre siempre el mismo store se ejecute desde donde se ejecute).
+
+| Sistema | Directorio por defecto |
+| --- | --- |
+| macOS | `~/Library/Application Support/learning-tracker` |
+| Linux y el resto | `$XDG_DATA_HOME/learning-tracker`, o `~/.local/share/learning-tracker` si `XDG_DATA_HOME` no esta definida |
+
+Precedencia, de mayor a menor:
+
+1. `--data DIR` en la linea de comandos.
+2. La variable de entorno `LEARNING_TRACKER_DATA`.
+3. El default del sistema operativo de la tabla.
+
+`learning-tracker --help` muestra el default efectivo de tu maquina. El
+directorio se crea al vuelo con permisos `0700` (solo su dueno entra) y los
+JSON de dentro se siguen escribiendo igual que siempre.
+
+Si tenias datos en un `./data` de una version anterior, la CLI lo detecta al
+arrancar y te imprime por stderr el comando exacto para moverlos. **No mueve ni
+copia nada por su cuenta**: el aviso desaparece cuando el destino nuevo ya tiene
+datos. Tambien puedes quedarte donde estabas con
+`LEARNING_TRACKER_DATA=/ruta/a/data`.
+
+## Copia de seguridad
+
+Copiar el directorio de datos entero es toda la copia de seguridad:
+
+```sh
+cp -R "$HOME/Library/Application Support/learning-tracker" ~/backup-learning-tracker
+```
+
+Restaurar es copiar de vuelta. Los `.lock` son archivos vacios de exclusion
+entre procesos: no hace falta copiarlos, y se recrean solos en la siguiente
+escritura.
 
 ## Concurrencia del backend JSON
 
