@@ -759,3 +759,104 @@ def test_i6_rebuild_after_dropping_a_cache_gives_identical_state(tracker):
             setattr(tracker, attr, None)
     tracker.rebuild(d(5))
     assert [tracker.get_state_at(O1, d(n)) for n in range(6)] == snapshot
+
+
+# ------------------------------------------------ rendimiento: una sola lectura
+
+
+class _CountingStore(InMemoryAttemptStore):
+    """Cuenta las lecturas para verificar que las consultas agregadas leen una vez."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.list_all_calls = 0
+        self.list_for_objective_calls = 0
+
+    def list_all(self, profile_id, until=None):
+        self.list_all_calls += 1
+        return super().list_all(profile_id, until=until)
+
+    def list_for_objective(self, profile_id, objective_id, until=None):
+        self.list_for_objective_calls += 1
+        return super().list_for_objective(profile_id, objective_id, until=until)
+
+
+def _mixed_histories(tracker: LearningTracker) -> None:
+    """Varios historiales distintos; O4 queda sin intentos (C1)."""
+    tracker.record_series(O1, [False, False, False, True, False], start=d(0))
+    tracker.record_series(O2, [True, True, True, True], start=d(2))
+    # O3 insertado fuera de orden (C4) y con un intento futuro a d(10).
+    tracker.record_attempt(O3, correct=True, at=d(5))
+    tracker.record_attempt(O3, correct=False, at=d(1))
+    tracker.record_attempt(O3, correct=True, at=d(12))
+
+
+@pytest.mark.spec
+def test_get_all_states_lee_el_store_una_sola_vez(profiles, clock):
+    store = _CountingStore()
+    tracker = LearningTracker(PID, profiles, store, clock)
+    _mixed_histories(tracker)
+    store.list_all_calls = store.list_for_objective_calls = 0
+
+    tracker.get_all_states()
+
+    assert store.list_all_calls == 1
+    assert store.list_for_objective_calls == 0
+
+
+@pytest.mark.spec
+def test_get_summary_lee_el_store_una_sola_vez(profiles, clock):
+    store = _CountingStore()
+    tracker = LearningTracker(PID, profiles, store, clock)
+    _mixed_histories(tracker)
+    store.list_all_calls = store.list_for_objective_calls = 0
+
+    tracker.get_summary()
+
+    assert store.list_all_calls == 1
+    assert store.list_for_objective_calls == 0
+
+
+@pytest.mark.spec
+def test_get_due_unstarted_stale_no_leen_por_objetivo(profiles, clock):
+    store = _CountingStore()
+    tracker = LearningTracker(PID, profiles, store, clock)
+    _mixed_histories(tracker)
+    for query in (tracker.get_due, tracker.get_unstarted, tracker.get_stale):
+        store.list_all_calls = store.list_for_objective_calls = 0
+        query()
+        assert store.list_all_calls == 1
+        assert store.list_for_objective_calls == 0
+
+
+@pytest.mark.invariant
+def test_check_consistency_mantiene_dos_caminos_de_lectura(profiles, clock):
+    """I9: el lado recalculado NO sale de la misma list_all que el lado store.
+
+    Si saliera, un list_all que duplica un intento cuadraria consigo mismo
+    (test_i9_detects_count_mismatch_from_duplicated_listing dejaria de fallar).
+    """
+    store = _CountingStore()
+    tracker = LearningTracker(PID, profiles, store, clock)
+    _mixed_histories(tracker)
+    store.list_all_calls = store.list_for_objective_calls = 0
+
+    report = tracker.check_consistency()
+
+    assert report.ok
+    # Una lectura con corte (as_of) y otra sin corte para el check store_count.
+    assert store.list_all_calls == 2
+    assert store.list_for_objective_calls == len(ALL_OBJECTIVES)
+
+
+@pytest.mark.invariant
+def test_get_all_states_es_identico_a_get_state_por_objetivo(tracker):
+    _mixed_histories(tracker)
+    for as_of in (d(0), d(3), d(6), d(10), d(20)):
+        expected = [tracker.get_state(o, as_of) for o in ALL_OBJECTIVES]
+        assert tracker.get_all_states(as_of) == expected
+    # O4 sigue apareciendo aunque no tenga intentos, con historial vacio.
+    states = tracker.get_all_states()
+    assert [s.objective_id for s in states] == list(ALL_OBJECTIVES)
+    assert states[-1].total_attempts == 0
+    assert states[-1].level == Level.UNASSESSED

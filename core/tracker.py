@@ -93,6 +93,38 @@ class LearningTracker:
         )
         return compute_state(objective_id, history, as_of)
 
+    def _all_states(
+        self, as_of: datetime, listed: Sequence[Attempt] | None = None
+    ) -> list[ObjectiveState]:
+        """Todos los estados del perfil a partir de **una** lectura global.
+
+        Hace un unico ``list_all(profile_id, until=as_of)`` y agrupa por
+        ``objective_id`` antes de llamar a :func:`compute_state` por objetivo.
+        Es solo rendimiento: leer N veces ``list_for_objective`` o una vez
+        ``list_all`` produce los mismos historiales (el store garantiza el
+        mismo orden y el mismo corte en ambos metodos), y ``compute_state``
+        sigue siendo la unica fuente del estado (I4). Los objetivos sin
+        intentos se calculan con historial vacio (C1).
+
+        Args:
+            as_of: fecha de corte ya resuelta.
+            listed: la lectura global si quien llama ya la hizo; ``None``
+                la hace aqui. Evita una relectura en ``get_summary``.
+        """
+        if listed is None:
+            listed = self._attempts.list_all(self._profile_id, until=as_of)
+        by_objective: dict[str, list[Attempt]] = {}
+        for attempt in listed:
+            by_objective.setdefault(attempt.objective_id, []).append(attempt)
+        return [
+            compute_state(
+                objective.objective_id,
+                by_objective.get(objective.objective_id, ()),
+                as_of,
+            )
+            for objective in self._profiles.list_objectives(self._profile_id)
+        ]
+
     # ---------------------------------------------------------------- escritura
 
     def record_attempt(
@@ -251,11 +283,7 @@ class LearningTracker:
         self, as_of: datetime | None = None
     ) -> list[ObjectiveState]:
         """El estado de todos los objetivos del perfil, por ``objective_id``."""
-        moment = self._resolve(as_of)
-        return [
-            self._state(objective.objective_id, moment)
-            for objective in self._profiles.list_objectives(self._profile_id)
-        ]
+        return self._all_states(self._resolve(as_of))
 
     def get_due(
         self, as_of: datetime | None = None, limit: int | None = None
@@ -373,7 +401,9 @@ class LearningTracker:
     def get_summary(self, as_of: datetime | None = None) -> ProfileSummary:
         """Agregado del perfil en una fecha. SPEC §9.4."""
         moment = self._resolve(as_of)
-        states = self.get_all_states(moment)
+        # Una sola lectura del store: alimenta los estados y el total.
+        listed = self._attempts.list_all(self._profile_id, until=moment)
+        states = self._all_states(moment, listed)
         by_level = {level: 0 for level in Level}
         for state in states:
             by_level[state.level] += 1
@@ -387,7 +417,7 @@ class LearningTracker:
             assessed_objectives=assessed,
             unstarted_objectives=sum(1 for s in states if s.total_attempts == 0),
             due_objectives=sum(1 for s in states if s.is_due),
-            total_attempts=len(self._attempts.list_all(self._profile_id, until=moment)),
+            total_attempts=len(listed),
             mean_score=(sum(s.score for s in states) / total) if total else 0.0,
             coverage=(assessed / total) if total else 0.0,
         )
@@ -429,6 +459,11 @@ class LearningTracker:
         # Lado "store": la lectura global del perfil, agrupada por objetivo.
         # Lado "recalculado": compute_state sobre la lectura por objetivo.
         # Son dos caminos de lectura distintos; se comparan sus NUMEROS (I9).
+        # Deliberadamente NO se reutiliza _all_states aqui: si ambos lados
+        # salieran de la misma list_all, un list_all que duplica un intento
+        # cuadraria consigo mismo y attempt_count no lo detectaria. Las N
+        # lecturas por objetivo son el precio de que los dos lados sean
+        # independientes (SPEC seccion 8, fallo 2).
         listed = self._attempts.list_all(self._profile_id, until=moment)
         count_by_objective: dict[str, int] = {}
         correct_by_objective: dict[str, int] = {}
