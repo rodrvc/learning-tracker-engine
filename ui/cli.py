@@ -11,16 +11,22 @@ no es cálculo.
 El tiempo se inyecta (SPEC I2): :func:`run` recibe un ``Clock``; si no se
 pasa ninguno se usa :class:`store.SystemClock`, y **solo** ``ui/`` lo
 instancia. ``--as-of`` fija la fecha de consulta; si falta, ``clock.now()``.
+
+El directorio de datos vive en la carpeta estándar del sistema operativo (ver
+``ui/datadir.py``), no en un ``./data`` relativo al directorio actual. El
+entorno y la plataforma también se inyectan en :func:`run`, por la misma razón
+que el reloj: un test decide el sistema operativo sin tocar el real.
 """
 
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Callable, Sequence, TextIO
+from typing import Callable, Mapping, Sequence, TextIO
 
 from core.clock import Clock
 from core.errors import TrackerError, UnknownProfileError
@@ -38,6 +44,14 @@ from core.storage import AttemptStore, ProfileStore
 from core.tracker import LearningTracker
 from store import JsonAttemptStore, JsonProfileStore, SystemClock
 
+from .datadir import (
+    DATA_ENV_VAR,
+    describe_default,
+    ensure_data_dir,
+    migration_notice,
+    resolve_data_dir,
+)
+
 #: Códigos de salida. 1 se reserva a ``check`` con ``ok=False``.
 EXIT_OK = 0
 EXIT_CHECK_FAILED = 1
@@ -45,7 +59,6 @@ EXIT_ERROR = 2
 
 PROFILES_FILE = "profiles.json"
 ATTEMPTS_FILE = "attempts.json"
-DEFAULT_DATA_DIR = "./data"
 
 #: Comandos que no operan sobre un perfil concreto (no exigen ``--profile``).
 _PROFILE_FREE_COMMANDS = frozenset({"profile"})
@@ -102,17 +115,24 @@ def _non_negative_int(raw: str) -> int:
     return value
 
 
-def build_parser() -> argparse.ArgumentParser:
-    """Construye el parser completo (opciones globales + subcomandos)."""
+def build_parser(default_data: str | None = None) -> argparse.ArgumentParser:
+    """Construye el parser completo (opciones globales + subcomandos).
+
+    ``default_data`` es solo el texto que se muestra en el help de ``--data``:
+    el default real no se fija aquí sino en :func:`run`, que necesita
+    distinguir "no se pasó ``--data``" para decidir el aviso de migración.
+    """
+    if default_data is None:
+        default_data = describe_default(sys.platform, os.environ, Path.home())
     parser = _Parser(
         prog="learning-tracker",
         description="Visualización del progreso de aprendizaje (SPEC.md §5).",
     )
     parser.add_argument(
         "--data",
-        default=DEFAULT_DATA_DIR,
+        default=None,
         metavar="DIR",
-        help=f"directorio de los stores JSON (default: {DEFAULT_DATA_DIR})",
+        help=f"directorio de los stores JSON (default: {default_data})",
     )
     parser.add_argument(
         "--profile",
@@ -598,8 +618,12 @@ def run(
     stdout: TextIO,
     stderr: TextIO | None = None,
     clock: Clock | None = None,
+    platform: str | None = None,
+    environ: Mapping[str, str] | None = None,
+    home: Path | None = None,
+    cwd: Path | None = None,
 ) -> int:
-    """Ejecuta la CLI con salida y reloj inyectados. Devuelve el código de salida.
+    """Ejecuta la CLI con salida, reloj y entorno inyectados. Devuelve el código.
 
     Nunca deja escapar un traceback: los errores de dominio
     (:class:`~core.errors.TrackerError`) y de uso se imprimen en ``stderr`` y
@@ -610,13 +634,30 @@ def run(
         stdout: dónde escribir la salida normal.
         stderr: dónde escribir los errores; ``None`` usa ``sys.stderr``.
         clock: fuente de "ahora"; ``None`` usa :class:`store.SystemClock`.
+        platform: sistema operativo; ``None`` usa ``sys.platform``.
+        environ: entorno donde buscar ``LEARNING_TRACKER_DATA``; ``None`` el real.
+        home: directorio del usuario; ``None`` usa ``Path.home()``.
+        cwd: directorio actual, solo para buscar el ``./data`` heredado.
     """
     err = sys.stderr if stderr is None else stderr
+    platform = sys.platform if platform is None else platform
+    environ = os.environ if environ is None else environ
+    home = Path.home() if home is None else home
+    cwd = Path.cwd() if cwd is None else cwd
     try:
-        args = build_parser().parse_args(list(argv))
+        parser = build_parser(describe_default(platform, environ, home))
+        args = parser.parse_args(list(argv))
         if args.command not in _PROFILE_FREE_COMMANDS and not args.profile:
             raise UsageError("--profile es obligatorio para este comando")
-        data = Path(args.data)
+        data = resolve_data_dir(args.data, platform, environ, home)
+        if args.data is None and not environ.get(DATA_ENV_VAR):
+            notice = migration_notice(cwd, data)
+            if notice is not None:
+                err.write(notice + "\n")
+        try:
+            ensure_data_dir(data)
+        except OSError as exc:
+            raise UsageError(f"no se pudo usar el directorio de datos {data}: {exc}") from None
         ctx = Context(
             args=args,
             profiles=JsonProfileStore(data / PROFILES_FILE),
