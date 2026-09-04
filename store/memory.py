@@ -17,9 +17,9 @@ from core.models import Attempt, Objective, Profile
 
 from ._common import (
     filter_attempts,
+    merge_objectives,
     sort_attempts,
     validate_attempt,
-    validate_objective,
     validate_profile,
 )
 
@@ -110,18 +110,9 @@ class InMemoryProfileStore:
     ) -> int:
         """Añade o reemplaza objetivos del perfil. Devuelve cuántos escribió.
 
-        El perfil es inmutable (``frozen``), así que se reemplaza por una copia
-        con el catálogo actualizado. Los intentos no se tocan: viven en otro
-        store y su ciclo de vida es independiente.
+        La fusión vive en :func:`store._common.merge_objectives`, compartida
+        con el backend JSON.
         """
         profile = self.get_profile(profile_id)
-        merged = dict(profile.objectives)
-        written = 0
-        for objective in objectives:
-            validate_objective(objective)
-            merged[objective.objective_id] = objective
-            written += 1
-        self._profiles[profile_id] = Profile(
-            profile_id=profile.profile_id, name=profile.name, objectives=merged
-        )
+        self._profiles[profile_id], written = merge_objectives(profile, objectives)
         return written

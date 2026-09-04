@@ -7,17 +7,21 @@ comporten igual: un test que pasa contra uno pasa contra el otro.
 
 from __future__ import annotations
 
+from collections.abc import Container
 from datetime import datetime
-from typing import Iterable, Mapping
+from typing import Iterable
 
 from core.errors import DuplicateAttemptError, InvalidAttemptError
 from core.models import Attempt, Objective, Profile
 
 
 def validate_attempt(
-    profile_id: str, attempt: Attempt, existing: Mapping[str, object]
+    profile_id: str, attempt: Attempt, existing: Container[str]
 ) -> None:
     """Rechaza intentos con ``profile_id`` vacío o ``attempt_id`` repetido.
+
+    ``existing`` es cualquier contenedor de ``attempt_id`` ya registrados
+    (un ``dict``, un ``set``...): solo se consulta pertenencia.
 
     La forma del propio ``Attempt`` (ids no vacíos, ``at`` aware,
     ``confidence`` en [0, 1]) la garantiza ``Attempt.__post_init__`` en
@@ -49,6 +53,33 @@ def validate_profile(profile: Profile) -> None:
 def validate_objective(objective: Objective) -> None:
     if not objective.objective_id:
         raise ValueError("objective_id vacío")
+
+
+def merge_objectives(
+    profile: Profile, objectives: Iterable[Objective]
+) -> tuple[Profile, int]:
+    """Fusiona ``objectives`` en el catálogo del perfil (añade o reemplaza).
+
+    Es la mitad pura de ``ProfileStore.upsert_objectives``, compartida por
+    los dos backends para que fusionen exactamente igual. El perfil es
+    inmutable (``frozen``), así que se devuelve una copia con el catálogo
+    actualizado junto con cuántos objetivos se escribieron. Los intentos no
+    se tocan: viven en otro store y su ciclo de vida es independiente.
+
+    Raises:
+        ValueError: algún objetivo tiene ``objective_id`` vacío. Se valida
+            **antes** de fusionar nada: un lote inválido no deja rastro.
+    """
+    incoming = list(objectives)
+    for objective in incoming:
+        validate_objective(objective)
+    merged = dict(profile.objectives)
+    for objective in incoming:
+        merged[objective.objective_id] = objective
+    return (
+        Profile(profile_id=profile.profile_id, name=profile.name, objectives=merged),
+        len(incoming),
+    )
 
 
 def sort_attempts(attempts: Iterable[Attempt]) -> list[Attempt]:

@@ -15,7 +15,12 @@ fixture ``attempts`` / ``profiles``: un backend que se desvíe del otro falla.
 from __future__ import annotations
 
 import ast
+import fcntl
+import json
+import multiprocessing
+import os
 import pathlib
+import threading
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -41,6 +46,7 @@ from store import (
     JsonProfileStore,
     SystemClock,
 )
+from store.json_store import lock_path_for
 
 UTC = timezone.utc
 T0 = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
@@ -631,7 +637,8 @@ def test_i8_failed_json_write_raises_storage_error_and_leaves_file_intact(tmp_pa
     with pytest.raises(StorageError):
         st.append(P1, make_attempt("a2", at=day(1)))
     assert path.read_bytes() == before
-    assert [p.name for p in tmp_path.iterdir()] == ["attempts.json"]  # sin temporales huérfanos
+    # Sin temporales huérfanos: solo el JSON y su sidecar de bloqueo.
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["attempts.json", "attempts.json.lock"]
     monkeypatch.undo()
     assert st.count(P1) == 1 and not st.exists("a2")
 
@@ -658,6 +665,113 @@ def test_i8_json_stores_create_parent_directories(tmp_path):
     ps = JsonProfileStore(tmp_path / "nested" / "profiles.json")
     ps.save_profile(Profile(profile_id=P1, name="x"))
     assert ps.get_profile(P1).name == "x"
+
+
+# --------------------------------------------------------------------------- I8 — escritores concurrentes
+# Sin lock, dos procesos que hacen leer-añadir-reescribir a la vez pueden
+# pisarse: el segundo ``os.replace`` descarta el intento del primero sin
+# excepción. El sidecar ``<nombre>.lock`` (flock exclusivo) lo impide.
+
+N_PROCS, N_PER_PROC = 8, 5
+
+
+def _append_many(path: str, worker: int) -> None:
+    """Cuerpo de cada proceso hijo: N_PER_PROC appends con ids propios."""
+    st = JsonAttemptStore(path)
+    for i in range(N_PER_PROC):
+        st.append(P1, make_attempt(f"w{worker}-{i}", at=day(i)))
+
+
+def _hold_lock(path: str, held, release) -> None:
+    """Toma el flock del sidecar como lo haría otro escritor y lo retiene."""
+    fd = os.open(lock_path_for(pathlib.Path(path)), os.O_RDWR | os.O_CREAT)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    held.set()
+    release.wait()
+    os.close(fd)
+
+
+@pytest.mark.invariant
+def test_i8_concurrent_processes_do_not_lose_attempts(tmp_path):
+    path = tmp_path / "attempts.json"
+    ctx = multiprocessing.get_context("spawn")
+    procs = [ctx.Process(target=_append_many, args=(str(path), w)) for w in range(N_PROCS)]
+    for proc in procs:
+        proc.start()
+    for proc in procs:
+        proc.join(timeout=30)
+    assert [proc.exitcode for proc in procs] == [0] * N_PROCS
+
+    st = JsonAttemptStore(path)
+    expected = N_PROCS * N_PER_PROC
+    assert st.count(P1) == expected
+    ids = [a.attempt_id for a in st.list_all(P1)]
+    assert len(set(ids)) == expected
+
+
+@pytest.mark.spec
+def test_json_writes_create_lock_sidecar_next_to_file(tmp_path):
+    attempts_path = tmp_path / "attempts.json"
+    JsonAttemptStore(attempts_path).append(P1, make_attempt("a1"))
+    assert lock_path_for(attempts_path) == tmp_path / "attempts.json.lock"
+    assert lock_path_for(attempts_path).is_file()
+    assert lock_path_for(attempts_path).stat().st_size == 0  # vacío: no lleva datos
+
+    profiles_path = tmp_path / "profiles.json"
+    JsonProfileStore(profiles_path).save_profile(Profile(profile_id=P1, name="x"))
+    assert (tmp_path / "profiles.json.lock").is_file()
+
+    # El JSON conserva su forma: el sidecar es un archivo aparte.
+    document = json.loads(attempts_path.read_text(encoding="utf-8"))
+    assert set(document) == {"version", "attempts"}
+
+
+@pytest.mark.spec
+def test_json_writer_waits_for_lock_held_by_another_process(tmp_path):
+    path = tmp_path / "attempts.json"
+    ctx = multiprocessing.get_context("spawn")
+    held, release = ctx.Event(), ctx.Event()
+    holder = ctx.Process(target=_hold_lock, args=(str(path), held, release))
+    holder.start()
+    try:
+        assert held.wait(timeout=30)
+        errors: list[BaseException] = []
+
+        def write() -> None:
+            try:
+                JsonAttemptStore(path).append(P1, make_attempt("a1"))
+            except BaseException as exc:  # pragma: no cover - solo si el test falla
+                errors.append(exc)
+
+        writer = threading.Thread(target=write)
+        writer.start()
+        writer.join(timeout=0.5)
+        assert writer.is_alive()  # espera, no falla ni escribe
+        assert not path.exists()
+    finally:
+        release.set()
+        holder.join(timeout=30)
+    writer.join(timeout=30)
+    assert not writer.is_alive() and errors == []
+    assert JsonAttemptStore(path).count(P1) == 1
+
+
+@pytest.mark.invariant
+def test_i8_lock_failure_raises_storage_error(tmp_path, monkeypatch):
+    import store.json_store as js
+
+    def boom(*args, **kwargs):
+        raise OSError("flock no soportado")
+
+    monkeypatch.setattr(js.fcntl, "flock", boom)
+    path = tmp_path / "attempts.json"
+    with pytest.raises(StorageError):
+        JsonAttemptStore(path).append(P1, make_attempt("a1"))
+    assert not path.exists()
+    with pytest.raises(StorageError):
+        JsonProfileStore(tmp_path / "profiles.json").save_profile(
+            Profile(profile_id=P1, name="x")
+        )
 
 
 # =========================================================================== §7 — casos límite

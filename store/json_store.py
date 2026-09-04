@@ -9,17 +9,40 @@ trivial el argumento de reconstrucción (SPEC I6).
 
 Los intentos se guardan como una lista plana en orden de llegada; el orden
 canónico se impone al leer (SPEC C4), nunca al escribir.
+
+Concurrencia entre procesos
+---------------------------
+
+Toda escritura es una secuencia leer-modificar-reescribir del archivo entero.
+Sin exclusión, dos procesos que escriben a la vez (dos CLIs, un bot y una
+CLI) pueden leer el mismo estado y el segundo ``os.replace`` pisa al primero:
+se pierde un intento sin excepción, una violación silenciosa de I8. Por eso
+cada escritura toma un ``fcntl.flock`` **exclusivo** sobre un archivo sidecar
+vacío ``<nombre>.lock`` junto al JSON, durante toda la secuencia.
+
+* Garantía: un solo escritor a la vez por archivo, dentro del mismo host. El
+  segundo escritor **espera** (no falla) hasta que el primero suelta el lock.
+  Si el lock no se puede obtener (permisos, descriptor cerrado...) se lanza
+  :class:`~core.errors.StorageError`, nunca silencio.
+* Las lecturas puras no toman el lock: ``os.replace`` es atómico, así que un
+  lector ve o el archivo anterior o el nuevo, nunca una mezcla.
+* Limitación: ``flock`` no es fiable en sistemas de archivos de red (NFS,
+  SMB) ni entre hosts distintos. Ahí no hay garantía de exclusión.
+* El ``.lock`` es un archivo adicional y vacío; el formato del JSON no cambia
+  y borrarlo es inocuo (se recrea en la siguiente escritura).
 """
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import tempfile
+from contextlib import contextmanager
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 
 from core.errors import (
     StorageError,
@@ -30,9 +53,9 @@ from core.models import Attempt, AttemptKind, Objective, Profile
 
 from ._common import (
     filter_attempts,
+    merge_objectives,
     sort_attempts,
     validate_attempt,
-    validate_objective,
     validate_profile,
 )
 
@@ -102,6 +125,38 @@ def _profile_from_json(data: dict[str, Any]) -> Profile:
 # ------------------------------------------------------------------ archivo
 
 
+def lock_path_for(path: Path) -> Path:
+    """Ruta del sidecar de bloqueo: ``<nombre>.lock`` junto al JSON."""
+    return path.with_name(path.name + ".lock")
+
+
+@contextmanager
+def _exclusive_lock(path: Path) -> Iterator[None]:
+    """Bloqueo exclusivo entre procesos para escribir ``path``.
+
+    Envuelve la secuencia completa leer-modificar-reescribir. Bloquea (espera)
+    si otro proceso ya lo tiene. Cualquier fallo al abrir el sidecar o al
+    tomar el lock se convierte en :class:`StorageError` (SPEC I8).
+    """
+    lock_path = lock_path_for(path)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o644)
+    except OSError as exc:
+        raise StorageError(f"no se pudo abrir el lock {lock_path}: {exc}") from exc
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        except OSError as exc:
+            raise StorageError(
+                f"no se pudo obtener el lock {lock_path}: {exc}"
+            ) from exc
+        yield
+    finally:
+        # Cerrar el descriptor libera el flock aunque LOCK_UN fallara.
+        os.close(fd)
+
+
 def _read_document(path: Path, root_key: str) -> list[dict[str, Any]]:
     """Lee el archivo. Si no existe, el store está vacío (no es un error)."""
     if not path.exists():
@@ -164,11 +219,12 @@ class JsonAttemptStore:
 
     def append(self, profile_id: str, attempt: Attempt) -> Attempt:
         """Persiste un intento. Ver :meth:`core.storage.AttemptStore.append`."""
-        raw_rows = _read_document(self._path, self.ROOT_KEY)
-        existing = {d["attempt_id"] for d in raw_rows}
-        validate_attempt(profile_id, attempt, existing)
-        raw_rows.append(_attempt_to_json(profile_id, attempt))
-        _write_document(self._path, self.ROOT_KEY, raw_rows)
+        with _exclusive_lock(self._path):
+            raw_rows = _read_document(self._path, self.ROOT_KEY)
+            existing = {d["attempt_id"] for d in raw_rows}
+            validate_attempt(profile_id, attempt, existing)
+            raw_rows.append(_attempt_to_json(profile_id, attempt))
+            _write_document(self._path, self.ROOT_KEY, raw_rows)
         return attempt
 
     def list_for_objective(
@@ -236,9 +292,10 @@ class JsonProfileStore:
     def save_profile(self, profile: Profile) -> Profile:
         """Crea o reemplaza un perfil completo, objetivos incluidos."""
         validate_profile(profile)
-        profiles = self._load()
-        profiles[profile.profile_id] = profile
-        self._save(profiles)
+        with _exclusive_lock(self._path):
+            profiles = self._load()
+            profiles[profile.profile_id] = profile
+            self._save(profiles)
         return profile
 
     def list_profiles(self) -> list[Profile]:
@@ -262,23 +319,20 @@ class JsonProfileStore:
     def upsert_objectives(
         self, profile_id: str, objectives: Iterable[Objective]
     ) -> int:
-        """Añade o reemplaza objetivos del perfil. Devuelve cuántos escribió."""
-        profiles = self._load()
-        try:
-            profile = profiles[profile_id]
-        except KeyError:
-            raise UnknownProfileError(profile_id) from None
-        merged = dict(profile.objectives)
-        written = 0
-        for objective in objectives:
-            validate_objective(objective)
-            merged[objective.objective_id] = objective
-            written += 1
-        profiles[profile_id] = Profile(
-            profile_id=profile.profile_id, name=profile.name, objectives=merged
-        )
-        self._save(profiles)
+        """Añade o reemplaza objetivos del perfil. Devuelve cuántos escribió.
+
+        La fusión vive en :func:`store._common.merge_objectives`, compartida
+        con el backend en memoria.
+        """
+        with _exclusive_lock(self._path):
+            profiles = self._load()
+            try:
+                profile = profiles[profile_id]
+            except KeyError:
+                raise UnknownProfileError(profile_id) from None
+            profiles[profile_id], written = merge_objectives(profile, objectives)
+            self._save(profiles)
         return written
 
 
-__all__ = ["JsonAttemptStore", "JsonProfileStore"]
+__all__ = ["JsonAttemptStore", "JsonProfileStore", "lock_path_for"]

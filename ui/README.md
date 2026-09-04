@@ -37,6 +37,16 @@ Códigos de salida: `0` ok; `1` solo en `check` cuando `ok=False`; `2` error de
 uso o de dominio (`UnknownObjectiveError`, `DuplicateAttemptError`,
 `InvalidAttemptError`, `StorageError`...). Nunca un traceback.
 
+## Concurrencia del backend JSON
+
+Cada escritura (registrar un intento, crear un perfil, añadir objetivos) toma un
+lock exclusivo (`flock`) sobre un archivo vacío `attempts.json.lock` /
+`profiles.json.lock` junto al JSON, así que dos CLIs que escriben a la vez en el
+mismo `--data` no se pisan: la segunda espera a que termine la primera. La
+garantía vale para procesos del mismo host; en sistemas de archivos de red (NFS,
+SMB) `flock` no es fiable y no hay exclusión. Los `.lock` se pueden borrar sin
+riesgo: se recrean en la siguiente escritura.
+
 ## Ejemplos
 
 ```sh
