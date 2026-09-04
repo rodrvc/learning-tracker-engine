@@ -18,6 +18,7 @@ por objetivo y programa repasos. Independiente del dominio que se estudie.
 | Ruta | Qué es |
 | --- | --- |
 | `SPEC.md` | El contrato: niveles, evolución, garantías |
+| `INTEGRATION.md` | Cómo conectarlo a una fuente de estudio (apuntes, quiz, agente tutor) |
 | `core/` | Motor puro, sin I/O |
 | `store/` | Persistencia |
 | `tests/` | Suite de verificación |
