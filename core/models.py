@@ -208,7 +208,7 @@ class ObjectiveState:
             Dos intentos el mismo día cuentan uno (SPEC C3).
         days_since_last: días fraccionarios entre el último intento y ``as_of``.
             Es el ``gap`` que alimenta el decaimiento.
-        retention: factor de decaimiento aplicado, en (0.0, 1.0].
+        retention: factor de decaimiento aplicado, en [``RETENTION_FLOOR``, 1.0].
         next_review_at: próximo repaso según SPEC §4, o ``None`` si no hay
             intentos.
         is_due: ``next_review_at is not None and next_review_at <= as_of``.

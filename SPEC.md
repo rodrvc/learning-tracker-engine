@@ -108,6 +108,8 @@ persiste.
 | `first_attempt_at` | `datetime \| None` | — |
 | `last_attempt_at` | `datetime \| None` | — |
 | `distinct_days` | `int` | Número de **días naturales distintos** con al menos un intento. |
+| `days_since_last` | `float \| None` | Días fraccionarios entre el último intento y `as_of`. Es el `gap` que alimenta el decaimiento (§2.2). `None` si no hay intentos. |
+| `retention` | `float` | Factor de decaimiento aplicado, en `[RETENTION_FLOOR, 1.0]` (§2.2). |
 | `next_review_at` | `datetime \| None` | Próximo repaso según §4. `None` si no hay intentos. |
 | `is_due` | `bool` | `next_review_at <= as_of`. |
 
@@ -656,7 +658,7 @@ Los nombres exactos, tipos y docstrings viven en `core/`. Este es el mapa.
 | `FixedClock` | Devuelve siempre la misma fecha. Para tests. |
 | `OffsetClock` | Un `Clock` base más un desplazamiento. Para simular avance. |
 | `SystemClock` | El reloj real. **Vive en `store/`, no en `core/`**, para que I2 sea verificable con un grep sobre `core/`. |
-| `AttemptStore` (Protocol) | Persistencia de intentos: `append`, `list_for_objective`, `list_all`, `count`, `exists`. Solo añade y lee. |
+| `AttemptStore` (Protocol) | Persistencia de intentos: `append(profile_id, attempt)`, `list_for_objective`, `list_all`, `count`, `exists`. Solo añade y lee. `profile_id` va en la llamada y no en `Attempt` (§1.3 no lo incluye): el store indexa por perfil, igual que en `list_for_objective`, `list_all` y `count`; `attempt_id` es único global (C9). |
 | `ProfileStore` (Protocol) | Persistencia de perfiles y objetivos. |
 
 ### 9.2 Modelo (`core/models.py`)
@@ -682,17 +684,23 @@ Son funciones puras sobre listas de `Attempt`. No tocan el store ni el reloj.
 | Método | Qué hace |
 | --- | --- |
 | `record_attempt(...)` | Registra un intento con fecha inyectada. Devuelve el `Attempt`. |
+| `record_series(objective_id, results, start, step, kind)` | Registra una serie de resultados en fechas espaciadas. Atajo para el bot de verificación y los tests; reproduce §3. Devuelve la lista de `Attempt`. |
 | `get_level(objective_id, as_of=None)` | El `Level` de un objetivo en una fecha. |
 | `get_state(objective_id, as_of=None)` | El `ObjectiveState` completo. |
 | `get_state_at(objective_id, as_of)` | Igual, con `as_of` obligatorio. Consulta histórica explícita. |
+| `get_all_states(as_of=None)` | El estado de todos los objetivos del perfil, por `objective_id`. |
 | `get_due(as_of=None, limit=None)` | Qué toca repasar (§5.2). |
 | `get_unstarted(as_of=None)` | Objetivos sin ningún intento. |
 | `get_stale(as_of=None, days=14)` | Objetivos sin actividad reciente (fallo 4). |
 | `get_timeline(objective_id, start, end, step)` | Serie temporal de estados. |
 | `compare_states(objective_id, earlier, later)` | "¿Estaba mejor hace dos semanas?" |
 | `get_summary(as_of=None)` | Agregado del perfil: reparto por nivel, cobertura. |
+| `get_profile()` | El `Profile` sobre el que opera este tracker. |
 | `check_consistency(as_of=None)` | §8 fallo 2. Devuelve `ConsistencyReport`. |
+| `rebuild(as_of=None)` | I6. No hay caché que borrar: recalcula el estado de todos los objetivos y devuelve cuántos recalculó. |
 | `session(...)` | Abre un `SessionRecorder`. |
+| `profile_id` (propiedad) | Perfil sobre el que opera este tracker. |
+| `clock` (propiedad) | El reloj inyectado, solo lectura, expuesto para colaboradores como `SessionRecorder`. Sigue siendo I2: el `Clock` lo eligió quien construyó el tracker. |
 
 `as_of=None` significa "usa `clock.now()`". Es la única concesión, y sigue
 siendo tiempo inyectado: el `Clock` lo elige quien construye el tracker.
