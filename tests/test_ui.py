@@ -381,6 +381,9 @@ def test_main_uses_sys_stdout(seeded: Cli, capsys: pytest.CaptureFixture[str], m
 
 ALLOWED_PROJECT_IMPORTS = {
     "core.tracker", "core.session", "core.models", "core.errors", "core.clock", "store",
+    # Solo Protocols (ProfileStore/AttemptStore) para tipar el Context; no
+    # abre ninguna lectura: FORBIDDEN_ATTRS sigue vetando list_* en ui/.
+    "core.storage",
 }
 FORBIDDEN_IMPORTS = {"core.leveling", "core.scheduling", "core.constants", "store.memory", "store.json_store"}
 FORBIDDEN_ATTRS = {"list_for_objective", "list_all"}

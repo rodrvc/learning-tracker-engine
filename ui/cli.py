@@ -34,6 +34,7 @@ from core.models import (
     ProfileSummary,
     StateComparison,
 )
+from core.storage import AttemptStore, ProfileStore
 from core.tracker import LearningTracker
 from store import JsonAttemptStore, JsonProfileStore, SystemClock
 
@@ -364,8 +365,8 @@ class Context:
     """Todo lo que necesita un comando: stores, reloj, fecha de corte y salida."""
 
     args: argparse.Namespace
-    profiles: JsonProfileStore
-    attempts: JsonAttemptStore
+    profiles: ProfileStore
+    attempts: AttemptStore
     clock: Clock
     as_of: datetime | None
     out: TextIO
