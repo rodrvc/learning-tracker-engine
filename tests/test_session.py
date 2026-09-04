@@ -331,3 +331,15 @@ def test_tracker_session_factory_returns_functional_recorder(tracker, attempts):
     assert s.report.status is SessionStatus.RECORDED
     assert attempts.count(PID) == 1
     assert tracker.get_state(O1).total_attempts == 1
+
+
+@pytest.mark.spec
+def test_tracker_session_accepts_injected_started_at(tracker):
+    """SPEC seccion 9.6 e I2: ``tracker.session(started_at=...)`` inyecta la apertura."""
+    opened = d(3)
+    with tracker.session("s-10", started_at=opened) as s:
+        assert s.started_at == opened
+    assert s.report.started_at == opened
+    # Sin started_at, sigue viniendo del reloj del tracker, no del sistema.
+    with tracker.session("s-11") as s2:
+        assert s2.started_at == NOW

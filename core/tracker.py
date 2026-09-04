@@ -222,15 +222,24 @@ class LearningTracker:
             for index, result in enumerate(results)
         ]
 
-    def session(self, session_id: str | None = None) -> SessionRecorder:
+    def session(
+        self,
+        session_id: str | None = None,
+        started_at: datetime | None = None,
+    ) -> SessionRecorder:
         """Abre una sesión de registro (SPEC §9.6).
 
         Úsese como context manager. Al cerrarse produce un
         :class:`~core.models.SessionReport`; si no se registró nada, el estado
         es ``EMPTY`` y queda constancia visible de que la sesión pasó en blanco
         (defensa contra el fallo 4).
+
+        Args:
+            session_id: identificador; ``None`` genera uno.
+            started_at: instante de apertura, inyectado (SPEC I2). ``None``
+                usa el reloj del tracker.
         """
-        return SessionRecorder(self, session_id=session_id)
+        return SessionRecorder(self, session_id=session_id, started_at=started_at)
 
     # ---------------------------------------------------------------- consulta
 
