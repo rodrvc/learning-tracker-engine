@@ -656,3 +656,28 @@ def test_i5_compute_state_no_muta_la_entrada():
     snapshot = list(history)
     compute_state(OBJ, history, history[-1].at)
     assert history == snapshot
+
+
+# ------------------------------------- envoltorios publicos vs compute_state
+
+
+@pytest.mark.invariant
+@pytest.mark.parametrize(
+    "results", ["", "C", "FFFCF", "FFFCFCCCCC", "CCCCCCCCCCCC", "FCFCFCFCFCFC"]
+)
+def test_public_wrappers_match_compute_state_on_shuffled_input(results):
+    """compute_score y compute_level siguen funcionando solas y desordenadas.
+
+    compute_state ordena una sola vez y delega en helpers privados; los
+    envoltorios publicos deben dar exactamente lo mismo aunque reciban el
+    historial en cualquier orden (SPEC seccion 2.2 paso 1 y C4), incluido un
+    intento futuro que el corte debe ignorar.
+    """
+    history = daily(results) + [attempt(99, True, T0 + 40 * DAY)]
+    shuffled = list(reversed(history))
+    for as_of in (T0 - DAY, T0 + 2 * DAY, T0 + 12 * DAY, T0 + 30 * DAY):
+        state = compute_state(OBJ, shuffled, as_of)
+        score = compute_score(shuffled, as_of)
+        assert score == state.score
+        assert compute_level(score, shuffled, as_of) == state.level
+        assert state == compute_state(OBJ, history, as_of)

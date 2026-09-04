@@ -136,11 +136,8 @@ def compute_score(attempts: Sequence[Attempt], as_of: datetime) -> float:
         Un valor en [0.0, 1.0].
     """
     ordered = attempts_until(attempts, as_of)
-    if len(ordered) < MIN_ATTEMPTS:
-        return 0.0
-    raw = weighted_raw_score(recent_window(ordered))
-    retention = retention_factor(ordered[-1].at, as_of)
-    return round(raw * retention, SCORE_PRECISION)
+    window = recent_window(ordered)
+    return _score_of(ordered, weighted_raw_score(window), as_of)
 
 
 def distinct_attempt_days(attempts: Sequence[Attempt]) -> int:
@@ -174,16 +171,8 @@ def compute_level(
         as_of: fecha de corte.
     """
     ordered = attempts_until(attempts, as_of)
-    if len(ordered) < MIN_ATTEMPTS:
-        return Level.UNASSESSED
-    score = round(score, SCORE_PRECISION)
-    if score < THRESHOLD_LEARNING:
-        return Level.WEAK
-    if score < THRESHOLD_COMPETENT:
-        return Level.LEARNING
-    if _is_sustained(ordered):
-        return Level.MASTERED
-    return Level.COMPETENT
+    raw = weighted_raw_score(recent_window(ordered))
+    return _level_of(score, ordered, raw)
 
 
 def compute_state(
@@ -201,11 +190,18 @@ def compute_state(
         as_of: fecha de corte. Puede ser anterior al primer intento (C6) o
             futura (C7); ambas son legales.
     """
+    # Se ordena y corta UNA vez; los helpers privados reciben la lista ya
+    # preparada y no vuelven a ordenarla. Mismo resultado que llamar a
+    # compute_score y compute_level por separado (que son envoltorios de
+    # esos mismos helpers).
     ordered = attempts_until(attempts, as_of)
     first_at = ordered[0].at if ordered else None
     last_at = ordered[-1].at if ordered else None
-    score = compute_score(ordered, as_of)
-    level = compute_level(score, ordered, as_of)
+    window = recent_window(ordered)
+    raw = weighted_raw_score(window)
+    retention = retention_factor(last_at, as_of)
+    score = _score_of(ordered, raw, as_of, retention)
+    level = _level_of(score, ordered, raw)
     next_review_at = compute_next_review(ordered, level)
     return ObjectiveState(
         objective_id=objective_id,
@@ -214,14 +210,14 @@ def compute_state(
         score=score,
         total_attempts=len(ordered),
         correct_attempts=sum(1 for a in ordered if a.correct),
-        recent_window=recent_window(ordered),
+        recent_window=window,
         first_attempt_at=first_at,
         last_attempt_at=last_at,
         distinct_days=distinct_attempt_days(ordered),
         days_since_last=(
             _days_between(last_at, as_of) if last_at is not None else None
         ),
-        retention=retention_factor(last_at, as_of),
+        retention=retention,
         next_review_at=next_review_at,
         is_due=is_due(next_review_at, as_of),
     )
@@ -232,13 +228,56 @@ def _days_between(start: datetime, end: datetime) -> float:
     return (end - start) / timedelta(days=1)
 
 
-def _is_sustained(ordered: Sequence[Attempt]) -> bool:
+def _score_of(
+    ordered: Sequence[Attempt],
+    raw: float,
+    as_of: datetime,
+    retention: float | None = None,
+) -> float:
+    """Nucleo de :func:`compute_score` sobre una lista ya ordenada y cortada.
+
+    Args:
+        ordered: intentos ya ordenados y cortados por ``as_of``.
+        raw: ``weighted_raw_score(recent_window(ordered))``, ya calculado.
+        as_of: fecha de corte.
+        retention: ``retention_factor(ordered[-1].at, as_of)`` si quien llama
+            ya lo tiene; ``None`` lo calcula aqui.
+    """
+    if len(ordered) < MIN_ATTEMPTS:
+        return 0.0
+    if retention is None:
+        retention = retention_factor(ordered[-1].at, as_of)
+    return round(raw * retention, SCORE_PRECISION)
+
+
+def _level_of(score: float, ordered: Sequence[Attempt], raw: float) -> Level:
+    """Nucleo de :func:`compute_level` sobre una lista ya ordenada y cortada.
+
+    Args:
+        score: el valor de :func:`compute_score`.
+        ordered: intentos ya ordenados y cortados por ``as_of``.
+        raw: ``weighted_raw_score(recent_window(ordered))``, ya calculado;
+            lo consume la condicion de sostenimiento.
+    """
+    if len(ordered) < MIN_ATTEMPTS:
+        return Level.UNASSESSED
+    score = round(score, SCORE_PRECISION)
+    if score < THRESHOLD_LEARNING:
+        return Level.WEAK
+    if score < THRESHOLD_COMPETENT:
+        return Level.LEARNING
+    if _is_sustained(ordered, raw):
+        return Level.MASTERED
+    return Level.COMPETENT
+
+
+def _is_sustained(ordered: Sequence[Attempt], raw: float) -> bool:
     """Las tres condiciones de sostenimiento de SPEC §2.2 paso 7.
 
     Args:
         ordered: intentos ya ordenados y cortados por ``as_of``, no vacíos.
+        raw: puntuacion cruda de la ventana reciente, ya calculada.
     """
-    raw = weighted_raw_score(recent_window(ordered))
     span = ordered[-1].at - ordered[0].at
     return (
         distinct_attempt_days(ordered) >= MASTERY_MIN_DAYS
