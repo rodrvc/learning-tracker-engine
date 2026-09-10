@@ -1,121 +1,124 @@
-# ui — CLI de visualización del progreso
+# ui - progress visualization CLI
 
-CLI de biblioteca estándar (`argparse`, sin dependencias) sobre la API pública
-de `LearningTracker`. Esta capa **no calcula nada**: muestra lo que el motor
-responde. No importa `core.leveling` ni `core.scheduling`, y no lee intentos
-del store por su cuenta (un test con AST lo verifica).
+Standard library CLI (`argparse`, no dependencies) over the public API of
+`LearningTracker`. This layer **computes nothing**: it shows what the engine
+answers. It does not import `core.leveling` or `core.scheduling`, and it does
+not read attempts from the store on its own (an AST test verifies that).
 
-## Instalacion
+The CLI speaks Spanish to the user: the subcommand names are in English but the
+messages it prints are in Spanish, and the tests assert them as such.
+
+## Install
 
 ```sh
-pip install .          # deja el ejecutable learning-tracker en el PATH
+pip install .          # puts the learning-tracker executable on the PATH
 learning-tracker --help
 ```
 
-Sin instalar, desde la raiz del repo, `python -m ui ...` hace exactamente lo
-mismo. Los ejemplos de abajo usan `python -m ui`; cambia el prefijo por
-`learning-tracker` si lo instalaste.
+Without installing, from the root of the repo, `python -m ui ...` does exactly
+the same. The examples below use `python -m ui`; swap the prefix for
+`learning-tracker` if you installed it.
 
-## Uso
+## Usage
 
 ```
-learning-tracker [--data DIR] [--profile ID] [--as-of ISO8601] COMANDO ...
-python -m ui      [--data DIR] [--profile ID] [--as-of ISO8601] COMANDO ...
+learning-tracker [--data DIR] [--profile ID] [--as-of ISO8601] COMMAND ...
+python -m ui      [--data DIR] [--profile ID] [--as-of ISO8601] COMMAND ...
 ```
 
-- `--data DIR`: directorio con `profiles.json` y `attempts.json`. Sin este
-  argumento se usa el directorio del usuario en el sistema operativo (ver
-  "Donde viven los datos").
-- `--profile ID`: perfil sobre el que se opera. Obligatorio salvo en `profile`.
-- `--as-of ISO8601`: fecha de consulta. Si falta se usa el reloj del sistema.
-  Una fecha sin zona horaria se asume UTC; se acepta el sufijo `Z`.
+- `--data DIR`: directory holding `profiles.json` and `attempts.json`. Without
+  this argument the user directory of the operating system is used (see "Where
+  the data lives").
+- `--profile ID`: profile to operate on. Mandatory except in `profile`.
+- `--as-of ISO8601`: query date. When missing the system clock is used. A date
+  without a timezone is assumed to be UTC; the `Z` suffix is accepted.
 
-Comandos:
+Commands:
 
-| Comando | Qué hace |
+| Command | What it does |
 | --- | --- |
-| `profile create ID --name NOMBRE` / `profile list` | Crea o lista perfiles |
-| `objective add ID --title T [--domain D] [--weight W]` | Añade o reemplaza un objetivo |
-| `objectives` | Catálogo del perfil con nivel y score en `--as-of` |
-| `record ID --correct\|--wrong [--at ISO] [--kind K] [--confidence C] [--note N] [--id X]` | Registra un intento. Sin `--at` usa `--as-of` o el reloj |
-| `state ID` | Estado completo de un objetivo (SPEC §1.5) |
-| `due [--limit N]` | Qué toca repasar, por urgencia (SPEC §5.2) |
-| `unstarted` | Objetivos sin ningún intento |
-| `stale [--days N]` | Objetivos sin actividad en N días (default 14) |
-| `summary` | Agregado del perfil: reparto por nivel, cobertura |
-| `timeline ID --start ISO --end ISO [--step-days N]` | Serie temporal (SPEC §5.3) |
-| `compare ID --earlier ISO --later ISO` | "¿Estaba mejor hace dos semanas?" (SPEC §5.1) |
-| `check` | Chequeo de consistencia por conteos (SPEC §8, fallo 2) |
+| `profile create ID --name NAME` / `profile list` | Creates or lists profiles |
+| `objective add ID --title T [--domain D] [--weight W]` | Adds or replaces an objective |
+| `objectives` | Catalog of the profile with level and score at `--as-of` |
+| `record ID --correct\|--wrong [--at ISO] [--kind K] [--confidence C] [--note N] [--id X]` | Records an attempt. Without `--at` it uses `--as-of` or the clock |
+| `state ID` | Complete state of an objective (SPEC section 1.5) |
+| `due [--limit N]` | What is due for review, by urgency (SPEC section 5.2) |
+| `unstarted` | Objectives without a single attempt |
+| `stale [--days N]` | Objectives with no activity in N days (default 14) |
+| `summary` | Profile aggregate: split by level, coverage |
+| `timeline ID --start ISO --end ISO [--step-days N]` | Time series (SPEC section 5.3) |
+| `compare ID --earlier ISO --later ISO` | "Was I better two weeks ago?" (SPEC section 5.1) |
+| `check` | Consistency check by counts (SPEC section 8, failure 2) |
 
-Códigos de salida: `0` ok; `1` solo en `check` cuando `ok=False`; `2` error de
-uso o de dominio (`UnknownObjectiveError`, `DuplicateAttemptError`,
-`InvalidAttemptError`, `StorageError`...). Nunca un traceback.
+Exit codes: `0` ok; `1` only in `check` when `ok=False`; `2` a usage or domain
+error (`UnknownObjectiveError`, `DuplicateAttemptError`, `InvalidAttemptError`,
+`StorageError`...). Never a traceback.
 
-## Donde viven los datos
+## Where the data lives
 
-Los datos son del usuario, no del repo: viven en la carpeta estandar de su
-sistema operativo, no en un `./data` relativo al directorio actual (asi la CLI
-abre siempre el mismo store se ejecute desde donde se ejecute).
+The data belongs to the user, not to the repo: it lives in the standard folder
+of their operating system, not in a `./data` relative to the current directory
+(that way the CLI always opens the same store no matter where it is run from).
 
-| Sistema | Directorio por defecto |
+| System | Default directory |
 | --- | --- |
 | macOS | `~/Library/Application Support/learning-tracker` |
-| Linux y el resto | `$XDG_DATA_HOME/learning-tracker`, o `~/.local/share/learning-tracker` si `XDG_DATA_HOME` no esta definida |
+| Linux and the rest | `$XDG_DATA_HOME/learning-tracker`, or `~/.local/share/learning-tracker` when `XDG_DATA_HOME` is not defined |
 
-Precedencia, de mayor a menor:
+Precedence, highest to lowest:
 
-1. `--data DIR` en la linea de comandos.
-2. La variable de entorno `LEARNING_TRACKER_DATA`.
-3. El default del sistema operativo de la tabla.
+1. `--data DIR` on the command line.
+2. The environment variable `LEARNING_TRACKER_DATA`.
+3. The operating system default from the table.
 
-`learning-tracker --help` muestra el default efectivo de tu maquina. El
-directorio se crea al vuelo con permisos `0700` (solo su dueno entra) y los
-JSON de dentro se siguen escribiendo igual que siempre.
+`learning-tracker --help` shows the effective default on your machine. The
+directory is created on the fly with `0700` permissions (only its owner gets in)
+and the JSON files inside are still written exactly as always.
 
-Si tenias datos en un `./data` de una version anterior, la CLI lo detecta al
-arrancar y te imprime por stderr el comando exacto para moverlos. **No mueve ni
-copia nada por su cuenta**: el aviso desaparece cuando el destino nuevo ya tiene
-datos. Tambien puedes quedarte donde estabas con
-`LEARNING_TRACKER_DATA=/ruta/a/data`.
+If you had data in a `./data` from an earlier version, the CLI detects it on
+start-up and prints to stderr the exact command to move it. **It does not move
+or copy anything on its own**: the notice goes away once the new destination
+holds data. You can also stay where you were with
+`LEARNING_TRACKER_DATA=/path/to/data`.
 
-## Copia de seguridad
+## Backup
 
-Copiar el directorio de datos entero es toda la copia de seguridad:
+Copying the whole data directory is the entire backup:
 
 ```sh
 cp -R "$HOME/Library/Application Support/learning-tracker" ~/backup-learning-tracker
 ```
 
-Restaurar es copiar de vuelta. Los `.lock` son archivos vacios de exclusion
-entre procesos: no hace falta copiarlos, y se recrean solos en la siguiente
-escritura.
+Restoring is copying it back. The `.lock` files are empty files used for
+exclusion between processes: there is no need to copy them, and they are
+recreated on their own on the next write.
 
-## Concurrencia del backend JSON
+## Concurrency of the JSON backend
 
-Cada escritura (registrar un intento, crear un perfil, añadir objetivos) toma un
-lock exclusivo (`flock`) sobre un archivo vacío `attempts.json.lock` /
-`profiles.json.lock` junto al JSON, así que dos CLIs que escriben a la vez en el
-mismo `--data` no se pisan: la segunda espera a que termine la primera. La
-garantía vale para procesos del mismo host; en sistemas de archivos de red (NFS,
-SMB) `flock` no es fiable y no hay exclusión. Los `.lock` se pueden borrar sin
-riesgo: se recrean en la siguiente escritura.
+Every write (recording an attempt, creating a profile, adding objectives) takes
+an exclusive lock (`flock`) over an empty file `attempts.json.lock` /
+`profiles.json.lock` next to the JSON, so two CLIs writing at the same time into
+the same `--data` do not overwrite each other: the second waits for the first to
+finish. The guarantee holds for processes on the same host; on network file
+systems (NFS, SMB) `flock` is not reliable and there is no exclusion. The
+`.lock` files can be deleted safely: they are recreated on the next write.
 
-## Ejemplos
+## Examples
 
 ```sh
-# Crear un perfil y un objetivo
+# Create a profile and an objective
 python -m ui profile create ai-103 --name "Azure AI-103"
 python -m ui --profile ai-103 objective add D3.2 --title "Content understanding" --domain D3
 
-# Registrar la serie "mal, mal, mal, bien, mal" en fechas inyectadas
+# Record the series "wrong, wrong, wrong, right, wrong" on injected dates
 for d in 01 02 03; do python -m ui --profile ai-103 record D3.2 --wrong --at 2026-01-${d}T10:00Z; done
 python -m ui --profile ai-103 record D3.2 --correct --at 2026-01-04T10:00Z
 python -m ui --profile ai-103 record D3.2 --wrong   --at 2026-01-05T10:00Z
 
-# ¿Cómo estaba el 3 de enero? (no cambia aunque se registren intentos después)
+# How did it look on January 3rd? (it does not change when later attempts arrive)
 python -m ui --profile ai-103 --as-of 2026-01-03T12:00Z state D3.2
 
-# ¿Estaba mejor hace dos semanas? Y qué toca repasar hoy
+# Was it better two weeks ago? And what is due for review today
 python -m ui --profile ai-103 compare D3.2 --earlier 2026-02-15 --later 2026-03-01
 python -m ui --profile ai-103 due --limit 5
 ```

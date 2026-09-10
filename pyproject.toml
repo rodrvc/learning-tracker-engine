@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "learning-tracker"
 version = "0.1.0"
-description = "Motor de seguimiento de aprendizaje: intentos, niveles y repaso espaciado. El contrato vive en SPEC.md."
+description = "Learning tracking engine: attempts, levels and spaced repetition. The contract lives in SPEC.md."
 requires-python = ">=3.10"
 dependencies = []
 
@@ -25,7 +25,7 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = "-q --strict-markers"
 markers = [
-    "spec: verifica una regla concreta de SPEC.md",
-    "invariant: verifica una invariante de SPEC.md §6",
-    "edge: verifica un caso límite de SPEC.md §7",
+    "spec: verifies a concrete rule of SPEC.md",
+    "invariant: verifies an invariant of SPEC.md section 6",
+    "edge: verifies an edge case of SPEC.md section 7",
 ]

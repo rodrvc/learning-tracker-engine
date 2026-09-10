@@ -1,67 +1,77 @@
 # learning-tracker
 
-Motor de seguimiento de aprendizaje: registra intentos, calcula nivel de dominio
-por objetivo y programa repasos. Independiente del dominio que se estudie.
+Learning tracking engine: it records attempts, computes a mastery level per
+objective and schedules reviews. Independent of whatever subject is being
+studied.
 
-**Estado:** en construcción. El contrato vive en `SPEC.md`.
+**Status:** under construction. The contract lives in `SPEC.md`.
 
-## Principios
+## Principles
 
-- **El historial es la única fuente de verdad.** Todo agregado (nivel, próximo
-  repaso) es una proyección recalculable. Nada se guarda que no pueda derivarse.
-- **El tiempo se inyecta, nunca se consulta.** El motor no llama a `now()`:
-  recibe la fecha. Así se puede simular meses de estudio en un test.
-- **Modular.** `core/` no sabe de almacenamiento, de CLI ni de UI.
+- **The history is the only source of truth.** Every aggregate (level, next
+  review) is a recalculable projection. Nothing is stored that cannot be
+  derived.
+- **Time is injected, never read.** The engine does not call `now()`: it
+  receives the date. That is what makes it possible to simulate months of study
+  inside a test.
+- **Modular.** `core/` knows nothing about storage, about the CLI or about the
+  UI.
 
-## Instalacion y uso
+## Install and use
 
 ```sh
-pip install .                       # deja el ejecutable learning-tracker en el PATH
+pip install .                       # puts the learning-tracker executable on the PATH
 learning-tracker --help
 ```
 
-Sin instalar, desde la raiz del repo, `python -m ui ...` hace lo mismo. El
-detalle de cada subcomando esta en `ui/README.md`.
+Without installing, from the root of the repo, `python -m ui ...` does the same
+thing. The detail of every subcommand is in `ui/README.md`.
 
-## Donde viven los datos
+## Where the data lives
 
-Los datos son del usuario, no del repo. Por defecto viven en la carpeta
-estandar del sistema operativo, no en un `./data` relativo al directorio
-actual: asi la CLI abre siempre el mismo store se ejecute desde donde se
-ejecute, y quien clona el repo no acaba con sus datos dentro del proyecto.
+The data belongs to the user, not to the repo. By default it lives in the
+standard folder of the operating system, not in a `./data` relative to the
+current directory: that way the CLI always opens the same store no matter where
+it is run from, and whoever clones the repo does not end up with their data
+inside the project.
 
-| Sistema | Directorio por defecto |
+| System | Default directory |
 | --- | --- |
 | macOS | `~/Library/Application Support/learning-tracker` |
-| Linux y el resto | `$XDG_DATA_HOME/learning-tracker`, o `~/.local/share/learning-tracker` si `XDG_DATA_HOME` no esta definida |
+| Linux and the rest | `$XDG_DATA_HOME/learning-tracker`, or `~/.local/share/learning-tracker` when `XDG_DATA_HOME` is not defined |
 
-Precedencia: `--data DIR` gana a la variable de entorno
-`LEARNING_TRACKER_DATA`, que gana al default del sistema operativo.
-`learning-tracker --help` muestra el default efectivo de tu maquina. El
-directorio se crea con permisos `0700`: solo su dueno entra.
+Precedence: `--data DIR` beats the environment variable
+`LEARNING_TRACKER_DATA`, which beats the operating system default.
+`learning-tracker --help` shows the effective default on your machine. The
+directory is created with `0700` permissions: only its owner gets in.
 
-Si tenias datos en un `./data` de una version anterior, la CLI avisa por stderr
-con el comando exacto para moverlos y sigue funcionando con el destino nuevo.
-No mueve ni copia nada por su cuenta.
+If you had data in a `./data` from an earlier version, the CLI detects it and
+prints to stderr the exact command to move it, then carries on with the new
+destination. It does not move or copy anything on its own.
 
-## Copia de seguridad
+## Backup
 
-Copiar el directorio de datos entero:
+Copy the whole data directory:
 
 ```sh
 cp -R "$HOME/Library/Application Support/learning-tracker" ~/backup-learning-tracker
 ```
 
-Restaurar es copiar de vuelta. Los archivos `.lock` de dentro son archivos
-vacios de exclusion entre procesos: no hace falta copiarlos, y se recrean solos
-en la siguiente escritura.
+Restoring is copying it back. The `.lock` files inside are empty files used for
+exclusion between processes: there is no need to copy them, and they are
+recreated on the next write.
 
-## Estructura
+## Layout
 
-| Ruta | Qué es |
+| Path | What it is |
 | --- | --- |
-| `SPEC.md` | El contrato: niveles, evolución, garantías |
-| `core/` | Motor puro, sin I/O |
-| `store/` | Persistencia |
-| `tests/` | Suite de verificación |
-| `ui/` | Visualización del progreso |
+| `SPEC.md` | The contract: levels, evolution, guarantees |
+| `core/` | Pure engine, no I/O |
+| `store/` | Persistence |
+| `tests/` | Verification suite |
+| `ui/` | Progress visualization |
+
+## Language
+
+The code, the documentation and the commit messages are in English. What the
+CLI prints to the user is in Spanish.
