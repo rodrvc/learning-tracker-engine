@@ -129,7 +129,7 @@ def build_parser(default_data: str | None = None) -> argparse.ArgumentParser:
         default_data = describe_default(sys.platform, os.environ, Path.home())
     parser = _Parser(
         prog="learning-tracker",
-        description="Visualización del progreso de aprendizaje (SPEC.md §5).",
+        description="Visualización del progreso de aprendizaje (SPEC.md seccion 5).",
     )
     parser.add_argument(
         "--data",
