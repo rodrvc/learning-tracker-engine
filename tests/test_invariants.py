@@ -1,15 +1,17 @@
-"""La red de seguridad: SPEC.md §6 (invariantes I1-I10) y §8 (los cinco fallos).
+"""The safety net: SPEC.md section 6 (invariants I1-I10) and section 8 (the five
+failures).
 
-Cada invariante tiene **un** test (``test_i1_`` .. ``test_i10_``) y cada fallo
-conocido tiene el test que lo reproduciría si volviera (``test_fallo1_`` ..
-``test_fallo5_``). Todos llevan el marker ``invariant``.
+Every invariant has **one** test (``test_i1_`` .. ``test_i10_``) and every known
+failure has the test that would reproduce it if it came back
+(``test_failure1_`` .. ``test_failure5_``). All of them carry the ``invariant``
+marker.
 
-A diferencia de las suites por módulo, aquí se verifica la **visión de
-conjunto** y siempre desde fuera: por la API pública de
-:class:`~core.tracker.LearningTracker`, por introspección de la API o por
-análisis estático del código fuente de ``core/``. No se duplican los tests de
-detalle de ``test_tracker.py`` / ``test_leveling.py``: si una invariante falla
-aquí, la spec está rota aunque cada pieza pase su suite.
+Unlike the per-module suites, what is verified here is the **whole picture**,
+and always from the outside: through the public API of
+:class:`~core.tracker.LearningTracker`, through introspection of the API, or
+through static analysis of the source code of ``core/``. The detail tests of
+``test_tracker.py`` / ``test_leveling.py`` are not duplicated: if an invariant
+fails here, the spec is broken even when every piece passes its own suite.
 """
 
 from __future__ import annotations
@@ -51,12 +53,12 @@ ALL_OBJECTIVES = (O1, O2, O3)
 
 CORE_DIR = Path(core.__file__).resolve().parent
 
-#: Historial de referencia: la serie de SPEC §3 más dos aciertos.
+#: Reference history: the series of SPEC section 3 plus two hits.
 HISTORY = (False, False, False, True, False, True, True)
 
 
 def d(n: float) -> datetime:
-    """``T0 + n`` días."""
+    """``T0 + n`` days."""
     return T0 + DAY * n
 
 
@@ -74,7 +76,7 @@ def new_tracker(
     profiles: InMemoryProfileStore | JsonProfileStore | None = None,
     attempts: AttemptStore | None = None,
 ) -> LearningTracker:
-    """Tracker sobre stores nuevos (o los dados), con el perfil ya guardado."""
+    """Tracker over fresh stores (or the given ones), with the profile saved."""
     if profiles is None:
         profiles = InMemoryProfileStore()
     try:
@@ -92,11 +94,11 @@ def facts(
     start: int = 0,
     prefix: str = "",
 ) -> list[tuple[str, bool, datetime]]:
-    """Hechos ``(attempt_id, correct, at)`` para registrar en cualquier orden.
+    """Facts ``(attempt_id, correct, at)`` to record in any order.
 
-    El ``attempt_id`` va fijado para que el desempate de orden (SPEC C4) no
-    dependa de un uuid distinto en cada tracker. ``prefix`` evita colisiones
-    de id entre perfiles que comparten store (SPEC C9: el id es global).
+    The ``attempt_id`` is pinned so that the order tie break (SPEC C4) does not
+    depend on a different uuid in each tracker. ``prefix`` avoids id collisions
+    between profiles that share a store (SPEC C9: the id is global).
     """
     return [
         (f"{prefix}{objective_id}-{i:02d}", ok, d(start + i))
@@ -124,7 +126,7 @@ _MUTATING_FRAGMENTS = ("update", "delete", "remove", "clear", "pop", "edit", "se
 
 
 def test_i1_append_only_no_mutating_api_and_attempt_frozen(tmp_path):
-    """I1: ni el tracker ni los stores exponen forma de tocar un Attempt."""
+    """I1: neither the tracker nor the stores expose a way to touch an Attempt."""
     surfaces = {
         "LearningTracker": LearningTracker,
         "AttemptStore": AttemptStore,
@@ -139,7 +141,7 @@ def test_i1_append_only_no_mutating_api_and_attempt_frozen(tmp_path):
         assert not offenders, f"{label} expone API mutadora: {sorted(offenders)}"
         assert "update_attempt" not in names and "delete_attempt" not in names
 
-    # La instancia tampoco (atributos añadidos en __init__).
+    # Nor does the instance (attributes added in __init__).
     tracker = new_tracker(attempts=JsonAttemptStore(tmp_path / "a.json"))
     for instance in (tracker, tracker._attempts):  # noqa: SLF001 - introspección
         offenders = {
@@ -149,13 +151,13 @@ def test_i1_append_only_no_mutating_api_and_attempt_frozen(tmp_path):
         }
         assert not offenders, offenders
 
-    # El Protocol solo declara escritura por append.
+    # The Protocol declares writing only through append.
     protocol_methods = {
         n for n, v in inspect.getmembers(AttemptStore) if not n.startswith("_") and callable(v)
     }
     assert protocol_methods == {"append", "list_for_objective", "list_all", "count", "exists"}
 
-    # Attempt es inmutable por construcción.
+    # Attempt is immutable by construction.
     written = tracker.record_attempt(O1, correct=True, at=d(0))
     assert dataclasses.is_dataclass(written) and type(written).__dataclass_params__.frozen
     with pytest.raises(dataclasses.FrozenInstanceError):
@@ -180,8 +182,8 @@ _FORBIDDEN_CALLS = {
 
 
 def _clock_calls(source: str) -> list[tuple[int, str]]:
-    """Llamadas ``X.y(...)`` prohibidas en CODIGO (el AST ignora docstrings y
-    comentarios por construcción)."""
+    """``X.y(...)`` calls forbidden in CODE (the AST ignores docstrings and
+    comments by construction)."""
     found: list[tuple[int, str]] = []
     for node in ast.walk(ast.parse(source)):
         if not isinstance(node, ast.Call):
@@ -200,8 +202,8 @@ def _clock_calls(source: str) -> list[tuple[int, str]]:
 
 
 def test_i2_core_has_no_internal_clock():
-    """I2: cero llamadas al reloj real en core/ y SystemClock no vive ahí."""
-    # El escáner detecta código y deja pasar docstrings/comentarios.
+    """I2: zero calls to the real clock in core/, and SystemClock does not live there."""
+    # The scanner detects code and lets docstrings/comments through.
     assert _clock_calls("x = datetime.now(tz)\ny = time.time()") == [
         (1, "datetime.now("),
         (2, "time.time("),
@@ -217,7 +219,7 @@ def test_i2_core_has_no_internal_clock():
             violations[path.name] = calls
     assert not violations, f"core/ consulta el reloj: {violations}"
 
-    # Ningún módulo de core/ importa el módulo `time` siquiera.
+    # No module of core/ even imports the `time` module.
     for path in py_files:
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
             if isinstance(node, ast.Import):
@@ -225,7 +227,7 @@ def test_i2_core_has_no_internal_clock():
             if isinstance(node, ast.ImportFrom):
                 assert node.module != "time", path.name
 
-    # SystemClock no es importable desde core ni desde ningún submódulo.
+    # SystemClock is not importable from core nor from any submodule.
     assert not hasattr(core, "SystemClock")
     assert "SystemClock" not in core.__all__
     for path in py_files:
@@ -241,7 +243,7 @@ def test_i2_core_has_no_internal_clock():
 
 
 def test_i3_determinism_across_insertion_orders():
-    """I3: cualquier permutación del mismo historial da un estado idéntico."""
+    """I3: any permutation of the same history gives an identical state."""
     as_of = d(30)
     base_rows = facts(HISTORY)  # 7 intentos -> 5040 permutaciones
     reference = None
@@ -254,7 +256,7 @@ def test_i3_determinism_across_insertion_orders():
         assert state == reference, permutation
     assert reference is not None and reference.total_attempts == len(HISTORY)
 
-    # Uno de 20 intentos, con barajado aleatorio de semilla fija.
+    # One of 20 attempts, with a fixed-seed random shuffle.
     long_history = tuple(i % 3 != 0 for i in range(20))
     long_rows = facts(long_history, objective_id=O2)
     rng = random.Random(20260903)
@@ -275,7 +277,7 @@ def test_i3_determinism_across_insertion_orders():
 
 
 def test_i4_state_is_pure_function_of_attempts_and_as_of():
-    """I4: get_state == compute_state campo a campo, y nada más lo altera."""
+    """I4: get_state == compute_state field by field, and nothing else alters it."""
     as_of = d(30)
     tracker = new_tracker(clock=FixedClock(d(10)))
     record_facts(tracker, facts(HISTORY))
@@ -286,8 +288,8 @@ def test_i4_state_is_pure_function_of_attempts_and_as_of():
     for field in dataclasses.fields(ObjectiveState):
         assert getattr(via_tracker, field.name) == getattr(via_pure, field.name), field.name
 
-    # Mismo historial, distinto orden de inserción y distinto recorded_at
-    # (relojes distintos): ningún campo del estado cambia.
+    # Same history, different insertion order and different recorded_at
+    # (different clocks): no field of the state changes.
     other = new_tracker(clock=FixedClock(d(500)))
     record_facts(other, list(reversed(facts(HISTORY))))
     assert other.get_state(O1, as_of) == via_tracker
@@ -295,7 +297,7 @@ def test_i4_state_is_pure_function_of_attempts_and_as_of():
     recorded_other = {a.recorded_at for a in other._attempts.list_all(PID)}  # noqa: SLF001
     assert recorded.isdisjoint(recorded_other), "el experimento exige recorded_at distintos"
 
-    # as_of es la única otra entrada: cambiarlo sí cambia el estado.
+    # as_of is the only other input: changing it does change the state.
     assert tracker.get_state(O1, d(31)) != via_tracker
 
 
@@ -303,9 +305,10 @@ def test_i4_state_is_pure_function_of_attempts_and_as_of():
 
 
 def test_i5_cut_is_monotone_but_level_is_not():
-    """I5: t1<=t2 => intentos(t1) ⊆ intentos(t2); el nivel sube y baja."""
+    """I5: t1<=t2 => attempts(t1) is a subset of attempts(t2); the level goes up
+    and down."""
     tracker = new_tracker()
-    # Sube (aciertos) y luego baja (fallos), en fechas fuera de orden.
+    # It rises (hits) and then falls (misses), on out-of-order dates.
     series = (True, True, True, True, False, False, False, False)
     rows = facts(series)
     record_facts(tracker, [rows[5], rows[0], rows[7], rows[2], rows[1], rows[6], rows[3], rows[4]])
@@ -322,7 +325,7 @@ def test_i5_cut_is_monotone_but_level_is_not():
         previous = current
     assert previous == {r[0] for r in rows}
 
-    # El conjunto es monótono, el nivel no: alcanza COMPETENT y cae a WEAK.
+    # The set is monotone, the level is not: it reaches COMPETENT and drops to WEAK.
     timeline = tracker.get_timeline(O1, d(0), d(8))
     levels = [s.level for s in timeline]
     totals = [s.total_attempts for s in timeline]
@@ -337,7 +340,7 @@ def test_i5_cut_is_monotone_but_level_is_not():
 
 
 def test_i6_rebuild_from_disk_is_identical(tmp_path):
-    """I6: borrar toda instancia y reabrir desde disco da el mismo estado."""
+    """I6: dropping every instance and reopening from disk gives the same state."""
     attempts_path = tmp_path / "attempts.json"
     profiles_path = tmp_path / "profiles.json"
     as_of = d(30)
@@ -364,7 +367,7 @@ def test_i6_rebuild_from_disk_is_identical(tmp_path):
     assert reopened.get_summary(as_of) == summary_before
     assert reopened.check_consistency(as_of).ok is True
 
-    # Y contra el backend en memoria alimentado con los mismos hechos.
+    # And against the in-memory backend fed with the same facts.
     mirror = new_tracker()
     record_facts(mirror, facts(HISTORY))
     record_facts(mirror, facts((True, False, True), objective_id=O2), objective_id=O2)
@@ -375,7 +378,7 @@ def test_i6_rebuild_from_disk_is_identical(tmp_path):
 
 
 def test_i7_profiles_are_isolated():
-    """I7: los intentos del perfil A no mueven nada del perfil B."""
+    """I7: the attempts of profile A move nothing in profile B."""
     profiles = InMemoryProfileStore()
     attempts = InMemoryAttemptStore()
     a = new_tracker(PID, profiles=profiles, attempts=attempts)
@@ -388,7 +391,7 @@ def test_i7_profiles_are_isolated():
     b_due = b.get_due(as_of)
     b_report = b.check_consistency(as_of)
 
-    # A registra mucho, incluso en los mismos objective_id y fechas.
+    # A records a lot, even on the same objective_id values and dates.
     record_facts(a, facts(HISTORY))
     record_facts(a, facts((False,) * 6, objective_id=O2), objective_id=O2)
     record_facts(a, facts((True,) * 4, objective_id=O3), objective_id=O3)
@@ -406,14 +409,14 @@ def test_i7_profiles_are_isolated():
 
 
 class ExplodingAttemptStore(InMemoryAttemptStore):
-    """Store cuya escritura falla siempre: simula disco lleno / permisos."""
+    """Store whose write always fails: it simulates a full disk / permissions."""
 
     def append(self, profile_id: str, attempt: Attempt) -> Attempt:
         raise StorageError("disco lleno")
 
 
 def test_i8_failed_write_raises_and_leaves_no_trace():
-    """I8: si append falla, record_attempt propaga y el conteo no cambia."""
+    """I8: if append fails, record_attempt propagates and the count does not change."""
     store = ExplodingAttemptStore()
     tracker = new_tracker(attempts=store)
     tracker_ok = new_tracker()
@@ -427,7 +430,7 @@ def test_i8_failed_write_raises_and_leaves_no_trace():
     assert store.exists("boom") is False
     assert tracker.get_state(O1, d(1)).total_attempts == 0
 
-    # La firma no admite "no hice nada": el retorno es Attempt, no Optional.
+    # The signature does not allow "I did nothing": the return is Attempt, not Optional.
     hints = inspect.signature(LearningTracker.record_attempt).return_annotation
     assert "Attempt" in str(hints) and "None" not in str(hints)
 
@@ -436,14 +439,14 @@ def test_i8_failed_write_raises_and_leaves_no_trace():
 
 
 class LyingCountStore(InMemoryAttemptStore):
-    """Mismos ids y mismos conjuntos, pero ``count`` miente en uno."""
+    """Same ids and same sets, but ``count`` lies by one."""
 
     def count(self, profile_id: str, objective_id: str | None = None) -> int:
         return super().count(profile_id, objective_id) + 1
 
 
 class DuplicatingStore(InMemoryAttemptStore):
-    """``list_all`` devuelve un intento dos veces: el conjunto de ids no cambia."""
+    """``list_all`` returns one attempt twice: the set of ids does not change."""
 
     def list_all(self, profile_id: str, until: datetime | None = None) -> list[Attempt]:
         rows = super().list_all(profile_id, until)
@@ -451,7 +454,7 @@ class DuplicatingStore(InMemoryAttemptStore):
 
 
 def test_i9_consistency_compares_counts_not_sets():
-    """I9: un store que conserva los conjuntos pero altera conteos se detecta."""
+    """I9: a store that keeps the sets but alters counts is detected."""
     as_of = d(30)
     honest = new_tracker()
     record_facts(honest, facts(HISTORY))
@@ -478,7 +481,7 @@ def test_i9_consistency_compares_counts_not_sets():
     assert report_dup.ok is False
     assert {c.name for c in report_dup.failures} >= {"unique_attempt_ids", "profile_attempt_count"}
 
-    # Un perfil sin objetivos: nada que comprobar no es "ok".
+    # A profile with no objectives: nothing to check is not "ok".
     profiles = InMemoryProfileStore()
     profiles.save_profile(Profile(profile_id="empty", name="empty"))
     empty = LearningTracker("empty", profiles, InMemoryAttemptStore(), FixedClock(d(0)))
@@ -511,7 +514,7 @@ def _identifiers(source: str) -> set[str]:
 
 
 def test_i10_state_has_no_streak_field():
-    """I10: ObjectiveState no expone racha, ni por nombre ni en el modelo."""
+    """I10: ObjectiveState exposes no run, neither by name nor in the model."""
     field_names = {f.name for f in dataclasses.fields(ObjectiveState)}
     for name in field_names:
         assert not any(w in name.lower() for w in _STREAK_WORDS), name
@@ -523,7 +526,7 @@ def test_i10_state_has_no_streak_field():
     assert not hasattr(state, "streak") and not hasattr(state, "racha")
     assert set(dataclasses.asdict(state)) == field_names
 
-    # grep (por AST, sin docstrings ni comentarios) sobre core/models.py.
+    # grep (through the AST, without docstrings or comments) over core/models.py.
     models_source = (CORE_DIR / "models.py").read_text(encoding="utf-8")
     offenders = {
         n for n in _identifiers(models_source) if any(w in n.lower() for w in _STREAK_WORDS)
@@ -531,24 +534,24 @@ def test_i10_state_has_no_streak_field():
     assert not offenders, offenders
 
 
-# ------------------------------------------------------------- §8 fallos
+# --------------------------------------------------------- section 8 failures
 
 
-def test_fallo1_streak_is_not_progress():
-    """Fallo 1: 3 aciertos seguidos tras un historial malo NO son COMPETENT."""
+def test_failure1_streak_is_not_progress():
+    """Failure 1: 3 hits in a row after a bad history are NOT COMPETENT."""
     tracker = new_tracker()
     record_facts(tracker, facts((False, False, False, False, False, True, True, True)))
     state = tracker.get_state(O1, d(8))
     assert state.level < Level.COMPETENT
     assert state.level == Level.WEAK
     assert state.recent_window[-3:] == (True, True, True)
-    # El progreso se lee en lo que una racha no puede dar.
+    # Progress is read from what a run cannot give.
     assert state.total_attempts == 8 and state.correct_attempts == 3
     assert state.recent_window == (False,) * 5 + (True,) * 3
     assert 0.0 < state.score < 0.85
     assert "streak" not in dataclasses.asdict(state)
 
-    # Y el caso literal de §8: cinco respuestas nunca parecen "no se guardó nada".
+    # And the literal case of section 8: five answers never look like "nothing was saved".
     spec3 = new_tracker()
     record_facts(spec3, facts((False, False, False, True, False), objective_id=O2), objective_id=O2)
     s5 = spec3.get_state(O2, d(4))
@@ -557,8 +560,8 @@ def test_fallo1_streak_is_not_progress():
     assert round(s5.score, 3) == 0.267
 
 
-def test_fallo2_sets_equal_but_counts_differ_is_not_ok():
-    """Fallo 2: igualdad de conjuntos con conteos distintos NO puede ser OK."""
+def test_failure2_sets_equal_but_counts_differ_is_not_ok():
+    """Failure 2: equal sets with different counts can NOT be OK."""
     dup = DuplicatingStore()
     tracker = new_tracker(attempts=dup)
     record_facts(tracker, facts(HISTORY))
@@ -577,7 +580,7 @@ def test_fallo2_sets_equal_but_counts_differ_is_not_ok():
     by_name = {c.name: c for c in report.checks}
     assert by_name["profile_attempt_count"].expected == len(HISTORY)
     assert by_name["profile_attempt_count"].actual == len(HISTORY) + 1
-    # ok es positivo: solo con todos los checks pasados. No es un bool suelto.
+    # ok is positive: only with every check passed. It is not a loose bool.
     assert isinstance(report.ok, bool)
     assert report.ok == (report.objectives_checked >= 1 and all(c.passed for c in report.checks))
 
@@ -588,8 +591,8 @@ _ACCUMULATOR_WORDS = (
 )
 
 
-def test_fallo3_no_persisted_accumulators():
-    """Fallo 3: nada de nivel/contador/ease/lapses se guarda: se deriva."""
+def test_failure3_no_persisted_accumulators():
+    """Failure 3: no level/counter/ease/lapses is stored: it is derived."""
     for model in (Objective, Profile):
         for field in dataclasses.fields(model):
             assert not any(w in field.name.lower() for w in _ACCUMULATOR_WORDS), (
@@ -597,7 +600,7 @@ def test_fallo3_no_persisted_accumulators():
                 field.name,
             )
         assert model.__dataclass_params__.frozen
-    # Attempt es el hecho: lleva `correct` (dato), pero ningún acumulador.
+    # Attempt is the fact: it carries `correct` (data), but no accumulator.
     attempt_fields = {f.name for f in dataclasses.fields(Attempt)}
     assert attempt_fields == {
         "attempt_id", "objective_id", "at", "correct", "kind",
@@ -605,8 +608,8 @@ def test_fallo3_no_persisted_accumulators():
     }
     assert Attempt.__dataclass_params__.frozen
 
-    # La "corrupción" de un agregado es imposible de persistir: tras registrar,
-    # el único dato del store son Attempts, y el estado sale de recalcular.
+    # "Corruption" of an aggregate is impossible to persist: after recording,
+    # the only data in the store are Attempts, and state comes from recomputing.
     tracker = new_tracker()
     record_facts(tracker, facts(HISTORY))
     store_rows = tracker._attempts.list_all(PID)  # noqa: SLF001
@@ -616,12 +619,12 @@ def test_fallo3_no_persisted_accumulators():
     s1 = tracker.get_state(O1, d(30))
     assert tracker.rebuild(d(30)) == len(ALL_OBJECTIVES)
     assert tracker.get_state(O1, d(30)) == s1
-    # Y volver a preguntar en un pasado anterior "revierte" sin ningún contador.
+    # And asking again at an earlier past "reverts" without any counter.
     assert tracker.get_state(O1, d(2)).total_attempts == 3
 
 
-def test_fallo4_silence_is_visible_via_unstarted_and_stale():
-    """Fallo 4: lo no registrado aparece en get_unstarted / get_stale."""
+def test_failure4_silence_is_visible_via_unstarted_and_stale():
+    """Failure 4: what is not recorded shows up in get_unstarted / get_stale."""
     tracker = new_tracker(clock=FixedClock(d(40)))
     record_facts(tracker, facts((True, True, True)))  # O1: días 0..2
     record_facts(tracker, facts((True,), objective_id=O2, start=35), objective_id=O2)
@@ -636,14 +639,15 @@ def test_fallo4_silence_is_visible_via_unstarted_and_stale():
     assert {s.objective_id for s in tracker.get_stale(d(40), days=3)} == {O1, O2}
     assert tracker.get_stale(d(3), days=14) == []
 
-    # Con as_of=None, el reloj inyectado da el mismo veredicto.
+    # With as_of=None, the injected clock gives the same verdict.
     assert {s.objective_id for s in tracker.get_stale()} == {O1}
     assert {s.objective_id for s in tracker.get_unstarted()} == {O3}
     assert tracker.get_summary(d(40)).unstarted_objectives == 1
 
 
-def test_fallo5_as_of_none_uses_injected_clock():
-    """Fallo 5: sin as_of se usa el Clock inyectado; cambiarlo cambia el resultado."""
+def test_failure5_as_of_none_uses_injected_clock():
+    """Failure 5: without as_of the injected Clock is used; changing it changes
+    the result."""
     attempts = InMemoryAttemptStore()
     profiles = InMemoryProfileStore()
     early = new_tracker(clock=FixedClock(d(8)), profiles=profiles, attempts=attempts)
@@ -662,13 +666,13 @@ def test_fallo5_as_of_none_uses_injected_clock():
     assert late.get_level(O1) < early.get_level(O1)
     assert early.get_summary().as_of == d(8) and late.get_summary().as_of == d(200)
 
-    # OffsetClock simula el avance sin esperar.
+    # OffsetClock simulates moving forward without waiting.
     moved = new_tracker(
         clock=OffsetClock(FixedClock(d(8)), timedelta(days=192)),
         profiles=profiles,
         attempts=attempts,
     )
     assert moved.get_state(O1) == s_late
-    # recorded_at sale también del reloj, no del sistema.
+    # recorded_at also comes from the clock, not from the system.
     written = late.record_attempt(O2, correct=True, at=d(0))
     assert written.recorded_at == d(200)

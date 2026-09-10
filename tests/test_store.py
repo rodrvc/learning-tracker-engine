@@ -1,15 +1,17 @@
-"""Tests de store/ contra SPEC.md §9.1, §6 (I1, I2, I6, I7, I8) y §7 (C4, C9).
+"""Tests of store/ against SPEC.md section 9.1, section 6 (I1, I2, I6, I7, I8) and
+section 7 (C4, C9).
 
-Convenciones:
+Conventions:
 
-* ``spec``: contrato de cada método de ``AttemptStore`` / ``ProfileStore`` y
-  de ``SystemClock``.
-* ``invariant``: I1 (append-only), I2 (sin reloj en ``core/``), I6
-  (reconstrucción), I7 (aislamiento entre perfiles), I8 (registro verificable).
-* ``edge``: C4 (inserción fuera de orden) y C9 (``attempt_id`` duplicado).
+* ``spec``: contract of each ``AttemptStore`` / ``ProfileStore`` method and of
+  ``SystemClock``.
+* ``invariant``: I1 (append-only), I2 (no clock in ``core/``), I6 (rebuild), I7
+  (isolation between profiles), I8 (verifiable recording).
+* ``edge``: C4 (out-of-order insertion) and C9 (duplicate ``attempt_id``).
 
-Toda la suite corre contra los dos backends (memoria y JSON) mediante la
-fixture ``attempts`` / ``profiles``: un backend que se desvíe del otro falla.
+The whole suite runs against both backends (memory and JSON) through the
+``attempts`` / ``profiles`` fixture: a backend that deviates from the other
+fails.
 """
 
 from __future__ import annotations
@@ -103,8 +105,8 @@ def profile() -> Profile:
     )
 
 
-# =========================================================================== §9.1
-# Los stores concretos cumplen los Protocol
+# ====================================================================== section 9.1
+# The concrete stores satisfy the Protocol types
 
 
 @pytest.mark.spec
@@ -212,9 +214,9 @@ def test_list_for_objective_until_is_inclusive_and_cuts_by_at(attempts):
 
 @pytest.mark.spec
 def test_until_cuts_by_at_never_by_recorded_at(attempts):
-    # Ocurrió el día 0 pero se registró el día 5: el corte en el día 1 lo incluye.
+    # It happened on day 0 but was recorded on day 5: the cut on day 1 includes it.
     attempts.append(P1, make_attempt("late", at=day(0), recorded_at=day(5)))
-    # Ocurrió el día 3 pero se registró el día 0: el corte en el día 1 lo excluye.
+    # It happened on day 3 but was recorded on day 0: the cut on day 1 excludes it.
     attempts.append(P1, make_attempt("early", at=day(3), recorded_at=day(0)))
     assert [a.attempt_id for a in attempts.list_all(P1, until=day(1))] == ["late"]
 
@@ -399,7 +401,7 @@ def test_system_clock_rejects_naive():
         SystemClock(tz=None)  # type: ignore[arg-type]
 
 
-# =========================================================================== I1 — append-only
+# ========================================================================= I1 - append-only
 
 
 FORBIDDEN_METHOD_FRAGMENTS = ("update", "delete", "remove", "clear", "pop", "edit", "replace", "set")
@@ -445,7 +447,7 @@ def test_i1_returned_lists_are_copies_not_internal_state(attempts):
     assert len(attempts.list_all(P1)) == 1
 
 
-# =========================================================================== I2 — sin reloj en core/
+# ============================================================== I2 - no clock in core/
 
 
 CORE_DIR = pathlib.Path(core.__file__).parent
@@ -460,7 +462,7 @@ FORBIDDEN_TEXT = ("datetime.now(", "date.today(", "utcnow(", "time.time(")
 
 
 def _code_only(path: pathlib.Path) -> str:
-    """Fuente sin docstrings ni comentarios, para que el grep no tenga falsos positivos."""
+    """Source without docstrings or comments, so the grep has no false positives."""
     import io
     import tokenize
 
@@ -505,7 +507,7 @@ def test_i2_system_clock_lives_in_store_and_is_importable():
     assert not hasattr(core.clock, "SystemClock")
 
 
-# =========================================================================== I6 — reconstrucción
+# ============================================================================ I6 - rebuild
 
 
 SERIES = [False, False, False, True, False, True, True, True, True, True]
@@ -525,7 +527,7 @@ def test_i6_state_recomputed_from_store_is_identical_after_dropping_derived_stat
     as_of = day(12)
     cache = {(P1, O1, as_of): compute_state(O1, attempts.list_for_objective(P1, O1, until=as_of), as_of)}
     snapshot = cache[(P1, O1, as_of)]
-    # "Caché" derivada: se descarta por completo y se recalcula desde cero.
+    # Derived "cache": it is discarded entirely and recomputed from scratch.
     cache.clear()
     rebuilt = compute_state(O1, attempts.list_for_objective(P1, O1, until=as_of), as_of)
     assert rebuilt == snapshot
@@ -573,7 +575,7 @@ def test_i6_state_is_independent_of_insertion_order(attempts, backend, tmp_path)
     )
 
 
-# =========================================================================== I7 — aislamiento
+# ========================================================================== I7 - isolation
 
 
 @pytest.mark.invariant
@@ -582,7 +584,7 @@ def test_i7_attempts_of_one_profile_do_not_affect_another(attempts):
     _load_series(attempts, profile_id=P1, prefix="p1-")
     baseline = compute_state(O1, attempts.list_for_objective(P2, O1, until=as_of), as_of)
     assert baseline.total_attempts == 0
-    # Mismo objective_id en otro perfil, con muchos aciertos.
+    # Same objective_id in another profile, with many hits.
     for i in range(10):
         attempts.append(P2, make_attempt(f"p2-{i}", objective_id=O1, at=day(i), correct=True))
     p1_state = compute_state(O1, attempts.list_for_objective(P1, O1, until=as_of), as_of)
@@ -618,7 +620,7 @@ def test_i7_profile_store_isolation(profiles, profile):
         profiles.get_objective(P1, "only-p2")
 
 
-# =========================================================================== I8 — registro verificable
+# ============================================================ I8 - verifiable recording
 
 
 @pytest.mark.invariant
@@ -637,7 +639,7 @@ def test_i8_failed_json_write_raises_storage_error_and_leaves_file_intact(tmp_pa
     with pytest.raises(StorageError):
         st.append(P1, make_attempt("a2", at=day(1)))
     assert path.read_bytes() == before
-    # Sin temporales huérfanos: solo el JSON y su sidecar de bloqueo.
+    # No orphan temporaries: only the JSON and its lock sidecar.
     assert sorted(p.name for p in tmp_path.iterdir()) == ["attempts.json", "attempts.json.lock"]
     monkeypatch.undo()
     assert st.count(P1) == 1 and not st.exists("a2")
@@ -667,23 +669,24 @@ def test_i8_json_stores_create_parent_directories(tmp_path):
     assert ps.get_profile(P1).name == "x"
 
 
-# --------------------------------------------------------------------------- I8 — escritores concurrentes
-# Sin lock, dos procesos que hacen leer-añadir-reescribir a la vez pueden
-# pisarse: el segundo ``os.replace`` descarta el intento del primero sin
-# excepción. El sidecar ``<nombre>.lock`` (flock exclusivo) lo impide.
+# ------------------------------------------------------------ I8 - concurrent writers
+# Without a lock, two processes doing read-append-rewrite at the same time can
+# overwrite each other: the second ``os.replace`` discards the first one's
+# attempt with no exception. The ``<name>.lock`` sidecar (exclusive flock)
+# prevents that.
 
 N_PROCS, N_PER_PROC = 8, 5
 
 
 def _append_many(path: str, worker: int) -> None:
-    """Cuerpo de cada proceso hijo: N_PER_PROC appends con ids propios."""
+    """Body of each child process: N_PER_PROC appends with its own ids."""
     st = JsonAttemptStore(path)
     for i in range(N_PER_PROC):
         st.append(P1, make_attempt(f"w{worker}-{i}", at=day(i)))
 
 
 def _hold_lock(path: str, held, release) -> None:
-    """Toma el flock del sidecar como lo haría otro escritor y lo retiene."""
+    """Takes the sidecar flock the way another writer would and holds it."""
     fd = os.open(lock_path_for(pathlib.Path(path)), os.O_RDWR | os.O_CREAT)
     fcntl.flock(fd, fcntl.LOCK_EX)
     held.set()
@@ -721,7 +724,7 @@ def test_json_writes_create_lock_sidecar_next_to_file(tmp_path):
     JsonProfileStore(profiles_path).save_profile(Profile(profile_id=P1, name="x"))
     assert (tmp_path / "profiles.json.lock").is_file()
 
-    # El JSON conserva su forma: el sidecar es un archivo aparte.
+    # The JSON keeps its shape: the sidecar is a separate file.
     document = json.loads(attempts_path.read_text(encoding="utf-8"))
     assert set(document) == {"version", "attempts"}
 
@@ -774,7 +777,7 @@ def test_i8_lock_failure_raises_storage_error(tmp_path, monkeypatch):
         )
 
 
-# =========================================================================== §7 — casos límite
+# ===================================================================== section 7 - edge cases
 
 
 @pytest.mark.edge
@@ -783,7 +786,7 @@ def test_c4_late_insertion_is_legal_and_changes_past_state(attempts):
     attempts.append(P1, make_attempt("d5", at=day(5), correct=False))
     as_of = day(4)
     before = compute_state(O1, attempts.list_for_objective(P1, O1, until=as_of), as_of)
-    # Inserción tardía del día 3, después del día 5, con recorded_at posterior.
+    # Late insertion of day 3, after day 5, with a later recorded_at.
     attempts.append(P1, make_attempt("d3", at=day(3), correct=False, recorded_at=day(9)))
     after = compute_state(O1, attempts.list_for_objective(P1, O1, until=as_of), as_of)
     assert [a.attempt_id for a in attempts.list_for_objective(P1, O1)] == ["d1", "d3", "d5"]
