@@ -1,15 +1,15 @@
-"""Motor de tracking de aprendizaje. El contrato completo está en ``SPEC.md``.
+"""Learning tracking engine. The full contract lives in ``SPEC.md``.
 
-Principios que gobiernan este paquete:
+Principles that govern this package:
 
-1. **El historial de intentos es el único dato persistido.** Nivel, score y
-   próximo repaso son proyecciones recalculables, nunca estado guardado.
-2. **El tiempo se inyecta.** Ningún módulo de ``core/`` consulta el reloj del
-   sistema; recibe ``as_of`` o un :class:`~core.clock.Clock`.
-3. **``core/`` no hace I/O.** Solo conoce los ``Protocol`` de
-   :mod:`core.storage`; las implementaciones viven en ``store/``.
+1. **The attempt history is the only persisted data.** Level, score and next
+   review are recalculable projections, never stored state.
+2. **Time is injected.** No module under ``core/`` reads the system clock; it
+   receives ``as_of`` or a :class:`~core.clock.Clock`.
+3. **``core/`` does no I/O.** It only knows the ``Protocol`` types of
+   :mod:`core.storage`; the implementations live in ``store/``.
 
-Punto de entrada habitual::
+Usual entry point::
 
     from core import LearningTracker, FixedClock, AttemptKind
 """
@@ -60,14 +60,14 @@ __version__ = "0.1.0"
 
 __all__ = [
     "__version__",
-    # reloj
+    # clock
     "Clock",
     "FixedClock",
     "OffsetClock",
-    # persistencia (interfaces)
+    # persistence (interfaces)
     "AttemptStore",
     "ProfileStore",
-    # modelo
+    # model
     "Attempt",
     "AttemptKind",
     "Level",
@@ -80,10 +80,10 @@ __all__ = [
     "ConsistencyReport",
     "SessionReport",
     "SessionStatus",
-    # motor
+    # engine
     "LearningTracker",
     "SessionRecorder",
-    # errores
+    # errors
     "TrackerError",
     "UnknownProfileError",
     "UnknownObjectiveError",
@@ -91,7 +91,7 @@ __all__ = [
     "InvalidAttemptError",
     "InvalidRangeError",
     "StorageError",
-    # constantes del contrato
+    # contract constants
     "WINDOW",
     "MIN_ATTEMPTS",
     "DECAY_HALF_LIFE_DAYS",

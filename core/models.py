@@ -1,15 +1,15 @@
-"""El modelo de datos. Ver SPEC.md §1.
+"""The data model. See SPEC.md section 1.
 
-Todas las estructuras son ``dataclass(frozen=True)``: inmutables por
-construcción. Un ``Attempt`` que no se puede mutar no se puede corromper, y el
-historial append-only (SPEC I1) deja de depender de la disciplina de quien
-programa.
+Every structure is a ``dataclass(frozen=True)``: immutable by construction. An
+``Attempt`` that cannot be mutated cannot be corrupted, and the append-only
+history (SPEC I1) stops depending on the discipline of whoever is coding.
 
-Distinción clave que atraviesa todo el módulo:
+Key distinction that runs through the whole module:
 
-* :class:`Attempt` es un **hecho persistido**. Se escribe una vez y no cambia.
-* :class:`ObjectiveState` es una **proyección calculada**. Nunca se persiste;
-  se recalcula desde los intentos cada vez que se pide (SPEC I4).
+* :class:`Attempt` is a **persisted fact**. It is written once and never
+  changes.
+* :class:`ObjectiveState` is a **computed projection**. It is never persisted;
+  it is recomputed from the attempts every time it is asked for (SPEC I4).
 """
 
 from __future__ import annotations
@@ -22,10 +22,10 @@ from .errors import InvalidAttemptError
 
 
 class AttemptKind(str, Enum):
-    """De qué tipo de evidencia procede un intento.
+    """What kind of evidence an attempt comes from.
 
-    No afecta al cálculo del nivel en v1 (SPEC §10); sirve para filtrar y para
-    auditar de dónde salió una afirmación sobre el progreso.
+    It does not affect the level computation in v1 (SPEC section 10); it is
+    there to filter and to audit where a claim about progress came from.
     """
 
     QUIZ = "quiz"
@@ -36,11 +36,11 @@ class AttemptKind(str, Enum):
 
 
 class Level(IntEnum):
-    """Nivel de dominio de un objetivo. Ver SPEC §1.4.
+    """Mastery level of an objective. See SPEC section 1.4.
 
-    Es un ``IntEnum`` **ordenado** a propósito: comparar dos niveles con ``<``
-    debe funcionar, porque la pregunta central del usuario ("¿estaba mejor hace
-    dos semanas?") es literalmente una comparación.
+    It is an **ordered** ``IntEnum`` on purpose: comparing two levels with ``<``
+    has to work, because the user's central question ("was I better two weeks
+    ago?") is literally a comparison.
     """
 
     UNASSESSED = 0
@@ -51,31 +51,32 @@ class Level(IntEnum):
 
 
 class SessionStatus(str, Enum):
-    """Cómo terminó una sesión de registro (SPEC §9.6)."""
+    """How a recording session ended (SPEC section 9.6)."""
 
-    #: Se registró al menos un intento.
+    #: At least one attempt was recorded.
     RECORDED = "recorded"
-    #: La sesión se cerró sin registrar nada. Visible a propósito: es la
-    #: señal de que alguien olvidó registrar (SPEC §8, fallo 4).
+    #: The session was closed without recording anything. Visible on purpose:
+    #: it is the signal that someone forgot to record (SPEC section 8,
+    #: failure 4).
     EMPTY = "empty"
 
 
 @dataclass(frozen=True)
 class Objective:
-    """Una unidad de conocimiento evaluable. Ver SPEC §1.2.
+    """An assessable unit of knowledge. See SPEC section 1.2.
 
-    Obsérvese lo que **no** tiene: ni nivel, ni racha, ni contadores, ni fecha
-    de repaso. Todo eso son proyecciones del historial y vive en
-    :class:`ObjectiveState`. Si algún día aparece aquí un campo mutable de
-    progreso, el fallo 3 (contadores corruptos e irreversibles) vuelve a ser
-    posible.
+    Note what it does **not** have: no level, no streak, no counters, no review
+    date. All of that consists of projections of the history and lives in
+    :class:`ObjectiveState`. The day a mutable progress field shows up here,
+    failure 3 (corrupt, irreversible counters) becomes possible again.
 
     Attributes:
-        objective_id: único dentro del perfil. Ej. ``"D3.2-content-understanding"``.
-        title: descripción legible para un humano.
-        domain: agrupación opcional. Ej. ``"D3"``.
-        weight: peso relativo en el examen. Informativo; no afecta al nivel.
-        tags: etiquetas libres para filtrar.
+        objective_id: unique within the profile. E.g. ``"D3.2-content-understanding"``.
+        title: human readable description.
+        domain: optional grouping. E.g. ``"D3"``.
+        weight: relative weight in the exam. Informational; it does not affect
+            the level.
+        tags: free-form labels used to filter.
     """
 
     objective_id: str
@@ -87,16 +88,16 @@ class Objective:
 
 @dataclass(frozen=True)
 class Profile:
-    """Un tema de estudio con sus objetivos. Ver SPEC §1.1.
+    """A study subject with its objectives. See SPEC section 1.1.
 
-    Los perfiles están aislados entre sí (SPEC I7): ningún intento de un perfil
-    influye en el estado de otro. Multi-perfil no es requisito hoy, pero este
-    aislamiento hace que añadirlo no obligue a rediseñar nada.
+    Profiles are isolated from each other (SPEC I7): no attempt in one profile
+    influences the state of another. Multi-profile is not a requirement today,
+    but that isolation means adding it will not force a redesign.
 
     Attributes:
-        profile_id: identificador estable. Ej. ``"ai-103"``.
-        name: nombre legible.
-        objectives: objetivos indexados por ``objective_id``.
+        profile_id: stable identifier. E.g. ``"ai-103"``.
+        name: human readable name.
+        objectives: objectives indexed by ``objective_id``.
     """
 
     profile_id: str
@@ -106,28 +107,29 @@ class Profile:
 
 @dataclass(frozen=True)
 class Attempt:
-    """Un hecho ocurrido: en tal fecha se respondió bien o mal. Ver SPEC §1.3.
+    """A fact that happened: on this date the answer was right or wrong. See
+    SPEC section 1.3.
 
-    **Inmutable y append-only.** No existe API para modificarlo ni borrarlo
-    (SPEC I1). Es el único dato que se persiste como verdad; todo lo demás se
-    deriva de una colección de estos.
+    **Immutable and append-only.** There is no API to modify or delete it (SPEC
+    I1). It is the only data persisted as truth; everything else is derived from
+    a collection of these.
 
-    ``at`` lo aporta quien registra, nunca el motor: eso es lo que permite a un
-    bot simular "mal, mal, mal, bien, mal" en fechas arbitrarias y lo que hacía
-    imposible el fallo 5.
+    ``at`` is supplied by whoever records, never by the engine: that is what
+    lets a bot simulate "wrong, wrong, wrong, right, wrong" on arbitrary dates
+    and what made failure 5 impossible.
 
     Attributes:
-        attempt_id: identificador único e inmutable. Un duplicado es error.
-        objective_id: objetivo al que pertenece.
-        at: **cuándo ocurrió**, aware (con ``tzinfo``). Es el eje de ordenación
-            y de todo corte temporal.
-        correct: ``True`` acierto, ``False`` fallo. Único eje binario.
-        kind: naturaleza de la evidencia.
-        confidence: autoevaluación 0.0-1.0. No afecta al nivel en v1.
-        note: texto libre (el enunciado, por qué falló...).
-        recorded_at: cuándo se escribió en el store, si difiere de ``at``.
-            Solo auditoría; **jamás** se usa para ordenar ni para cortar, de
-            modo que insertar fuera de orden no altere resultados (SPEC C4).
+        attempt_id: unique, immutable identifier. A duplicate is an error.
+        objective_id: objective it belongs to.
+        at: **when it happened**, aware (with ``tzinfo``). It is the axis for
+            sorting and for every time cut.
+        correct: ``True`` hit, ``False`` miss. The only binary axis.
+        kind: nature of the evidence.
+        confidence: self assessment 0.0-1.0. It does not affect the level in v1.
+        note: free text (the question, why it failed...).
+        recorded_at: when it was written to the store, if it differs from
+            ``at``. Audit only; it is **never** used to sort or to cut, so that
+            inserting out of order does not alter results (SPEC C4).
     """
 
     attempt_id: str
@@ -140,11 +142,14 @@ class Attempt:
     recorded_at: datetime | None = None
 
     def __post_init__(self) -> None:
-        """Valida el intento al construirlo. Ver SPEC §1.3.
+        """Validates the attempt at construction time. See SPEC section 1.3.
 
-        Un ``Attempt`` mal formado no debe llegar nunca al store: como es
-        inmutable, un dato inválido persistido sería inválido para siempre.
-        Todas las violaciones lanzan :class:`InvalidAttemptError`.
+        A malformed ``Attempt`` must never reach the store: since it is
+        immutable, persisted invalid data would be invalid forever. Every
+        violation raises :class:`InvalidAttemptError`.
+
+        The message text stays in Spanish on purpose: it reaches the user
+        through the CLI as ``error: ...``.
         """
         if not isinstance(self.attempt_id, str) or not self.attempt_id.strip():
             raise InvalidAttemptError("attempt_id no puede estar vacío")
@@ -169,7 +174,7 @@ class Attempt:
 
 
 def _require_aware(value: datetime, name: str) -> None:
-    """Exige un ``datetime`` aware (SPEC §1.3): sin zona horaria no hay orden."""
+    """Demands an aware ``datetime`` (SPEC section 1.3): no timezone, no order."""
     if not isinstance(value, datetime):
         raise InvalidAttemptError(f"{name} debe ser datetime, no {type(value).__name__}")
     if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:
@@ -178,39 +183,39 @@ def _require_aware(value: datetime, name: str) -> None:
 
 @dataclass(frozen=True)
 class ObjectiveState:
-    """El estado derivado de un objetivo en una fecha. Ver SPEC §1.5.
+    """The derived state of an objective at a date. See SPEC section 1.5.
 
-    **Nunca se persiste.** Es siempre el resultado de recalcular desde los
-    intentos con ``at <= as_of`` (SPEC I4, I6). Por eso una corrupción de datos
-    agregados es irrelevante: se borra y se vuelve a calcular.
+    **It is never persisted.** It is always the result of recomputing from the
+    attempts with ``at <= as_of`` (SPEC I4, I6). That is why corruption of
+    aggregated data is irrelevant: delete it and compute it again.
 
-    No existe ni existirá un campo ``streak`` (SPEC I10). El progreso se lee en
-    ``score`` (continuo, ponderado por recencia), en los contadores acumulados
-    y en ``recent_window`` (la secuencia literal). Un objetivo con 5 respuestas
-    mixtas muestra aquí los 5 intentos y un score intermedio, no un "1" que
-    parece que no se guardó nada.
+    There is no ``streak`` field and there never will be (SPEC I10). Progress is
+    read from ``score`` (continuous, weighted by recency), from the accumulated
+    counters and from ``recent_window`` (the literal sequence). An objective
+    with 5 mixed answers shows all 5 attempts here and an intermediate score,
+    not a "1" that looks like nothing was saved.
 
     Attributes:
-        objective_id: a qué objetivo corresponde.
-        as_of: fecha de corte con la que se calculó. Sin esto el estado no
-            significa nada: todo estado es estado *en una fecha*.
-        level: nivel según SPEC §2.
-        score: puntuación continua 0.0-1.0 que produjo el nivel. Distingue dos
-            objetivos del mismo nivel y hace visible una mejora que aún no
-            cruzó umbral.
-        total_attempts: intentos con ``at <= as_of``. Solo crece.
-        correct_attempts: cuántos de ellos fueron acierto.
-        recent_window: los últimos ``WINDOW`` resultados, **del más antiguo al
-            más reciente**. El orden importa: los pesos son posicionales.
-        first_attempt_at: primer intento hasta ``as_of``, o ``None``.
-        last_attempt_at: último intento hasta ``as_of``, o ``None``.
-        distinct_days: días naturales distintos con al menos un intento.
-            Dos intentos el mismo día cuentan uno (SPEC C3).
-        days_since_last: días fraccionarios entre el último intento y ``as_of``.
-            Es el ``gap`` que alimenta el decaimiento.
-        retention: factor de decaimiento aplicado, en [``RETENTION_FLOOR``, 1.0].
-        next_review_at: próximo repaso según SPEC §4, o ``None`` si no hay
-            intentos.
+        objective_id: which objective this belongs to.
+        as_of: cut date it was computed with. Without this the state means
+            nothing: every state is state *at a date*.
+        level: level according to SPEC section 2.
+        score: continuous score 0.0-1.0 that produced the level. It tells two
+            objectives of the same level apart and makes visible an improvement
+            that has not crossed a threshold yet.
+        total_attempts: attempts with ``at <= as_of``. It only grows.
+        correct_attempts: how many of them were hits.
+        recent_window: the last ``WINDOW`` results, **from oldest to most
+            recent**. The order matters: the weights are positional.
+        first_attempt_at: first attempt up to ``as_of``, or ``None``.
+        last_attempt_at: last attempt up to ``as_of``, or ``None``.
+        distinct_days: distinct calendar days with at least one attempt. Two
+            attempts on the same day count as one (SPEC C3).
+        days_since_last: fractional days between the last attempt and ``as_of``.
+            It is the ``gap`` that feeds the decay.
+        retention: decay factor applied, in [``RETENTION_FLOOR``, 1.0].
+        next_review_at: next review according to SPEC section 4, or ``None``
+            when there are no attempts.
         is_due: ``next_review_at is not None and next_review_at <= as_of``.
     """
 
@@ -232,16 +237,16 @@ class ObjectiveState:
 
 @dataclass(frozen=True)
 class StateComparison:
-    """Dos estados del mismo objetivo en dos fechas. Ver SPEC §5.1.
+    """Two states of the same objective at two dates. See SPEC section 5.1.
 
-    Existe para responder de forma directa la pregunta que el usuario puso como
-    requisito: *"¿hace dos semanas estaba mejor que esta semana?"*.
+    It exists to answer directly the question the user set as a requirement:
+    *"was I better two weeks ago than this week?"*.
 
     Attributes:
-        objective_id: objetivo comparado.
-        earlier: estado en la fecha anterior.
-        later: estado en la fecha posterior.
-        level_delta: ``later.level - earlier.level``. Positivo = mejoró.
+        objective_id: objective compared.
+        earlier: state at the earlier date.
+        later: state at the later date.
+        level_delta: ``later.level - earlier.level``. Positive = improved.
         score_delta: ``later.score - earlier.score``.
         improved: ``score_delta > 0``.
         regressed: ``score_delta < 0``.
@@ -258,20 +263,21 @@ class StateComparison:
 
 @dataclass(frozen=True)
 class ProfileSummary:
-    """Agregado del perfil en una fecha. Ver SPEC §9.4.
+    """Profile aggregate at a date. See SPEC section 9.4.
 
     Attributes:
-        profile_id: perfil resumido.
-        as_of: fecha de corte.
-        total_objectives: objetivos definidos en el perfil.
-        by_level: cuántos objetivos hay en cada nivel. Cubre los cinco niveles,
-            con 0 donde no haya ninguno.
-        assessed_objectives: objetivos con nivel distinto de ``UNASSESSED``.
-        unstarted_objectives: objetivos sin ningún intento.
-        due_objectives: objetivos vencidos para repaso.
-        total_attempts: intentos registrados en todo el perfil hasta ``as_of``.
-        mean_score: media aritmética del ``score`` de todos los objetivos.
-        coverage: ``assessed_objectives / total_objectives``, en [0.0, 1.0].
+        profile_id: profile summarized.
+        as_of: cut date.
+        total_objectives: objectives defined in the profile.
+        by_level: how many objectives sit at each level. It covers all five
+            levels, with 0 where there is none.
+        assessed_objectives: objectives whose level is not ``UNASSESSED``.
+        unstarted_objectives: objectives without a single attempt.
+        due_objectives: objectives due for review.
+        total_attempts: attempts recorded across the whole profile up to
+            ``as_of``.
+        mean_score: arithmetic mean of the ``score`` of every objective.
+        coverage: ``assessed_objectives / total_objectives``, in [0.0, 1.0].
     """
 
     profile_id: str
@@ -288,18 +294,18 @@ class ProfileSummary:
 
 @dataclass(frozen=True)
 class ConsistencyCheck:
-    """Una comprobación individual de consistencia. Ver SPEC §9.5.
+    """A single consistency comparison. See SPEC section 9.5.
 
-    ``expected`` y ``actual`` son **números** (conteos o sumas), no conjuntos.
-    Esa es la corrección del fallo 2: comparar pertenencia deja pasar
-    duplicados y desajustes de cardinalidad; comparar conteos, no.
+    ``expected`` and ``actual`` are **numbers** (counts or sums), not sets. That
+    is the fix for failure 2: comparing membership lets duplicates and
+    cardinality mismatches through; comparing counts does not.
 
     Attributes:
-        name: qué se comprobó. Ej. ``"attempt_count"``.
-        expected: valor esperado, recalculado desde el historial.
-        actual: valor observado en el store.
-        passed: ``expected == actual``. Sin tolerancia para enteros.
-        detail: contexto legible cuando falla.
+        name: what was checked. E.g. ``"attempt_count"``.
+        expected: expected value, recomputed from the history.
+        actual: value observed in the store.
+        passed: ``expected == actual``. No tolerance for integers.
+        detail: readable context when it fails.
     """
 
     name: str
@@ -311,21 +317,21 @@ class ConsistencyCheck:
 
 @dataclass(frozen=True)
 class ConsistencyReport:
-    """Resultado del chequeo de consistencia. Ver SPEC §8, fallo 2.
+    """Result of the consistency check. See SPEC section 8, failure 2.
 
-    No es un booleano ni una cadena "OK": lleva los números de ambos lados de
-    cada comparación, para que un desajuste sea imposible de imprimir como
-    correcto.
+    It is neither a boolean nor an "OK" string: it carries the numbers from both
+    sides of every comparison, so that a mismatch is impossible to print as
+    correct.
 
-    ``ok`` se define de forma **positiva**: todos los checks pasaron *y* se
-    comprobó al menos un objetivo. No haber encontrado errores porque no se
-    comprobó nada **no** es ``ok``.
+    ``ok`` is defined **positively**: every check passed *and* at least one
+    objective was checked. Having found no errors because nothing was checked is
+    **not** ``ok``.
 
     Attributes:
-        ok: ver arriba.
-        checks: cada comparación realizada, con sus números.
-        objectives_checked: cuántos objetivos se recorrieron.
-        as_of: fecha de corte del chequeo.
+        ok: see above.
+        checks: every comparison performed, with its numbers.
+        objectives_checked: how many objectives were walked.
+        as_of: cut date of the check.
     """
 
     ok: bool
@@ -335,25 +341,25 @@ class ConsistencyReport:
 
     @property
     def failures(self) -> tuple[ConsistencyCheck, ...]:
-        """Solo los checks que no pasaron."""
+        """Only the checks that did not pass."""
         return tuple(check for check in self.checks if not check.passed)
 
 
 @dataclass(frozen=True)
 class SessionReport:
-    """Qué pasó en una sesión de registro. Ver SPEC §9.6.
+    """What happened during a recording session. See SPEC section 9.6.
 
-    Su razón de ser es el fallo 4: cerrar una sesión sin haber registrado nada
-    produce ``status=EMPTY``, un resultado explícito y visible, en vez de un
-    silencio indistinguible de "todo bien".
+    Its reason to exist is failure 4: closing a session without having recorded
+    anything produces ``status=EMPTY``, an explicit and visible result, instead
+    of a silence indistinguishable from "all good".
 
     Attributes:
-        session_id: identificador de la sesión.
-        started_at: instante de apertura (inyectado).
-        ended_at: instante de cierre (inyectado).
-        attempts_recorded: cuántos intentos se escribieron.
-        objectives_touched: ids de los objetivos con al menos un intento.
-        status: ``RECORDED`` o ``EMPTY``.
+        session_id: identifier of the session.
+        started_at: opening instant (injected).
+        ended_at: closing instant (injected).
+        attempts_recorded: how many attempts were written.
+        objectives_touched: ids of the objectives with at least one attempt.
+        status: ``RECORDED`` or ``EMPTY``.
     """
 
     session_id: str

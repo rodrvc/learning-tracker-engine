@@ -1,16 +1,17 @@
-"""El motor. Ver SPEC.md §9.4.
+"""The engine. See SPEC.md section 9.4.
 
-:class:`LearningTracker` es la fachada: orquesta store + reloj + cálculo puro.
-No contiene reglas de negocio propias — las reglas están en ``leveling`` y
-``scheduling``, y su especificación en SPEC §2 y §4.
+:class:`LearningTracker` is the facade: it orchestrates store + clock + pure
+computation. It holds no business rules of its own — the rules live in
+``leveling`` and ``scheduling``, and their specification in SPEC sections 2
+and 4.
 
-Dos rasgos del diseño que conviene tener presentes al implementar:
+Two design traits worth keeping in mind while implementing:
 
-* **Toda consulta acepta ``as_of``.** No existe una consulta "sin tiempo".
-  ``as_of=None`` significa "usa ``clock.now()``", y el ``Clock`` lo eligió
-  quien construyó el tracker: sigue siendo tiempo inyectado (SPEC I2).
-* **Nada se cachea como verdad.** Si se añade una caché por rendimiento, debe
-  cumplir I6: borrarla y recalcular produce un estado idéntico.
+* **Every query accepts ``as_of``.** There is no "timeless" query.
+  ``as_of=None`` means "use ``clock.now()``", and the ``Clock`` was chosen by
+  whoever built the tracker: it is still injected time (SPEC I2).
+* **Nothing is cached as truth.** If a cache is added for performance, it must
+  satisfy I6: deleting it and recomputing produces an identical state.
 """
 
 from __future__ import annotations
@@ -39,17 +40,18 @@ from .storage import AttemptStore, ProfileStore
 
 
 class LearningTracker:
-    """Motor de tracking sobre **un** perfil.
+    """Tracking engine over **one** profile.
 
-    Multi-perfil se consigue instanciando varios trackers sobre los mismos
-    stores: los perfiles están aislados (SPEC I7), así que no se interfieren.
+    Multi-profile is achieved by instantiating several trackers over the same
+    stores: profiles are isolated (SPEC I7), so they do not interfere with each
+    other.
 
     Args:
-        profile_id: perfil sobre el que opera esta instancia.
-        profiles: store de perfiles y objetivos.
-        attempts: store de intentos (append-only).
-        clock: fuente de "ahora" para cuando no se pasa ``as_of`` explícito.
-            En tests, un :class:`~core.clock.FixedClock`.
+        profile_id: profile this instance operates on.
+        profiles: store of profiles and objectives.
+        attempts: store of attempts (append-only).
+        clock: source of "now" for when no explicit ``as_of`` is given. In
+            tests, a :class:`~core.clock.FixedClock`.
     """
 
     def __init__(
@@ -66,27 +68,27 @@ class LearningTracker:
 
     @property
     def profile_id(self) -> str:
-        """Perfil sobre el que opera este tracker."""
+        """Profile this tracker operates on."""
         return self._profile_id
 
     @property
     def clock(self) -> Clock:
-        """El reloj inyectado, expuesto para colaboradores como ``SessionRecorder``.
+        """The injected clock, exposed for collaborators like ``SessionRecorder``.
 
-        Solo lectura. Sigue siendo I2: el ``Clock`` lo eligió quien construyó
-        el tracker; exponerlo no abre ninguna puerta al reloj de sistema.
+        Read only. It is still I2: the ``Clock`` was chosen by whoever built the
+        tracker; exposing it opens no door to the system clock.
         """
         return self._clock
 
     def _resolve(self, as_of: datetime | None) -> datetime:
-        """``as_of`` explícito, o ``clock.now()`` si es ``None`` (SPEC §9.4)."""
+        """Explicit ``as_of``, or ``clock.now()`` when ``None`` (SPEC section 9.4)."""
         return self._clock.now() if as_of is None else as_of
 
     def _state(self, objective_id: str, as_of: datetime) -> ObjectiveState:
-        """Envuelve :func:`compute_state` sobre lo que devuelve el store (I4).
+        """Wraps :func:`compute_state` over what the store returns (I4).
 
-        El corte es por ``at`` (``until=as_of``) y lo aplica el store; el
-        tracker no recalcula nada por su cuenta.
+        The cut is by ``at`` (``until=as_of``) and the store applies it; the
+        tracker recomputes nothing on its own.
         """
         history = self._attempts.list_for_objective(
             self._profile_id, objective_id, until=as_of
@@ -96,20 +98,20 @@ class LearningTracker:
     def _all_states(
         self, as_of: datetime, listed: Sequence[Attempt] | None = None
     ) -> list[ObjectiveState]:
-        """Todos los estados del perfil a partir de **una** lectura global.
+        """Every state of the profile from **one** global read.
 
-        Hace un unico ``list_all(profile_id, until=as_of)`` y agrupa por
-        ``objective_id`` antes de llamar a :func:`compute_state` por objetivo.
-        Es solo rendimiento: leer N veces ``list_for_objective`` o una vez
-        ``list_all`` produce los mismos historiales (el store garantiza el
-        mismo orden y el mismo corte en ambos metodos), y ``compute_state``
-        sigue siendo la unica fuente del estado (I4). Los objetivos sin
-        intentos se calculan con historial vacio (C1).
+        It performs a single ``list_all(profile_id, until=as_of)`` and groups by
+        ``objective_id`` before calling :func:`compute_state` per objective.
+        This is performance only: reading ``list_for_objective`` N times or
+        ``list_all`` once produces the same histories (the store guarantees the
+        same order and the same cut in both methods), and ``compute_state``
+        remains the only source of state (I4). Objectives without attempts are
+        computed with an empty history (C1).
 
         Args:
-            as_of: fecha de corte ya resuelta.
-            listed: la lectura global si quien llama ya la hizo; ``None``
-                la hace aqui. Evita una relectura en ``get_summary``.
+            as_of: cut date, already resolved.
+            listed: the global read when the caller already did it; ``None``
+                does it here. It avoids a re-read in ``get_summary``.
         """
         if listed is None:
             listed = self._attempts.list_all(self._profile_id, until=as_of)
@@ -125,7 +127,7 @@ class LearningTracker:
             for objective in self._profiles.list_objectives(self._profile_id)
         ]
 
-    # ---------------------------------------------------------------- escritura
+    # ------------------------------------------------------------------- write
 
     def record_attempt(
         self,
@@ -137,46 +139,47 @@ class LearningTracker:
         note: str | None = None,
         attempt_id: str | None = None,
     ) -> Attempt:
-        """Registra un intento con **fecha inyectada**.
+        """Records an attempt with an **injected date**.
 
-        ``at`` es obligatorio y lo aporta quien llama: el motor jamás consulta
-        el reloj para fabricarlo (SPEC I2). Es lo que permite a un bot escribir
-        la serie "mal, mal, mal, bien, mal" en fechas arbitrarias y verificar la
-        evolución sin esperar cinco días.
+        ``at`` is mandatory and supplied by the caller: the engine never reads
+        the clock to fabricate it (SPEC I2). That is what lets a bot write the
+        series "wrong, wrong, wrong, right, wrong" on arbitrary dates and verify
+        the evolution without waiting five days.
 
-        El historial es append-only: este método es la **única** vía de entrada
-        de datos, y no existe contrapartida para modificar ni borrar (SPEC I1).
+        The history is append-only: this method is the **only** way data comes
+        in, and there is no counterpart to modify or delete (SPEC I1).
 
         Args:
-            objective_id: objetivo evaluado. Debe existir en el perfil.
-            correct: acierto o fallo.
-            at: cuándo ocurrió, aware. Puede ser anterior a intentos ya
-                registrados: insertar fuera de orden es legal (SPEC C4).
-            kind: naturaleza de la evidencia.
-            confidence: autoevaluación 0.0-1.0. No afecta al nivel en v1.
-            note: texto libre.
-            attempt_id: id explícito; si es ``None`` se genera uno único.
+            objective_id: objective assessed. It must exist in the profile.
+            correct: hit or miss.
+            at: when it happened, aware. It may precede already recorded
+                attempts: inserting out of order is legal (SPEC C4).
+            kind: nature of the evidence.
+            confidence: self assessment 0.0-1.0. It does not affect the level in
+                v1.
+            note: free text.
+            attempt_id: explicit id; when ``None`` a unique one is generated.
 
         Returns:
-            El :class:`Attempt` tal como quedó persistido, con su id. Devolver
-            el objeto escrito (y no ``None``) es lo que hace que un registro
-            fallido sea imposible de confundir con uno exitoso (SPEC I8).
+            The :class:`Attempt` exactly as persisted, with its id. Returning
+            the written object (and not ``None``) is what makes a failed record
+            impossible to confuse with a successful one (SPEC I8).
 
         Raises:
-            UnknownObjectiveError: el objetivo no existe. **No se autocrea**
-                (SPEC C8).
-            DuplicateAttemptError: ese ``attempt_id`` ya existe (SPEC C9).
-            InvalidAttemptError: ``at`` naive, o ``confidence`` fuera de rango.
-            StorageError: la escritura no se pudo completar.
+            UnknownObjectiveError: the objective does not exist. It is **not
+                auto-created** (SPEC C8).
+            DuplicateAttemptError: that ``attempt_id`` already exists (SPEC C9).
+            InvalidAttemptError: naive ``at``, or ``confidence`` out of range.
+            StorageError: the write could not be completed.
         """
-        # C8: el objetivo debe existir. get_objective lanza si no; jamás se
-        # autocrea.
+        # C8: the objective must exist. get_objective raises when it does not;
+        # it is never auto-created.
         self._profiles.get_objective(self._profile_id, objective_id)
         if attempt_id is None:
             attempt_id = uuid4().hex
         elif self._attempts.exists(attempt_id):
-            # C9: el store también lo rechaza, pero se comprueba aquí para que
-            # el contrato no dependa del backend.
+            # C9: the store rejects it too, but it is checked here so that the
+            # contract does not depend on the backend.
             raise DuplicateAttemptError(attempt_id)
         attempt = Attempt(
             attempt_id=attempt_id,
@@ -188,7 +191,7 @@ class LearningTracker:
             note=note,
             recorded_at=self._clock.now(),
         )
-        # I8: si append falla, la excepción se propaga. Nunca se devuelve None.
+        # I8: if append fails, the exception propagates. None is never returned.
         return self._attempts.append(self._profile_id, attempt)
 
     def record_series(
@@ -199,21 +202,21 @@ class LearningTracker:
         step: timedelta = timedelta(days=1),
         kind: AttemptKind = AttemptKind.QUIZ,
     ) -> list[Attempt]:
-        """Registra una serie deliberada de resultados en fechas espaciadas.
+        """Records a deliberate series of results on spaced dates.
 
-        Atajo pensado para el bot de verificación y para los tests: la serie
-        ``[False, False, False, True, False]`` desde una fecha dada reproduce
-        exactamente el ejemplo recorrido en SPEC §3.
+        A shortcut meant for the verification bot and for the tests: the series
+        ``[False, False, False, True, False]`` from a given date reproduces
+        exactly the example walked through in SPEC section 3.
 
         Args:
-            objective_id: objetivo evaluado.
-            results: aciertos/fallos en orden cronológico.
-            start: fecha del primer intento, aware.
-            step: separación entre intentos consecutivos.
-            kind: naturaleza de la evidencia para todos ellos.
+            objective_id: objective assessed.
+            results: hits/misses in chronological order.
+            start: date of the first attempt, aware.
+            step: separation between consecutive attempts.
+            kind: nature of the evidence for all of them.
 
         Returns:
-            Los intentos creados, en orden.
+            The attempts created, in order.
         """
         return [
             self.record_attempt(
@@ -227,90 +230,90 @@ class LearningTracker:
         session_id: str | None = None,
         started_at: datetime | None = None,
     ) -> SessionRecorder:
-        """Abre una sesión de registro (SPEC §9.6).
+        """Opens a recording session (SPEC section 9.6).
 
-        Úsese como context manager. Al cerrarse produce un
-        :class:`~core.models.SessionReport`; si no se registró nada, el estado
-        es ``EMPTY`` y queda constancia visible de que la sesión pasó en blanco
-        (defensa contra el fallo 4).
+        Use it as a context manager. On close it produces a
+        :class:`~core.models.SessionReport`; if nothing was recorded, the status
+        is ``EMPTY`` and there is visible evidence that the session went blank
+        (defense against failure 4).
 
         Args:
-            session_id: identificador; ``None`` genera uno.
-            started_at: instante de apertura, inyectado (SPEC I2). ``None``
-                usa el reloj del tracker.
+            session_id: identifier; ``None`` generates one.
+            started_at: opening instant, injected (SPEC I2). ``None`` uses the
+                tracker's clock.
         """
         return SessionRecorder(self, session_id=session_id, started_at=started_at)
 
-    # ---------------------------------------------------------------- consulta
+    # ------------------------------------------------------------------- query
 
     def get_level(
         self, objective_id: str, as_of: datetime | None = None
     ) -> Level:
-        """El nivel de un objetivo en una fecha. SPEC §2.
+        """The level of an objective at a date. SPEC section 2.
 
         Args:
-            objective_id: objetivo consultado.
-            as_of: fecha de corte; ``None`` usa ``clock.now()``.
+            objective_id: objective queried.
+            as_of: cut date; ``None`` uses ``clock.now()``.
 
         Raises:
-            UnknownObjectiveError: si el objetivo no existe en el perfil. Un
-                objetivo que existe pero no tiene intentos **no** es un error:
-                devuelve ``UNASSESSED`` (SPEC C1).
+            UnknownObjectiveError: if the objective does not exist in the
+                profile. An objective that exists but has no attempts is **not**
+                an error: it returns ``UNASSESSED`` (SPEC C1).
         """
         return self.get_state(objective_id, as_of).level
 
     def get_state(
         self, objective_id: str, as_of: datetime | None = None
     ) -> ObjectiveState:
-        """El estado completo de un objetivo en una fecha. SPEC §1.5."""
+        """The complete state of an objective at a date. SPEC section 1.5."""
         self._profiles.get_objective(self._profile_id, objective_id)
         return self._state(objective_id, self._resolve(as_of))
 
     def get_state_at(
         self, objective_id: str, as_of: datetime
     ) -> ObjectiveState:
-        """El estado **tal como era** en una fecha pasada. SPEC §5.1.
+        """The state **as it was** at a past date. SPEC section 5.1.
 
-        Idéntico a :meth:`get_state` salvo que ``as_of`` es obligatorio: existe
-        como método propio para que la consulta histórica sea explícita en el
-        código que la usa, y no un parámetro que se olvida.
+        Identical to :meth:`get_state` except that ``as_of`` is mandatory: it
+        exists as a method of its own so that the historical query is explicit
+        in the code that uses it, rather than a parameter someone forgets.
 
-        Garantías (SPEC §5.1):
+        Guarantees (SPEC section 5.1):
 
-        * Ignora por completo los intentos con ``at > as_of``.
-        * El resultado no cambia por registrar intentos posteriores: lo pasado
-          no se reescribe.
-        * Es insensible al orden en que se escribieron los intentos.
+        * It completely ignores attempts with ``at > as_of``.
+        * The result does not change by recording later attempts: the past is
+          not rewritten.
+        * It is insensitive to the order in which the attempts were written.
 
-        Es posible únicamente porque el historial es append-only y el nivel se
-        recalcula en cada consulta; un sistema con nivel almacenado no puede
-        responder esta pregunta.
+        It is possible only because the history is append-only and the level is
+        recomputed on every query; a system with a stored level cannot answer
+        this question.
         """
         return self.get_state(objective_id, as_of)
 
     def get_all_states(
         self, as_of: datetime | None = None
     ) -> list[ObjectiveState]:
-        """El estado de todos los objetivos del perfil, por ``objective_id``."""
+        """The state of every objective of the profile, by ``objective_id``."""
         return self._all_states(self._resolve(as_of))
 
     def get_due(
         self, as_of: datetime | None = None, limit: int | None = None
     ) -> list[ObjectiveState]:
-        """Qué toca repasar en una fecha. SPEC §5.2.
+        """What is due for review at a date. SPEC section 5.2.
 
-        Ordenados por urgencia: primero los más vencidos; a igualdad, el
-        ``score`` más bajo; a igualdad, ``objective_id`` ascendente. El tercer
-        criterio existe para que el orden sea totalmente determinista.
+        Sorted by urgency: the most overdue first; on a tie, the lowest
+        ``score``; on a tie, ascending ``objective_id``. The third criterion
+        exists so that the order is fully deterministic.
 
-        Los objetivos **sin intentos no aparecen aquí**: usar
-        :meth:`get_unstarted`. Mezclar "nunca lo he visto" con "toca repasarlo"
-        oculta el material sin cubrir.
+        Objectives **without attempts do not appear here**: use
+        :meth:`get_unstarted`. Mixing "I have never seen it" with "it is due for
+        review" hides the uncovered material.
         """
         moment = self._resolve(as_of)
         due = [s for s in self.get_all_states(moment) if s.is_due]
-        # is_due garantiza next_review_at no nulo. Más vencido = mayor
-        # (as_of - next_review_at); se ordena por su negativo ascendente.
+        # is_due guarantees a non-null next_review_at. More overdue = larger
+        # (as_of - next_review_at); it is sorted by its negative ascending.
         due.sort(
             key=lambda s: (
                 -(moment - s.next_review_at),  # type: ignore[operator]
@@ -323,29 +326,30 @@ class LearningTracker:
     def get_unstarted(
         self, as_of: datetime | None = None
     ) -> list[ObjectiveState]:
-        """Objetivos sin ningún intento hasta ``as_of``.
+        """Objectives without a single attempt up to ``as_of``.
 
-        Hace visible el material no cubierto, que de otro modo es invisible:
-        un objetivo sin intentos no genera ninguna señal por sí solo.
+        It makes uncovered material visible, which is otherwise invisible: an
+        objective without attempts produces no signal on its own.
         """
         return [s for s in self.get_all_states(as_of) if s.total_attempts == 0]
 
     def get_stale(
         self, as_of: datetime | None = None, days: int | None = None
     ) -> list[ObjectiveState]:
-        """Objetivos sin actividad en los últimos ``days`` días.
+        """Objectives with no activity in the last ``days`` days.
 
-        Segunda capa de defensa contra el fallo 4: si nadie registra nada, el
-        estado no se queda congelado en silencio, sino que los objetivos van
-        apareciendo en esta lista. Un sistema que no registra se delata solo.
+        Second layer of defense against failure 4: if nobody records anything,
+        the state does not stay frozen in silence, the objectives start showing
+        up in this list instead. A system that is not recording gives itself
+        away.
 
         Args:
-            as_of: fecha de corte; ``None`` usa ``clock.now()``.
-            days: umbral de inactividad; ``None`` usa ``DEFAULT_STALE_DAYS``.
+            as_of: cut date; ``None`` uses ``clock.now()``.
+            days: inactivity threshold; ``None`` uses ``DEFAULT_STALE_DAYS``.
         """
         threshold = DEFAULT_STALE_DAYS if days is None else days
-        # Solo objetivos con historial: los que nunca tuvieron intentos van en
-        # get_unstarted (SPEC §8, fallo 4, capa 2).
+        # Only objectives with history: the ones that never had attempts belong
+        # in get_unstarted (SPEC section 8, failure 4, layer 2).
         return [
             s
             for s in self.get_all_states(as_of)
@@ -359,14 +363,15 @@ class LearningTracker:
         end: datetime,
         step: timedelta = timedelta(days=1),
     ) -> list[ObjectiveState]:
-        """Serie temporal de estados sobre una rejilla de fechas. SPEC §5.3.
+        """Time series of states over a grid of dates. SPEC section 5.3.
 
-        Es :meth:`get_state_at` en bucle. Existe para que la UI pueda graficar
-        la evolución sin reimplementar el corte temporal, que es donde es fácil
-        equivocarse.
+        It is :meth:`get_state_at` in a loop. It exists so that the UI can plot
+        the evolution without reimplementing the time cut, which is where it is
+        easy to get things wrong.
 
         Raises:
-            InvalidRangeError: si ``start > end`` o ``step <= 0``.
+            InvalidRangeError: if ``start > end`` or ``step <= 0``. The message
+                text stays in Spanish: it reaches the user through the CLI.
         """
         if start > end:
             raise InvalidRangeError(f"start > end: {start} > {end}")
@@ -383,14 +388,14 @@ class LearningTracker:
     def compare_states(
         self, objective_id: str, earlier: datetime, later: datetime
     ) -> StateComparison:
-        """Compara el objetivo en dos fechas. SPEC §5.1.
+        """Compares the objective at two dates. SPEC section 5.1.
 
-        La respuesta directa a *"¿hace dos semanas estaba mejor que esta
-        semana?"*: llamar con ``earlier = hoy - 14d`` y ``later = hoy`` y mirar
+        The direct answer to *"was I better two weeks ago than this week?"*:
+        call it with ``earlier = today - 14d`` and ``later = today`` and look at
         ``improved`` / ``regressed``.
 
         Raises:
-            InvalidRangeError: si ``earlier > later``.
+            InvalidRangeError: if ``earlier > later``.
         """
         if earlier > later:
             raise InvalidRangeError(f"earlier > later: {earlier} > {later}")
@@ -408,9 +413,9 @@ class LearningTracker:
         )
 
     def get_summary(self, as_of: datetime | None = None) -> ProfileSummary:
-        """Agregado del perfil en una fecha. SPEC §9.4."""
+        """Profile aggregate at a date. SPEC section 9.4."""
         moment = self._resolve(as_of)
-        # Una sola lectura del store: alimenta los estados y el total.
+        # A single read of the store: it feeds both the states and the total.
         listed = self._attempts.list_all(self._profile_id, until=moment)
         states = self._all_states(moment, listed)
         by_level = {level: 0 for level in Level}
@@ -432,47 +437,51 @@ class LearningTracker:
         )
 
     def get_profile(self) -> Profile:
-        """El perfil sobre el que opera este tracker."""
+        """The profile this tracker operates on."""
         return self._profiles.get_profile(self._profile_id)
 
-    # ------------------------------------------------------------ verificación
+    # ------------------------------------------------------------ verification
 
     def check_consistency(
         self, as_of: datetime | None = None
     ) -> ConsistencyReport:
-        """Verifica que el store y el recálculo coinciden. SPEC §8, fallo 2.
+        """Verifies that the store and the recomputation agree. SPEC section 8,
+        failure 2.
 
-        Compara **conteos y sumas**, nunca pertenencia a conjuntos (SPEC I9):
-        comparar conjuntos deja pasar duplicados y desajustes de cardinalidad,
-        que es precisamente cómo el verificador anterior llegó a imprimir
-        "OK · consistente" sobre un estado corrupto.
+        It compares **counts and sums**, never set membership (SPEC I9):
+        comparing sets lets duplicates and cardinality mismatches through, which
+        is precisely how the previous verifier ended up printing
+        "OK - consistent" over a corrupt state.
 
-        Comprobaciones mínimas exigidas por el contrato, por objetivo y para el
-        perfil entero:
+        Minimum checks required by the contract, per objective and for the whole
+        profile:
 
-        * número de intentos en el store == número de intentos recalculados;
-        * suma de aciertos en el store == suma recalculada;
-        * ningún ``attempt_id`` duplicado (se compara ``count`` con el número
-          de ids únicos: si difieren, hay duplicados);
-        * todo intento apunta a un ``objective_id`` que existe en el perfil.
+        * number of attempts in the store == number of recomputed attempts;
+        * sum of hits in the store == recomputed sum;
+        * no duplicated ``attempt_id`` (``count`` is compared against the number
+          of unique ids: if they differ, there are duplicates);
+        * every attempt points at an ``objective_id`` that exists in the
+          profile.
+
+        The ``detail`` texts stay in Spanish: the CLI prints them to the user.
 
         Returns:
-            Un :class:`ConsistencyReport` con los números de ambos lados de
-            cada comparación. ``ok`` es ``True`` solo si todos los checks
-            pasaron **y** se comprobó al menos un objetivo: no haber
-            encontrado errores por no haber mirado nada no es estar bien.
+            A :class:`ConsistencyReport` with the numbers from both sides of
+            every comparison. ``ok`` is ``True`` only if every check passed
+            **and** at least one objective was checked: having found no errors
+            because nothing was looked at is not being fine.
         """
         moment = self._resolve(as_of)
         profile = self._profiles.get_profile(self._profile_id)
         objectives = self._profiles.list_objectives(self._profile_id)
-        # Lado "store": la lectura global del perfil, agrupada por objetivo.
-        # Lado "recalculado": compute_state sobre la lectura por objetivo.
-        # Son dos caminos de lectura distintos; se comparan sus NUMEROS (I9).
-        # Deliberadamente NO se reutiliza _all_states aqui: si ambos lados
-        # salieran de la misma list_all, un list_all que duplica un intento
-        # cuadraria consigo mismo y attempt_count no lo detectaria. Las N
-        # lecturas por objetivo son el precio de que los dos lados sean
-        # independientes (SPEC seccion 8, fallo 2).
+        # "Store" side: the global read of the profile, grouped by objective.
+        # "Recomputed" side: compute_state over the per-objective read.
+        # They are two different read paths; their NUMBERS are compared (I9).
+        # _all_states is deliberately NOT reused here: if both sides came from
+        # the same list_all, a list_all that duplicates an attempt would agree
+        # with itself and attempt_count would not detect it. The N per-objective
+        # reads are the price of the two sides being independent (SPEC
+        # section 8, failure 2).
         listed = self._attempts.list_all(self._profile_id, until=moment)
         count_by_objective: dict[str, int] = {}
         correct_by_objective: dict[str, int] = {}
@@ -518,7 +527,7 @@ class LearningTracker:
                 f"{oid}: aciertos recalculados vs sumados en el store",
             )
 
-        # Perfil entero.
+        # Whole profile.
         add(
             "profile_attempt_count",
             recalculated_total,
@@ -531,8 +540,8 @@ class LearningTracker:
             sum(1 for a in listed if a.correct),
             "suma de aciertos recalculados vs list_all del store",
         )
-        # count() del store contra su propia lectura completa (sin corte:
-        # count no acepta as_of). Detecta un contador que miente.
+        # The store's count() against its own full read (with no cut: count
+        # does not accept as_of). It detects a counter that lies.
         everything = self._attempts.list_all(self._profile_id)
         add(
             "store_count",
@@ -562,17 +571,17 @@ class LearningTracker:
         )
 
     def rebuild(self, as_of: datetime | None = None) -> int:
-        """Recalcula toda proyección derivada desde el historial. SPEC I6.
+        """Recomputes every derived projection from the history. SPEC I6.
 
-        Como no se persiste ningún agregado, esto es una operación segura y
-        repetible: cualquier caché o índice corrupto se arregla ejecutándola.
-        Es la razón por la que el fallo 3 (contadores corrompidos e
-        irreversibles) no tiene equivalente aquí.
+        Since no aggregate is persisted, this is a safe and repeatable
+        operation: any corrupt cache or index is fixed by running it. It is the
+        reason failure 3 (corrupted, irreversible counters) has no equivalent
+        here.
 
         Returns:
-            Cuántos objetivos se recalcularon.
+            How many objectives were recomputed.
         """
-        # No hay caché ni índice que borrar: el estado siempre se deriva del
-        # historial (I4). Recalcular todo es la operación completa, y devolver
-        # el conteo deja constancia de que se recorrió el perfil entero.
+        # There is no cache or index to delete: state is always derived from the
+        # history (I4). Recomputing everything is the complete operation, and
+        # returning the count leaves evidence that the whole profile was walked.
         return len(self.get_all_states(as_of))

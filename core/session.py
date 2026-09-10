@@ -1,10 +1,10 @@
-"""Sesión de registro. Ver SPEC.md §9.6.
+"""Recording session. See SPEC.md section 9.6.
 
-Existe por el fallo 4: *nada forzaba el registro*. Un motor no puede obligar a
-nadie a ejecutar un comando, pero sí puede hacer que **no ejecutarlo sea
-visible**. Eso es lo que hace esta clase: una sesión que se cierra sin haber
-registrado nada termina en estado ``EMPTY``, que es un resultado explícito y
-consultable, no un silencio indistinguible de "todo bien".
+It exists because of failure 4: *nothing forced recording*. An engine cannot
+force anyone to run a command, but it can make **not running it visible**. That
+is what this class does: a session closed without having recorded anything ends
+in state ``EMPTY``, which is an explicit, queryable result rather than a silence
+indistinguishable from "all good".
 """
 
 from __future__ import annotations
@@ -17,37 +17,37 @@ from uuid import uuid4
 from .errors import TrackerError
 from .models import Attempt, AttemptKind, SessionReport, SessionStatus
 
-if TYPE_CHECKING:  # pragma: no cover - solo para tipado
+if TYPE_CHECKING:  # pragma: no cover - typing only
     from .tracker import LearningTracker
 
 
 class SessionRecorder:
-    """Context manager que agrupa los intentos de una sesión de estudio.
+    """Context manager that groups the attempts of a study session.
 
-    Uso previsto::
+    Intended use::
 
         with tracker.session() as s:
-            s.record("D3.2", correct=False, at=cuando)
-            s.record("D3.2", correct=True, at=cuando_mas_tarde)
+            s.record("D3.2", correct=False, at=when)
+            s.record("D3.2", correct=True, at=later)
         report = s.report  # attempts_recorded == 2, status == RECORDED
 
-    Y el caso que importa::
+    And the case that matters::
 
         with tracker.session() as s:
             pass
-        s.report.status  # SessionStatus.EMPTY  <- la sesión pasó en blanco,
-                         #    y queda constancia de ello
+        s.report.status  # SessionStatus.EMPTY  <- the session went blank,
+                         #    and there is a record of it
 
-    Cada intento se persiste **en el momento** de llamar a :meth:`record`, no
-    al cerrar: si el bloque ``with`` revienta a mitad, lo ya registrado se
-    queda en el store (I1, append-only) y la excepción se propaga sin que este
-    objeto la toque.
+    Every attempt is persisted **at the moment** :meth:`record` is called, not
+    on close: if the ``with`` block blows up halfway, whatever was already
+    recorded stays in the store (I1, append-only) and the exception propagates
+    without this object touching it.
 
     Args:
-        tracker: motor sobre el que se registran los intentos.
-        session_id: identificador; si es ``None`` se genera uno.
-        started_at: instante de apertura, inyectado. ``None`` usa el reloj del
-            tracker.
+        tracker: engine the attempts are recorded against.
+        session_id: identifier; when ``None`` one is generated.
+        started_at: opening instant, injected. ``None`` uses the tracker's
+            clock.
     """
 
     def __init__(
@@ -58,24 +58,24 @@ class SessionRecorder:
     ) -> None:
         self._tracker = tracker
         self._session_id = uuid4().hex if session_id is None else session_id
-        # I2: el tiempo viene por parámetro o por el Clock inyectado en el
-        # tracker. Nunca el reloj de sistema.
+        # I2: time arrives through a parameter or through the Clock injected in
+        # the tracker. Never the system clock.
         self._started_at = self._now() if started_at is None else started_at
         self._attempts: list[Attempt] = []
         self._report: SessionReport | None = None
 
     def _now(self) -> datetime:
-        """``now()`` del reloj **del tracker** (SPEC I2)."""
+        """``now()`` of the **tracker's** clock (SPEC I2)."""
         return self._tracker.clock.now()
 
     @property
     def session_id(self) -> str:
-        """Identificador de la sesión."""
+        """Identifier of the session."""
         return self._session_id
 
     @property
     def started_at(self) -> datetime:
-        """Instante de apertura (inyectado)."""
+        """Opening instant (injected)."""
         return self._started_at
 
     def record(
@@ -87,18 +87,22 @@ class SessionRecorder:
         confidence: float | None = None,
         note: str | None = None,
     ) -> Attempt:
-        """Registra un intento dentro de la sesión.
+        """Records an attempt inside the session.
 
-        Delega en :meth:`~core.tracker.LearningTracker.record_attempt` y además
-        lo contabiliza para el informe. Si la escritura falla, la excepción se
-        propaga y el intento **no** cuenta: el informe nunca miente al alza.
+        It delegates to :meth:`~core.tracker.LearningTracker.record_attempt` and
+        also counts it for the report. If the write fails, the exception
+        propagates and the attempt does **not** count: the report never
+        overstates.
+
+        The message text of the errors stays in Spanish on purpose: it reaches
+        the user through the CLI.
         """
         if self._report is not None:
             raise TrackerError(
                 f"la sesión {self._session_id!r} ya está cerrada; no admite intentos"
             )
-        # Se persiste AHORA (I8): si record_attempt lanza, no se llega al
-        # append de abajo y el contador no sube.
+        # It is persisted NOW (I8): if record_attempt raises, the append below
+        # is never reached and the counter does not go up.
         attempt = self._tracker.record_attempt(
             objective_id,
             correct=correct,
@@ -111,19 +115,19 @@ class SessionRecorder:
         return attempt
 
     def close(self, ended_at: datetime | None = None) -> SessionReport:
-        """Cierra la sesión y produce el informe.
+        """Closes the session and produces the report.
 
-        Cerrar una sesión ya cerrada devuelve el mismo informe: cerrar es
-        idempotente y el informe no cambia una vez emitido.
+        Closing an already closed session returns the same report: closing is
+        idempotent and the report does not change once issued.
 
         Args:
-            ended_at: instante de cierre, inyectado. ``None`` usa el reloj del
-                tracker.
+            ended_at: closing instant, injected. ``None`` uses the tracker's
+                clock.
 
         Returns:
-            Un :class:`~core.models.SessionReport` con ``status=RECORDED`` si
-            se registró al menos un intento, o ``EMPTY`` si no. Cerrar en
-            blanco es un resultado, no un no-evento.
+            A :class:`~core.models.SessionReport` with ``status=RECORDED`` when
+            at least one attempt was recorded, or ``EMPTY`` when not. Closing
+            blank is a result, not a non-event.
         """
         if self._report is not None:
             return self._report
@@ -144,10 +148,10 @@ class SessionRecorder:
 
     @property
     def report(self) -> SessionReport:
-        """El informe de la sesión.
+        """The report of the session.
 
         Raises:
-            TrackerError: si la sesión aún no se ha cerrado.
+            TrackerError: if the session has not been closed yet.
         """
         if self._report is None:
             raise TrackerError(
@@ -157,7 +161,7 @@ class SessionRecorder:
 
     @property
     def attempts_recorded(self) -> int:
-        """Cuántos intentos se han registrado hasta ahora en esta sesión."""
+        """How many attempts have been recorded so far in this session."""
         return len(self._attempts)
 
     def __enter__(self) -> "SessionRecorder":
@@ -169,6 +173,6 @@ class SessionRecorder:
         exc: BaseException | None,
         tb: TracebackType | None,
     ) -> bool:
-        """Cierra la sesión. Nunca suprime una excepción en curso."""
+        """Closes the session. It never suppresses an in-flight exception."""
         self.close()
         return False

@@ -1,49 +1,49 @@
-"""Excepciones del motor.
+"""Engine exceptions.
 
-Todas heredan de :class:`TrackerError`, de modo que quien integra puede capturar
-una sola clase. Existen para que los fallos sean **ruidosos**: el contrato
-prohíbe devolver ``None`` o un valor neutro ante una operación que no se pudo
-completar (SPEC §6, I8).
+Every one of them inherits from :class:`TrackerError`, so an integrator can
+catch a single class. They exist to make failures **loud**: the contract forbids
+returning ``None`` or a neutral value for an operation that could not be
+completed (SPEC section 6, I8).
 """
 
 from __future__ import annotations
 
 
 class TrackerError(Exception):
-    """Raíz de todos los errores del motor."""
+    """Root of every engine error."""
 
 
 class UnknownProfileError(TrackerError):
-    """El ``profile_id`` no existe en el store."""
+    """The ``profile_id`` does not exist in the store."""
 
 
 class UnknownObjectiveError(TrackerError):
-    """El ``objective_id`` no existe en el perfil.
+    """The ``objective_id`` does not exist in the profile.
 
-    Se lanza tanto al registrar un intento como al consultar estado. El motor
-    **no** autocrea objetivos: un id mal escrito debe fallar, no fabricar un
-    objetivo fantasma (SPEC §7, C8).
+    Raised both when recording an attempt and when querying state. The engine
+    does **not** auto-create objectives: a misspelled id must fail rather than
+    conjure a phantom objective (SPEC section 7, C8).
     """
 
 
 class DuplicateAttemptError(TrackerError):
-    """Ya existe un intento con ese ``attempt_id`` (SPEC §7, C9)."""
+    """An attempt with that ``attempt_id`` already exists (SPEC section 7, C9)."""
 
 
 class StorageError(TrackerError):
-    """La persistencia no pudo completar la operación.
+    """Persistence could not complete the operation.
 
-    Nunca se traga: si el intento no quedó escrito, esto se propaga (SPEC I8).
+    Never swallowed: if the attempt was not written, this propagates (SPEC I8).
     """
 
 
 class InvalidAttemptError(TrackerError):
-    """El intento está mal formado.
+    """The attempt is malformed.
 
-    Por ejemplo: ``at`` sin zona horaria, ``confidence`` fuera de [0, 1] o
-    ``objective_id`` vacío.
+    For example: ``at`` without a timezone, ``confidence`` outside [0, 1] or an
+    empty ``objective_id``.
     """
 
 
 class InvalidRangeError(TrackerError):
-    """Un rango temporal es incoherente, p. ej. ``start > end`` o ``step <= 0``."""
+    """A time range is incoherent, e.g. ``start > end`` or ``step <= 0``."""
