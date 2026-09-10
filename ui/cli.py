@@ -1,21 +1,24 @@
-"""CLI de visualización del progreso. Único punto del proyecto con libertad de diseño.
+"""Progress visualization CLI. The one place in the project with design freedom.
 
-Solo biblioteca estándar (``argparse``). Regla estructural: para todo lo que
-sea nivel, estado o repaso, ``ui/`` consume **exclusivamente** la API pública
-de :class:`~core.tracker.LearningTracker`. No recalcula niveles, no importa
-``core.leveling`` ni ``core.scheduling`` y no lee intentos del
-``AttemptStore`` por su cuenta: hacerlo abriría una puerta trasera a I4. El
-``ProfileStore`` sí se usa directamente para crear perfiles y objetivos, que
-no es cálculo.
+Standard library only (``argparse``). Structural rule: for anything that is
+level, state or review, ``ui/`` consumes **exclusively** the public API of
+:class:`~core.tracker.LearningTracker`. It does not recompute levels, it does
+not import ``core.leveling`` or ``core.scheduling`` and it does not read
+attempts from the ``AttemptStore`` on its own: doing so would open a back door
+to I4. The ``ProfileStore`` is used directly to create profiles and objectives,
+which is not computation.
 
-El tiempo se inyecta (SPEC I2): :func:`run` recibe un ``Clock``; si no se
-pasa ninguno se usa :class:`store.SystemClock`, y **solo** ``ui/`` lo
-instancia. ``--as-of`` fija la fecha de consulta; si falta, ``clock.now()``.
+Time is injected (SPEC I2): :func:`run` receives a ``Clock``; when none is
+given, :class:`store.SystemClock` is used, and **only** ``ui/`` instantiates it.
+``--as-of`` pins the query date; when missing, ``clock.now()``.
 
-El directorio de datos vive en la carpeta estándar del sistema operativo (ver
-``ui/datadir.py``), no en un ``./data`` relativo al directorio actual. El
-entorno y la plataforma también se inyectan en :func:`run`, por la misma razón
-que el reloj: un test decide el sistema operativo sin tocar el real.
+The data directory lives in the standard folder of the operating system (see
+``ui/datadir.py``), not in a ``./data`` relative to the current directory. The
+environment and the platform are injected into :func:`run` too, for the same
+reason as the clock: a test decides the operating system without touching the
+real one.
+
+The texts printed to the user stay in Spanish; the documentation is in English.
 """
 
 from __future__ import annotations
@@ -52,7 +55,7 @@ from .datadir import (
     resolve_data_dir,
 )
 
-#: Códigos de salida. 1 se reserva a ``check`` con ``ok=False``.
+#: Exit codes. 1 is reserved for ``check`` with ``ok=False``.
 EXIT_OK = 0
 EXIT_CHECK_FAILED = 1
 EXIT_ERROR = 2
@@ -60,34 +63,34 @@ EXIT_ERROR = 2
 PROFILES_FILE = "profiles.json"
 ATTEMPTS_FILE = "attempts.json"
 
-#: Comandos que no operan sobre un perfil concreto (no exigen ``--profile``).
+#: Commands that do not operate on a specific profile (they do not require ``--profile``).
 _PROFILE_FREE_COMMANDS = frozenset({"profile"})
 
 
 class UsageError(Exception):
-    """Argumentos inválidos. Se imprime en stderr y termina con código 2."""
+    """Invalid arguments. It is printed to stderr and exits with code 2."""
 
 
 class _Parser(argparse.ArgumentParser):
-    """``ArgumentParser`` que no escribe en ``sys.stderr`` ni llama a ``exit``.
+    """``ArgumentParser`` that neither writes to ``sys.stderr`` nor calls ``exit``.
 
-    Los errores de uso se convierten en :class:`UsageError` para que
-    :func:`run` los enrute al ``stderr`` inyectado.
+    Usage errors are turned into :class:`UsageError` so that :func:`run` routes
+    them to the injected ``stderr``.
     """
 
     def error(self, message: str) -> None:  # type: ignore[override]
         raise UsageError(f"{self.format_usage().rstrip()}\n{self.prog}: {message}")
 
 
-# ------------------------------------------------------------------ parseo
+# ----------------------------------------------------------------------- parsing
 
 
 def parse_iso(raw: str, name: str = "fecha") -> datetime:
-    """Parsea una fecha ISO 8601. Una fecha sin zona horaria se asume UTC.
+    """Parses an ISO 8601 date. A date without a timezone is assumed to be UTC.
 
-    Se acepta el sufijo ``Z`` (Python 3.10 no lo entiende en
-    ``fromisoformat``). La asunción de UTC es una comodidad de la CLI: el motor
-    exige fechas aware (SPEC §1.3) y la CLI se lo garantiza.
+    The ``Z`` suffix is accepted (Python 3.10 does not understand it in
+    ``fromisoformat``). Assuming UTC is a convenience of the CLI: the engine
+    demands aware dates (SPEC section 1.3) and the CLI guarantees that.
     """
     text = raw.strip()
     if text.endswith(("Z", "z")):
@@ -116,11 +119,11 @@ def _non_negative_int(raw: str) -> int:
 
 
 def build_parser(default_data: str | None = None) -> argparse.ArgumentParser:
-    """Construye el parser completo (opciones globales + subcomandos).
+    """Builds the complete parser (global options + subcommands).
 
-    ``default_data`` es solo el texto que se muestra en el help de ``--data``:
-    el default real no se fija aquí sino en :func:`run`, que necesita
-    distinguir "no se pasó ``--data``" para decidir el aviso de migración.
+    ``default_data`` is only the text shown in the help of ``--data``: the real
+    default is not set here but in :func:`run`, which needs to tell "``--data``
+    was not given" apart in order to decide on the migration notice.
     """
     if default_data is None:
         default_data = describe_default(sys.platform, os.environ, Path.home())
@@ -187,7 +190,7 @@ def build_parser(default_data: str | None = None) -> argparse.ArgumentParser:
     p_record.add_argument("--note", default=None, help="texto libre")
     p_record.add_argument("--id", dest="attempt_id", default=None, help="attempt_id explícito")
 
-    # consultas
+    # queries
     p_state = sub.add_parser("state", help="estado completo de un objetivo")
     p_state.add_argument("objective_id", metavar="OBJECTIVE_ID")
 
@@ -217,7 +220,7 @@ def build_parser(default_data: str | None = None) -> argparse.ArgumentParser:
     return parser
 
 
-# ------------------------------------------------------------------ formato
+# --------------------------------------------------------------------- formatting
 
 
 def _fmt_dt(moment: datetime | None) -> str:
@@ -233,7 +236,7 @@ def _fmt_bool(value: bool) -> str:
 
 
 def _fmt_window(window: Sequence[bool]) -> str:
-    """Ventana reciente, del más antiguo al más reciente: ``+`` acierto, ``-`` fallo."""
+    """Recent window, oldest to most recent: ``+`` hit, ``-`` miss."""
     return "".join("+" if hit else "-" for hit in window) or "-"
 
 
@@ -242,7 +245,7 @@ def _fmt_level(level: Level) -> str:
 
 
 def _table(headers: Sequence[str], rows: Sequence[Sequence[str]]) -> str:
-    """Tabla de texto plano con columnas de ancho fijo, separadas por dos espacios."""
+    """Plain text table with fixed width columns, separated by two spaces."""
     widths = [len(h) for h in headers]
     for row in rows:
         for index, cell in enumerate(row):
@@ -377,12 +380,12 @@ def format_check(report: ConsistencyReport) -> str:
     return f"{table}\n\n{footer}"
 
 
-# ------------------------------------------------------------------ contexto
+# ----------------------------------------------------------------------- context
 
 
 @dataclass
 class Context:
-    """Todo lo que necesita un comando: stores, reloj, fecha de corte y salida."""
+    """Everything a command needs: stores, clock, cut date and output."""
 
     args: argparse.Namespace
     profiles: ProfileStore
@@ -392,7 +395,7 @@ class Context:
     out: TextIO
 
     def moment(self) -> datetime:
-        """``--as-of`` o ``clock.now()``: una sola noción de "ahora" por invocación."""
+        """``--as-of`` or ``clock.now()``: one single notion of "now" per invocation."""
         return self.clock.now() if self.as_of is None else self.as_of
 
     def tracker(self) -> LearningTracker:
@@ -406,7 +409,7 @@ class Context:
         self.out.write(text.rstrip("\n") + "\n")
 
 
-# ------------------------------------------------------------------ comandos
+# ---------------------------------------------------------------------- commands
 
 
 def _cmd_profile(ctx: Context) -> int:
@@ -610,7 +613,7 @@ _COMMANDS: dict[str, Callable[[Context], int]] = {
 }
 
 
-# ------------------------------------------------------------------ entrada
+# ------------------------------------------------------------------ entry point
 
 
 def run(
@@ -623,21 +626,22 @@ def run(
     home: Path | None = None,
     cwd: Path | None = None,
 ) -> int:
-    """Ejecuta la CLI con salida, reloj y entorno inyectados. Devuelve el código.
+    """Runs the CLI with output, clock and environment injected. Returns the code.
 
-    Nunca deja escapar un traceback: los errores de dominio
-    (:class:`~core.errors.TrackerError`) y de uso se imprimen en ``stderr`` y
-    devuelven 2. ``check`` con ``ok=False`` devuelve 1.
+    It never lets a traceback escape: domain errors
+    (:class:`~core.errors.TrackerError`) and usage errors are printed to
+    ``stderr`` and return 2. ``check`` with ``ok=False`` returns 1.
 
     Args:
-        argv: argumentos sin el nombre del programa.
-        stdout: dónde escribir la salida normal.
-        stderr: dónde escribir los errores; ``None`` usa ``sys.stderr``.
-        clock: fuente de "ahora"; ``None`` usa :class:`store.SystemClock`.
-        platform: sistema operativo; ``None`` usa ``sys.platform``.
-        environ: entorno donde buscar ``LEARNING_TRACKER_DATA``; ``None`` el real.
-        home: directorio del usuario; ``None`` usa ``Path.home()``.
-        cwd: directorio actual, solo para buscar el ``./data`` heredado.
+        argv: arguments without the program name.
+        stdout: where to write normal output.
+        stderr: where to write errors; ``None`` uses ``sys.stderr``.
+        clock: source of "now"; ``None`` uses :class:`store.SystemClock`.
+        platform: operating system; ``None`` uses ``sys.platform``.
+        environ: environment to look ``LEARNING_TRACKER_DATA`` up in; ``None``
+            the real one.
+        home: home directory of the user; ``None`` uses ``Path.home()``.
+        cwd: current directory, only to look for the legacy ``./data``.
     """
     err = sys.stderr if stderr is None else stderr
     platform = sys.platform if platform is None else platform
@@ -676,7 +680,7 @@ def run(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Punto de entrada real: ``sys.argv``, ``sys.stdout`` y el reloj de sistema."""
+    """The real entry point: ``sys.argv``, ``sys.stdout`` and the system clock."""
     return run(sys.argv[1:] if argv is None else argv, sys.stdout, sys.stderr)
 
 

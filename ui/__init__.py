@@ -1,5 +1,5 @@
-"""Visualización del progreso: CLI de biblioteca estándar sobre ``LearningTracker``.
+"""Progress visualization: standard library CLI over ``LearningTracker``.
 
-Ver ``ui/README.md`` para el uso y ``ui/cli.py`` para la restricción
-estructural: esta capa no calcula nada, solo muestra lo que el motor responde.
+See ``ui/README.md`` for usage and ``ui/cli.py`` for the structural constraint:
+this layer computes nothing, it only shows what the engine answers.
 """

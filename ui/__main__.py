@@ -1,4 +1,4 @@
-"""``python -m ui ...``: delega en :func:`ui.cli.main`."""
+"""``python -m ui ...``: delegates to :func:`ui.cli.main`."""
 
 from __future__ import annotations
 

@@ -1,16 +1,18 @@
-"""Dónde viven los datos: directorio por usuario en la carpeta estándar del SO.
+"""Where the data lives: per-user directory in the standard folder of the OS.
 
-El motor dejó de ser una herramienta personal: otra persona lo instala y sus
-datos no pueden acabar dentro del repo clonado. El default relativo (``./data``)
-dependía del directorio actual, así que ejecutar la CLI desde otra carpeta
-abría un store vacío y parecía que se habían perdido los datos.
+The engine stopped being a personal tool: someone else installs it and their
+data cannot end up inside the cloned repo. The relative default (``./data``)
+depended on the current directory, so running the CLI from another folder opened
+an empty store and it looked like the data had been lost.
 
-Precedencia, de mayor a menor: ``--data DIR`` > ``LEARNING_TRACKER_DATA`` >
-default por sistema operativo.
+Precedence, highest to lowest: ``--data DIR`` > ``LEARNING_TRACKER_DATA`` >
+per operating system default.
 
-Todo aquí es función pura: la plataforma, el entorno y el ``home`` entran por
-parámetro, así que los tests deciden el sistema operativo sin tocar el entorno
-real ni el ``HOME`` de quien corre la suite.
+Everything here is a pure function: the platform, the environment and ``home``
+arrive as parameters, so the tests decide the operating system without touching
+the real environment or the ``HOME`` of whoever runs the suite.
+
+The text of the migration notice stays in Spanish: the user reads it.
 """
 
 from __future__ import annotations
@@ -18,31 +20,31 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Mapping
 
-#: Variable de entorno que gana al default del SO (pero no a ``--data``).
+#: Environment variable that beats the OS default (but not ``--data``).
 DATA_ENV_VAR = "LEARNING_TRACKER_DATA"
 
-#: Nombre de la carpeta propia dentro del directorio de datos del SO.
+#: Name of our own folder inside the data directory of the OS.
 APP_DIR_NAME = "learning-tracker"
 
-#: Directorio heredado, relativo al cwd, que se usaba como default hasta ACU-215.
+#: Legacy directory, relative to the cwd, used as the default until ACU-215.
 LEGACY_DATA_DIR = "./data"
 
-#: Permisos del directorio de datos: solo su dueño entra (``rwx------``).
+#: Permissions of the data directory: only its owner gets in (``rwx------``).
 DATA_DIR_MODE = 0o700
 
 
 def default_data_dir(platform: str, environ: Mapping[str, str], home: Path) -> Path:
-    """Directorio de datos por defecto, sin mirar ``--data``.
+    """Default data directory, without looking at ``--data``.
 
-    ``LEARNING_TRACKER_DATA`` gana sobre el default del SO. Si no está, en
-    macOS es ``~/Library/Application Support/learning-tracker``; en el resto se
-    sigue XDG: ``$XDG_DATA_HOME/learning-tracker`` si la variable está definida
-    y no vacía, si no ``~/.local/share/learning-tracker``.
+    ``LEARNING_TRACKER_DATA`` beats the OS default. When it is absent, on macOS
+    it is ``~/Library/Application Support/learning-tracker``; everywhere else
+    XDG is followed: ``$XDG_DATA_HOME/learning-tracker`` when the variable is
+    defined and not empty, otherwise ``~/.local/share/learning-tracker``.
 
     Args:
-        platform: valor de ``sys.platform`` (``"darwin"`` para macOS).
-        environ: entorno a consultar (``os.environ`` en producción).
-        home: directorio del usuario (``Path.home()`` en producción).
+        platform: value of ``sys.platform`` (``"darwin"`` for macOS).
+        environ: environment to query (``os.environ`` in production).
+        home: home directory of the user (``Path.home()`` in production).
     """
     override = environ.get(DATA_ENV_VAR)
     if override:
@@ -58,19 +60,19 @@ def default_data_dir(platform: str, environ: Mapping[str, str], home: Path) -> P
 def resolve_data_dir(
     explicit: str | None, platform: str, environ: Mapping[str, str], home: Path
 ) -> Path:
-    """Aplica la precedencia completa: ``--data`` > entorno > default del SO."""
+    """Applies the full precedence: ``--data`` > environment > OS default."""
     if explicit is not None:
         return Path(explicit).expanduser()
     return default_data_dir(platform, environ, home)
 
 
 def ensure_data_dir(path: Path) -> Path:
-    """Crea el directorio (con sus padres) accesible solo por su dueño.
+    """Creates the directory (with its parents) reachable only by its owner.
 
-    ``mode`` solo aplica a los directorios que esta llamada crea; si ya existía
-    no se tocan sus permisos, porque puede ser un directorio que el usuario
-    comparte a propósito. Los JSON de dentro los sigue escribiendo ``store/``
-    exactamente igual que antes.
+    ``mode`` applies only to the directories this call creates; when it already
+    existed its permissions are left alone, because it may be a directory the
+    user shares on purpose. The JSON files inside are still written by ``store/``
+    exactly as before.
     """
     path.mkdir(mode=DATA_DIR_MODE, parents=True, exist_ok=True)
     return path
@@ -84,16 +86,16 @@ def _has_json(path: Path) -> bool:
 
 
 def migration_notice(cwd: Path, destination: Path) -> str | None:
-    """Aviso de migración cuando quedaron datos en el viejo ``./data`` del cwd.
+    """Migration notice when data was left in the old ``./data`` of the cwd.
 
-    Devuelve el texto a imprimir por stderr, o ``None`` si no hay nada que
-    avisar. Solo avisa cuando el ``./data`` del directorio actual tiene algún
-    ``*.json`` y el destino nuevo todavía no tiene ninguno: si el destino ya
-    tiene datos, la migración ya se hizo (o hay datos nuevos) y repetir el
-    aviso sería ruido.
+    Returns the text to print to stderr, or ``None`` when there is nothing to
+    warn about. It only warns when the ``./data`` of the current directory has
+    some ``*.json`` and the new destination has none yet: if the destination
+    already holds data, the migration already happened (or there is new data)
+    and repeating the notice would be noise.
 
-    Nunca mueve ni copia nada: mover los datos de alguien es suyo, no nuestro.
-    El aviso trae el comando exacto, con las rutas ya expandidas.
+    It never moves or copies anything: moving someone's data is their call, not
+    ours. The notice carries the exact command, with the paths already expanded.
     """
     legacy = (cwd / LEGACY_DATA_DIR).resolve()
     target = destination.resolve()
@@ -111,7 +113,7 @@ def migration_notice(cwd: Path, destination: Path) -> str | None:
 
 
 def _quote(path: Path) -> str:
-    """Entrecomilla la ruta para el shell solo si hace falta."""
+    """Quotes the path for the shell only when needed."""
     text = str(path)
     if all(char.isalnum() or char in "-_./~+@:," for char in text):
         return text
@@ -119,7 +121,7 @@ def _quote(path: Path) -> str:
 
 
 def describe_default(platform: str, environ: Mapping[str, str], home: Path) -> str:
-    """Default efectivo, tal como se muestra en el help de ``--data``."""
+    """Effective default, exactly as shown in the help of ``--data``."""
     if environ.get(DATA_ENV_VAR):
         return f"{default_data_dir(platform, environ, home)} (de {DATA_ENV_VAR})"
     return str(default_data_dir(platform, environ, home))
