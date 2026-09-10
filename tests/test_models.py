@@ -1,10 +1,11 @@
-"""Tests de core/models.py contra SPEC.md §1, §9.2 e invariantes I1 e I10.
+"""Tests of core/models.py against SPEC.md sections 1 and 9.2, and invariants
+I1 and I10.
 
-Convenciones:
+Conventions:
 
-* ``spec``: las validaciones que §1.3 exige a un ``Attempt`` y el hecho de que
-  ``confidence``/``weight`` no afectan a ningún cálculo (§10).
-* ``invariant``: inmutabilidad (I1) y ausencia de ``streak`` (I10).
+* ``spec``: the validations section 1.3 demands of an ``Attempt``, and the fact
+  that ``confidence``/``weight`` do not affect any computation (section 10).
+* ``invariant``: immutability (I1) and absence of ``streak`` (I10).
 """
 
 from __future__ import annotations
@@ -80,12 +81,12 @@ def state(**overrides) -> ObjectiveState:
 
 
 # --------------------------------------------------------------------------
-# I1: inmutabilidad
+# I1: immutability
 # --------------------------------------------------------------------------
 
 
 @pytest.mark.invariant
-def test_i1_attempt_no_se_puede_mutar():
+def test_i1_attempt_cannot_be_mutated():
     a = attempt(0, True)
     with pytest.raises(dataclasses.FrozenInstanceError):
         a.correct = False  # type: ignore[misc]
@@ -98,25 +99,25 @@ def test_i1_attempt_no_se_puede_mutar():
 
 @pytest.mark.invariant
 @pytest.mark.parametrize("model", MODEL_TYPES, ids=lambda t: t.__name__)
-def test_i1_todos_los_modelos_son_frozen(model):
+def test_i1_every_model_is_frozen(model):
     assert dataclasses.is_dataclass(model)
     assert model.__dataclass_params__.frozen is True
 
 
 @pytest.mark.invariant
-def test_i1_objective_state_no_se_puede_mutar():
+def test_i1_objective_state_cannot_be_mutated():
     s = state()
     with pytest.raises(dataclasses.FrozenInstanceError):
         s.score = 1.0  # type: ignore[misc]
 
 
 # --------------------------------------------------------------------------
-# I10: sin streak
+# I10: no streak
 # --------------------------------------------------------------------------
 
 
 @pytest.mark.invariant
-def test_i10_objective_state_no_expone_streak():
+def test_i10_objective_state_does_not_expose_streak():
     names = {f.name for f in dataclasses.fields(ObjectiveState)}
     assert "streak" not in names
     assert not any("streak" in n for n in names)
@@ -124,13 +125,13 @@ def test_i10_objective_state_no_expone_streak():
 
 
 @pytest.mark.invariant
-def test_i10_objective_no_guarda_progreso():
+def test_i10_objective_stores_no_progress():
     names = {f.name for f in dataclasses.fields(Objective)}
     assert names == {"objective_id", "title", "domain", "weight", "tags"}
 
 
 @pytest.mark.spec
-def test_objective_state_tiene_los_campos_de_spec_1_5():
+def test_objective_state_has_the_fields_of_spec_1_5():
     names = {f.name for f in dataclasses.fields(ObjectiveState)}
     required = {
         "objective_id",
@@ -150,19 +151,19 @@ def test_objective_state_tiene_los_campos_de_spec_1_5():
 
 
 # --------------------------------------------------------------------------
-# §1.4: Level ordenado
+# Section 1.4: ordered Level
 # --------------------------------------------------------------------------
 
 
 @pytest.mark.spec
-def test_level_es_ordenado_y_con_los_valores_de_spec():
+def test_level_is_ordered_and_has_the_spec_values():
     assert [lvl.value for lvl in Level] == [0, 1, 2, 3, 4]
     assert Level.UNASSESSED < Level.WEAK < Level.LEARNING < Level.COMPETENT < Level.MASTERED
     assert Level.MASTERED - Level.WEAK == 3
 
 
 @pytest.mark.spec
-def test_attempt_kind_tiene_los_cinco_valores_de_spec():
+def test_attempt_kind_has_the_five_spec_values():
     assert {k.value for k in AttemptKind} == {
         "quiz",
         "exercise",
@@ -173,12 +174,12 @@ def test_attempt_kind_tiene_los_cinco_valores_de_spec():
 
 
 # --------------------------------------------------------------------------
-# §1.3: validaciones de Attempt
+# Section 1.3: Attempt validations
 # --------------------------------------------------------------------------
 
 
 @pytest.mark.spec
-def test_attempt_valido_se_construye_con_defaults():
+def test_a_valid_attempt_is_built_with_defaults():
     a = attempt(0, True)
     assert a.kind is AttemptKind.QUIZ
     assert a.confidence is None
@@ -187,7 +188,7 @@ def test_attempt_valido_se_construye_con_defaults():
 
 
 @pytest.mark.spec
-def test_attempt_at_y_recorded_at_son_campos_separados():
+def test_attempt_at_and_recorded_at_are_separate_fields():
     recorded = T0 + timedelta(days=30)
     a = attempt(0, True, recorded_at=recorded)
     assert a.at == T0
@@ -196,106 +197,106 @@ def test_attempt_at_y_recorded_at_son_campos_separados():
 
 
 @pytest.mark.spec
-def test_attempt_at_naive_lanza_invalid_attempt():
+def test_naive_attempt_at_raises_invalid_attempt():
     with pytest.raises(InvalidAttemptError):
         attempt(0, True, at=datetime(2026, 1, 1, 12, 0))
 
 
 @pytest.mark.spec
-def test_attempt_recorded_at_naive_lanza_invalid_attempt():
+def test_naive_recorded_at_raises_invalid_attempt():
     with pytest.raises(InvalidAttemptError):
         attempt(0, True, recorded_at=datetime(2026, 1, 1, 12, 0))
 
 
 @pytest.mark.spec
-def test_attempt_at_no_datetime_lanza_invalid_attempt():
+def test_non_datetime_at_raises_invalid_attempt():
     with pytest.raises(InvalidAttemptError):
         attempt(0, True, at="2026-01-01T12:00:00+00:00")
 
 
 @pytest.mark.spec
 @pytest.mark.parametrize("bad", ["", "   "])
-def test_attempt_objective_id_vacio_lanza_invalid_attempt(bad):
+def test_empty_objective_id_raises_invalid_attempt(bad):
     with pytest.raises(InvalidAttemptError):
         attempt(0, True, objective_id=bad)
 
 
 @pytest.mark.spec
 @pytest.mark.parametrize("bad", ["", "   "])
-def test_attempt_id_vacio_lanza_invalid_attempt(bad):
+def test_empty_attempt_id_raises_invalid_attempt(bad):
     with pytest.raises(InvalidAttemptError):
         attempt(0, True, attempt_id=bad)
 
 
 @pytest.mark.spec
 @pytest.mark.parametrize("bad", [-0.01, 1.01, 2.0, -1.0])
-def test_attempt_confidence_fuera_de_rango_lanza_invalid_attempt(bad):
+def test_out_of_range_confidence_raises_invalid_attempt(bad):
     with pytest.raises(InvalidAttemptError):
         attempt(0, True, confidence=bad)
 
 
 @pytest.mark.spec
 @pytest.mark.parametrize("ok", [0.0, 0.5, 1.0, None])
-def test_attempt_confidence_en_rango_es_valido(ok):
+def test_in_range_confidence_is_valid(ok):
     assert attempt(0, True, confidence=ok).confidence == ok
 
 
 @pytest.mark.spec
-def test_attempt_kind_invalido_lanza_invalid_attempt():
+def test_invalid_kind_raises_invalid_attempt():
     with pytest.raises(InvalidAttemptError):
         attempt(0, True, kind="quiz")
 
 
 @pytest.mark.spec
-def test_attempt_correct_no_bool_lanza_invalid_attempt():
+def test_non_bool_correct_raises_invalid_attempt():
     with pytest.raises(InvalidAttemptError):
         attempt(0, correct=1)
 
 
 @pytest.mark.spec
-def test_invalid_attempt_error_hereda_de_tracker_error():
+def test_invalid_attempt_error_inherits_from_tracker_error():
     assert issubclass(InvalidAttemptError, TrackerError)
 
 
 # --------------------------------------------------------------------------
-# §10: confidence y weight no afectan a ningún cálculo
+# Section 10: confidence and weight do not affect any computation
 # --------------------------------------------------------------------------
 
 
 @pytest.mark.spec
-def test_confidence_no_mueve_el_score():
+def test_confidence_does_not_move_the_score():
     results = [False, True, True, False, True, True, True, False, True, True]
-    sin = [attempt(i, r) for i, r in enumerate(results)]
-    con = [
+    without = [attempt(i, r) for i, r in enumerate(results)]
+    with_extras = [
         attempt(i, r, confidence=(0.05 if r else 0.95), kind=AttemptKind.EXAM_SIM)
         for i, r in enumerate(results)
     ]
     as_of = T0 + timedelta(days=len(results))
-    assert compute_score(sin, as_of) == compute_score(con, as_of)
-    assert compute_score(sin, as_of) > 0.0
+    assert compute_score(without, as_of) == compute_score(with_extras, as_of)
+    assert compute_score(without, as_of) > 0.0
 
 
 @pytest.mark.spec
-def test_weight_del_objetivo_es_solo_informativo():
-    """El cálculo del score ni siquiera recibe el ``Objective``; su ``weight``
-    no puede influir en el nivel."""
-    pesado = Objective(objective_id=OBJ, title="t", weight=10.0)
-    ligero = Objective(objective_id=OBJ, title="t", weight=0.1)
-    assert pesado.weight != ligero.weight
+def test_objective_weight_is_informational_only():
+    """The score computation does not even receive the ``Objective``; its
+    ``weight`` cannot influence the level."""
+    heavy = Objective(objective_id=OBJ, title="t", weight=10.0)
+    light = Objective(objective_id=OBJ, title="t", weight=0.1)
+    assert heavy.weight != light.weight
     history = [attempt(i, True) for i in range(5)]
     as_of = T0 + timedelta(days=5)
-    # No hay forma de pasarle un peso a compute_score: mismo historial => mismo score.
+    # There is no way to pass a weight to compute_score: same history => same score.
     assert compute_score(history, as_of) == compute_score(list(history), as_of)
     assert Objective(objective_id=OBJ, title="t").weight == 1.0
 
 
 # --------------------------------------------------------------------------
-# §1.1 / §1.2: Profile y Objective
+# Sections 1.1 / 1.2: Profile and Objective
 # --------------------------------------------------------------------------
 
 
 @pytest.mark.spec
-def test_profile_indexa_objetivos_por_id():
+def test_profile_indexes_objectives_by_id():
     o = Objective(objective_id=OBJ, title="Content understanding", domain="D3")
     p = Profile(profile_id="ai-103", name="Microsoft AI-103", objectives={OBJ: o})
     assert p.objectives[OBJ] is o
@@ -303,7 +304,7 @@ def test_profile_indexa_objetivos_por_id():
 
 
 # --------------------------------------------------------------------------
-# §9.5 / §8 fallo 2: ConsistencyReport.failures
+# Sections 9.5 / 8 failure 2: ConsistencyReport.failures
 # --------------------------------------------------------------------------
 
 
@@ -314,7 +315,7 @@ def check(name: str, expected: float, actual: float) -> ConsistencyCheck:
 
 
 @pytest.mark.spec
-def test_consistency_report_failures_devuelve_solo_los_fallidos():
+def test_consistency_report_failures_returns_only_the_failed_ones():
     ok = check("attempt_count", 5, 5)
     bad = check("correct_sum", 3, 4)
     report = ConsistencyReport(
@@ -324,7 +325,7 @@ def test_consistency_report_failures_devuelve_solo_los_fallidos():
 
 
 @pytest.mark.spec
-def test_consistency_report_sin_fallos_devuelve_tupla_vacia():
+def test_consistency_report_without_failures_returns_an_empty_tuple():
     report = ConsistencyReport(
         ok=True,
         checks=(check("attempt_count", 5, 5),),
@@ -336,18 +337,18 @@ def test_consistency_report_sin_fallos_devuelve_tupla_vacia():
 
 
 @pytest.mark.spec
-def test_consistency_check_compara_numeros_sin_tolerancia():
+def test_consistency_check_compares_numbers_without_tolerance():
     assert check("attempt_count", 5, 5).passed is True
     assert check("attempt_count", 5, 6).passed is False
 
 
 # --------------------------------------------------------------------------
-# §9.6: SessionReport
+# Section 9.6: SessionReport
 # --------------------------------------------------------------------------
 
 
 @pytest.mark.spec
-def test_session_report_empty_es_un_estado_explicito():
+def test_session_report_empty_is_an_explicit_status():
     report = SessionReport(
         session_id="s1",
         started_at=T0,
@@ -361,12 +362,12 @@ def test_session_report_empty_es_un_estado_explicito():
 
 
 # --------------------------------------------------------------------------
-# §5.1: StateComparison
+# Section 5.1: StateComparison
 # --------------------------------------------------------------------------
 
 
 @pytest.mark.spec
-def test_state_comparison_guarda_los_dos_estados():
+def test_state_comparison_keeps_both_states():
     earlier = state(level=Level.WEAK, score=0.3)
     later = state(as_of=T0 + timedelta(days=14), level=Level.COMPETENT, score=0.8)
     cmp = StateComparison(

@@ -1,7 +1,7 @@
-"""Tests de ``core/clock.py`` contra SPEC.md §9.1 e I2.
+"""Tests of ``core/clock.py`` against SPEC.md section 9.1 and I2.
 
-``FixedClock`` devuelve siempre el mismo instante; ``OffsetClock`` desplaza un
-reloj base y ``advanced`` produce un reloj nuevo sin mutar el original.
+``FixedClock`` always returns the same instant; ``OffsetClock`` shifts a base
+clock and ``advanced`` produces a new clock without mutating the original.
 """
 
 from __future__ import annotations

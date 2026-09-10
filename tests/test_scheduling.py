@@ -1,15 +1,17 @@
-"""Tests de core/scheduling.py contra SPEC.md §4, §6 I10, §7 (C1, C2, C5) y §8.
+"""Tests of core/scheduling.py against SPEC.md section 4, section 6 I10,
+section 7 (C1, C2, C5) and section 8.
 
-Convenciones:
+Conventions:
 
-* ``spec``: §4.1 escalera, §4.2 regla (puntos 1-6) y §4.3 vencimiento, con el
-  ejemplo numérico de la spec copiado tal cual.
-* ``edge``: C1 (sin intentos), C2 (un solo intento), C5 (hueco largo).
-* ``invariant``: I10, ``ObjectiveState`` no expone ``streak`` (fallo 1 de §8).
+* ``spec``: section 4.1 ladder, section 4.2 rule (points 1-6) and section 4.3
+  due state, with the numeric example of the spec copied verbatim.
+* ``edge``: C1 (no attempts), C2 (a single attempt), C5 (long gap).
+* ``invariant``: I10, ``ObjectiveState`` does not expose ``streak`` (failure 1
+  of section 8).
 
-Ningún número mágico: la escalera, el multiplicador y el techo salen de
-``core/constants.py``. Si un valor de la spec no cuadra con el código, se
-reporta la discrepancia; no se ajusta el test.
+No magic numbers: the ladder, the multiplier and the ceiling come from
+``core/constants.py``. If a value of the spec does not match the code, the
+discrepancy is reported; the test is not adjusted.
 """
 
 from __future__ import annotations
@@ -40,7 +42,7 @@ OBJ = "X"
 T0 = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
 DAY = timedelta(days=1)
 
-#: Niveles que NO alargan el intervalo (todos menos MASTERED).
+#: Levels that do NOT stretch the interval (every one but MASTERED).
 NON_MASTERED = [lvl for lvl in Level if lvl is not Level.MASTERED]
 
 
@@ -49,12 +51,12 @@ def attempt(i: int, correct: bool, at: datetime) -> Attempt:
 
 
 def daily(results: str, start: datetime = T0) -> list[Attempt]:
-    """'FFFCF' -> un intento por día consecutivo, en orden, desde ``start``."""
+    """'FFFCF' -> one attempt per consecutive day, in order, from ``start``."""
     return [attempt(i, ch == "C", start + i * DAY) for i, ch in enumerate(results)]
 
 
 # ---------------------------------------------------------------------------
-# §4.2 punto 1 — la racha final S (variable local, no medida de progreso)
+# Section 4.2 point 1 - the trailing run S (local variable, not a progress measure)
 # ---------------------------------------------------------------------------
 
 
@@ -65,25 +67,25 @@ def daily(results: str, start: datetime = T0) -> list[Attempt]:
         ("", 0),
         ("F", 0),
         ("C", 1),
-        ("FFFCF", 0),  # fila 5 de §3: el último es fallo
-        ("FFFC", 1),  # fila 4 de §3
+        ("FFFCF", 0),  # row 5 of section 3: the last one is a miss
+        ("FFFC", 1),  # row 4 of section 3
         ("CCF", 0),
         ("FCC", 2),
         ("CFCCC", 3),
-        ("C" * 8, 8),  # fila 13 de §3.1
+        ("C" * 8, 8),  # row 13 of section 3.1
     ],
 )
-def test_trailing_success_run_cuenta_desde_el_final_hasta_el_primer_fallo(results, expected):
+def test_trailing_success_run_counts_back_to_the_first_miss(results, expected):
     assert trailing_success_run(daily(results)) == expected
 
 
 # ---------------------------------------------------------------------------
-# §4.1 + §4.2 puntos 2-3 — la escalera completa
+# Sections 4.1 + 4.2 points 2-3 - the complete ladder
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.spec
-def test_escalera_es_la_de_la_spec():
+def test_the_ladder_is_the_one_in_the_spec():
     assert SCHEDULE_DAYS == (1, 3, 7, 14, 30)
 
 
@@ -92,43 +94,43 @@ def test_escalera_es_la_de_la_spec():
 @pytest.mark.parametrize(
     ("success_run", "step"),
     [
-        (0, 0),  # último intento fallido => índice 0 => 1 día
+        (0, 0),  # last attempt failed => index 0 => 1 day
         (1, 0),  # S=1 -> 1d
         (2, 1),  # S=2 -> 3d
         (3, 2),  # S=3 -> 7d
         (4, 3),  # S=4 -> 14d
         (5, 4),  # S=5 -> 30d
-        (6, 4),  # S>=5 satura en el último peldaño
-        (8, 4),  # S=8 (fila 13 de §3.1) -> 30d
+        (6, 4),  # S>=5 saturates on the last rung
+        (8, 4),  # S=8 (row 13 of section 3.1) -> 30d
     ],
 )
-def test_escalera_sin_mastered(success_run, step, level):
+def test_ladder_without_mastered(success_run, step, level):
     assert interval_days(success_run, level) == SCHEDULE_DAYS[step]
 
 
 @pytest.mark.spec
-def test_escalera_valores_literales_de_la_spec():
-    """Los números de §4.2.3 tal cual, para que un cambio en constants.py sin
-    tocar SPEC.md salte aquí."""
+def test_ladder_literal_values_from_the_spec():
+    """The numbers of section 4.2.3 verbatim, so that a change in constants.py
+    without touching SPEC.md trips here."""
     expected = {0: 1, 1: 1, 2: 3, 3: 7, 4: 14, 5: 30, 8: 30}
     assert {s: interval_days(s, Level.WEAK) for s in expected} == expected
 
 
 @pytest.mark.spec
-def test_intervalo_siempre_al_menos_un_dia():
+def test_the_interval_is_always_at_least_one_day():
     for level in Level:
         for s in range(0, 20):
             assert interval_days(s, level) >= 1
 
 
 # ---------------------------------------------------------------------------
-# §4.2 punto 5 — MASTERED multiplica por 2 con techo 60
+# Section 4.2 point 5 - MASTERED multiplies by 2 with a ceiling of 60
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.spec
 @pytest.mark.parametrize("success_run", range(0, 10))
-def test_mastered_multiplica_con_techo(success_run):
+def test_mastered_multiplies_with_a_ceiling(success_run):
     base = interval_days(success_run, Level.COMPETENT)
     assert interval_days(success_run, Level.MASTERED) == min(
         base * MASTERY_INTERVAL_MULTIPLIER, MAX_INTERVAL_DAYS
@@ -136,7 +138,7 @@ def test_mastered_multiplica_con_techo(success_run):
 
 
 @pytest.mark.spec
-def test_mastered_valores_literales_de_la_spec():
+def test_mastered_literal_values_from_the_spec():
     assert MASTERY_INTERVAL_MULTIPLIER == 2
     assert MAX_INTERVAL_DAYS == 60
     assert interval_days(5, Level.MASTERED) == 60
@@ -146,20 +148,20 @@ def test_mastered_valores_literales_de_la_spec():
 
 
 @pytest.mark.spec
-def test_el_techo_nunca_se_supera():
+def test_the_ceiling_is_never_exceeded():
     for s in range(0, 50):
         assert interval_days(s, Level.MASTERED) <= MAX_INTERVAL_DAYS
 
 
 @pytest.mark.spec
-def test_solo_mastered_alarga_el_intervalo():
+def test_only_mastered_stretches_the_interval():
     for s in range(0, 10):
         base = {interval_days(s, lvl) for lvl in NON_MASTERED}
-        assert len(base) == 1, "el nivel no-MASTERED no influye en el intervalo"
+        assert len(base) == 1, "a non-MASTERED level does not influence the interval"
 
 
 # ---------------------------------------------------------------------------
-# §4.2 punto 4 — next_review_at = last_attempt_at + intervalo
+# Section 4.2 point 4 - next_review_at = last_attempt_at + interval
 # ---------------------------------------------------------------------------
 
 
@@ -175,14 +177,14 @@ def test_solo_mastered_alarga_el_intervalo():
         ("C", Level.UNASSESSED),
     ],
 )
-def test_next_review_es_ultimo_intento_mas_intervalo(results, level):
+def test_next_review_is_last_attempt_plus_interval(results, level):
     history = daily(results)
     expected_days = interval_days(trailing_success_run(history), level)
     assert compute_next_review(history, level) == history[-1].at + timedelta(days=expected_days)
 
 
 @pytest.mark.spec
-def test_next_review_conserva_la_hora_del_ultimo_intento():
+def test_next_review_keeps_the_time_of_day_of_the_last_attempt():
     late = T0.replace(hour=23, minute=59)
     history = [attempt(0, True, late)]
     result = compute_next_review(history, Level.UNASSESSED)
@@ -191,22 +193,22 @@ def test_next_review_conserva_la_hora_del_ultimo_intento():
 
 
 # ---------------------------------------------------------------------------
-# §4.3 — vencimiento y ejemplo numérico de la spec
+# Section 4.3 - due state and the numeric example of the spec
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.spec
-def test_is_due_definicion():
+def test_is_due_definition():
     t = T0
     assert is_due(None, t) is False
-    assert is_due(t, t) is True  # <=, no <
+    assert is_due(t, t) is True  # <=, not <
     assert is_due(t - timedelta(seconds=1), t) is True
     assert is_due(t + timedelta(seconds=1), t) is False
 
 
 @pytest.mark.spec
-def test_ejemplo_4_3_tras_fila_5_next_review_es_2026_01_06():
-    """Tras la fila 5 (fallo del 2026-01-05), S=0 => 1 día => 2026-01-06."""
+def test_example_4_3_after_row_5_next_review_is_2026_01_06():
+    """After row 5 (the miss of 2026-01-05), S=0 => 1 day => 2026-01-06."""
     history = daily("FFFCF")
     assert history[-1].at.date() == datetime(2026, 1, 5).date()
     state = compute_state(OBJ, history, history[-1].at)
@@ -219,8 +221,8 @@ def test_ejemplo_4_3_tras_fila_5_next_review_es_2026_01_06():
 
 
 @pytest.mark.spec
-def test_ejemplo_4_3_tras_fila_13_mastered_y_2026_03_14():
-    """Tras la fila 13 (2026-01-13), S=8 y MASTERED => 30 x 2 = 60 => 2026-03-14."""
+def test_example_4_3_after_row_13_mastered_and_2026_03_14():
+    """After row 13 (2026-01-13), S=8 and MASTERED => 30 x 2 = 60 => 2026-03-14."""
     history = daily("FFFCF" + "C" * 8)
     assert len(history) == 13
     assert history[-1].at.date() == datetime(2026, 1, 13).date()
@@ -234,9 +236,9 @@ def test_ejemplo_4_3_tras_fila_13_mastered_y_2026_03_14():
 
 
 @pytest.mark.spec
-def test_ejemplo_4_3_fila_12_ya_mastered_pero_racha_7():
-    """Fila 12: MASTERED con S=7 (>=5 => 30d) x2 = 60d => 2026-03-13.
-    Comprueba que el techo, no el índice, gobierna el resultado."""
+def test_example_4_3_row_12_already_mastered_but_run_of_7():
+    """Row 12: MASTERED with S=7 (>=5 => 30d) x2 = 60d => 2026-03-13.
+    It checks that the ceiling, not the index, governs the result."""
     history = daily("FFFCF" + "C" * 7)
     state = compute_state(OBJ, history, history[-1].at)
     assert state.level is Level.MASTERED
@@ -244,21 +246,21 @@ def test_ejemplo_4_3_fila_12_ya_mastered_pero_racha_7():
 
 
 # ---------------------------------------------------------------------------
-# §7 — casos límite
+# Section 7 - edge cases
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.edge
 @pytest.mark.parametrize("level", list(Level))
-def test_c1_sin_intentos_next_review_none_y_no_vencido(level):
-    """§4.2 punto 6 / C1: sin evidencia no hay repaso ni vencimiento."""
+def test_c1_without_attempts_next_review_is_none_and_not_due(level):
+    """Section 4.2 point 6 / C1: with no evidence there is no review and no due."""
     assert compute_next_review([], level) is None
     assert is_due(compute_next_review([], level), T0) is False
     assert is_due(None, T0 + 3650 * DAY) is False
 
 
 @pytest.mark.edge
-def test_c1_sin_intentos_via_compute_state():
+def test_c1_without_attempts_through_compute_state():
     state = compute_state(OBJ, [], T0)
     assert state.next_review_at is None
     assert state.is_due is False
@@ -267,14 +269,14 @@ def test_c1_sin_intentos_via_compute_state():
 
 @pytest.mark.edge
 @pytest.mark.parametrize("correct", [True, False])
-def test_c2_un_solo_intento_unassessed_pero_con_next_review(correct):
+def test_c2_a_single_attempt_is_unassessed_but_has_a_next_review(correct):
     history = [attempt(0, correct, T0)]
     assert len(history) < MIN_ATTEMPTS
     state = compute_state(OBJ, history, T0)
     assert state.level is Level.UNASSESSED
     assert state.score == 0.0
     assert state.total_attempts == 1
-    # El repaso SÍ se calcula: S=1 (acierto) o S=0 (fallo), ambos 1 día.
+    # The review IS computed: S=1 (hit) or S=0 (miss), both 1 day.
     assert state.next_review_at == T0 + timedelta(days=SCHEDULE_DAYS[0])
     assert compute_next_review(history, Level.UNASSESSED) == state.next_review_at
     assert state.is_due is False
@@ -282,13 +284,13 @@ def test_c2_un_solo_intento_unassessed_pero_con_next_review(correct):
 
 
 @pytest.mark.edge
-def test_c5_hueco_largo_next_review_en_el_pasado_y_vencido():
+def test_c5_long_gap_next_review_in_the_past_and_due():
     history = daily("C" * 8)
     last = history[-1].at
     for gap_days in (90, 365, 3650):
         as_of = last + gap_days * DAY
         state = compute_state(OBJ, history, as_of)
-        # El repaso no depende de as_of: es last_attempt_at + intervalo.
+        # The review does not depend on as_of: it is last_attempt_at + interval.
         assert state.next_review_at == compute_next_review(history, state.level)
         assert state.next_review_at <= last + timedelta(days=MAX_INTERVAL_DAYS)
         assert state.next_review_at < as_of
@@ -297,8 +299,9 @@ def test_c5_hueco_largo_next_review_en_el_pasado_y_vencido():
 
 
 @pytest.mark.edge
-def test_c5_el_mas_vencido_es_el_de_mayor_hueco():
-    """Base del orden de get_due (§5.2): a más hueco, next_review_at más antiguo."""
+def test_c5_the_most_overdue_is_the_one_with_the_largest_gap():
+    """Basis of the get_due order (section 5.2): the larger the gap, the older
+    next_review_at."""
     recent = daily("C" * 3, start=T0 + 100 * DAY)
     old = daily("C" * 3, start=T0)
     as_of = T0 + 400 * DAY
@@ -309,34 +312,34 @@ def test_c5_el_mas_vencido_es_el_de_mayor_hueco():
 
 
 # ---------------------------------------------------------------------------
-# §6 I10 / §8 fallo 1 — ObjectiveState no expone streak
+# Section 6 I10 / section 8 failure 1 - ObjectiveState does not expose streak
 # ---------------------------------------------------------------------------
 
 FORBIDDEN_FIELD_NAMES = {"streak", "racha", "success_run", "trailing_success_run"}
 
 
 @pytest.mark.invariant
-def test_i10_objective_state_no_tiene_campo_streak():
+def test_i10_objective_state_has_no_streak_field():
     names = {f.name for f in dataclasses.fields(ObjectiveState)}
     assert "streak" not in names
     assert not (names & FORBIDDEN_FIELD_NAMES)
 
 
 @pytest.mark.invariant
-def test_i10_grep_models_no_declara_streak_como_campo():
-    """Grep automatizado sobre core/models.py: ninguna línea declara un campo
-    llamado ``streak`` (``streak: <tipo>``). Mencionarlo en un docstring para
-    decir que NO existe está permitido; declararlo, no."""
+def test_i10_grep_models_does_not_declare_streak_as_a_field():
+    """Automated grep over core/models.py: no line declares a field named
+    ``streak`` (``streak: <type>``). Mentioning it in a docstring to say it does
+    NOT exist is allowed; declaring it is not."""
     source = Path(__file__).resolve().parent.parent / "core" / "models.py"
     text = source.read_text(encoding="utf-8")
     field_decl = re.compile(r"^\s*\w*streak\w*\s*:", re.IGNORECASE | re.MULTILINE)
-    assert field_decl.search(text) is None, "core/models.py declara un campo streak"
+    assert field_decl.search(text) is None, "core/models.py declares a streak field"
 
 
 @pytest.mark.invariant
-def test_i10_fila_5_de_la_spec_es_indistinguible_de_nada_solo_con_racha():
-    """El fallo 1 de §8, demostrado: la racha de la fila 5 es 0 y la de la fila
-    4 es 1, pero el estado expone total_attempts, recent_window y score."""
+def test_i10_row_5_of_the_spec_is_indistinguishable_from_nothing_with_only_a_run():
+    """Failure 1 of section 8, demonstrated: the run of row 5 is 0 and that of
+    row 4 is 1, but the state exposes total_attempts, recent_window and score."""
     history = daily("FFFCF")
     assert trailing_success_run(history[:4]) == 1
     assert trailing_success_run(history) == 0
@@ -348,7 +351,7 @@ def test_i10_fila_5_de_la_spec_es_indistinguible_de_nada_solo_con_racha():
 
 
 @pytest.mark.invariant
-def test_i3_determinismo_del_repaso():
+def test_i3_determinism_of_the_review():
     history = daily("FCCFCC")
     first = compute_next_review(history, Level.LEARNING)
     for _ in range(5):
