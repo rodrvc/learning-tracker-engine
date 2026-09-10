@@ -1,17 +1,18 @@
-"""Implementaciones concretas de persistencia y del reloj real.
+"""Concrete persistence implementations and the real clock.
 
-Está separado de ``core/`` a propósito: aquí vive todo lo que toca el mundo
-exterior (disco, reloj de sistema), de modo que la garantía I2 —``core/`` no
-consulta el reloj— sea verificable con un grep sobre ``core/`` sin falsos
-positivos.
+It is kept apart from ``core/`` on purpose: everything that touches the outside
+world (disk, system clock) lives here, so that guarantee I2 — ``core/`` does not
+read the clock — is verifiable with a grep over ``core/`` and no false
+positives.
 
-Implementaciones concretas, contra los ``Protocol`` de :mod:`core.storage`:
+Concrete implementations, against the ``Protocol`` types of
+:mod:`core.storage`:
 
-* :class:`InMemoryAttemptStore` / :class:`InMemoryProfileStore` (memoria).
-* :class:`JsonAttemptStore` / :class:`JsonProfileStore` (archivo JSON).
+* :class:`InMemoryAttemptStore` / :class:`InMemoryProfileStore` (memory).
+* :class:`JsonAttemptStore` / :class:`JsonProfileStore` (JSON file).
 
-Ambos backends comparten las reglas de contrato en :mod:`store._common`, así
-que se comportan igual: la suite de tests corre contra los dos.
+Both backends share the contract rules in :mod:`store._common`, so they behave
+the same: the test suite runs against both.
 """
 
 from __future__ import annotations
@@ -23,14 +24,14 @@ from .memory import InMemoryAttemptStore, InMemoryProfileStore
 
 
 class SystemClock:
-    """El reloj real. La **única** puerta al tiempo del sistema.
+    """The real clock. The **only** door to system time.
 
-    Vive aquí y no en ``core/`` para que sea imposible usarlo por accidente
-    desde el motor. En producción se inyecta esta clase; en tests, un
+    It lives here and not in ``core/`` so that using it from the engine by
+    accident is impossible. In production this class is injected; in tests, a
     :class:`~core.clock.FixedClock`.
 
     Args:
-        tz: zona horaria de los instantes devueltos. UTC por defecto.
+        tz: timezone of the instants returned. UTC by default.
     """
 
     def __init__(self, tz: tzinfo = timezone.utc) -> None:
@@ -43,7 +44,7 @@ class SystemClock:
         return self._tz
 
     def now(self) -> datetime:
-        """El instante actual, aware, en la zona configurada."""
+        """The current instant, aware, in the configured timezone."""
         return datetime.now(self._tz)
 
     def __repr__(self) -> str:

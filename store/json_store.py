@@ -1,35 +1,38 @@
-"""Backend JSON en disco. Misma interfaz y mismas reglas que el de memoria.
+"""JSON backend on disk. Same interface and same rules as the in-memory one.
 
-Un archivo por store. Cada operación lee el archivo entero y, si escribe, lo
-reemplaza de forma atómica (archivo temporal en el mismo directorio +
-``os.replace``): o el intento queda escrito y legible, o se lanza
-:class:`~core.errors.StorageError` y el archivo anterior queda intacto
-(SPEC I8). No hay caché en memoria: el archivo **es** el estado, lo que hace
-trivial el argumento de reconstrucción (SPEC I6).
+One file per store. Every operation reads the whole file and, when it writes,
+replaces it atomically (temporary file in the same directory + ``os.replace``):
+either the attempt ends up written and readable, or
+:class:`~core.errors.StorageError` is raised and the previous file is left
+intact (SPEC I8). There is no in-memory cache: the file **is** the state, which
+makes the rebuild argument trivial (SPEC I6).
 
-Los intentos se guardan como una lista plana en orden de llegada; el orden
-canónico se impone al leer (SPEC C4), nunca al escribir.
+Attempts are stored as a flat list in arrival order; the canonical order is
+imposed on read (SPEC C4), never on write.
 
-Concurrencia entre procesos
----------------------------
+Concurrency between processes
+-----------------------------
 
-Toda escritura es una secuencia leer-modificar-reescribir del archivo entero.
-Sin exclusión, dos procesos que escriben a la vez (dos CLIs, un bot y una
-CLI) pueden leer el mismo estado y el segundo ``os.replace`` pisa al primero:
-se pierde un intento sin excepción, una violación silenciosa de I8. Por eso
-cada escritura toma un ``fcntl.flock`` **exclusivo** sobre un archivo sidecar
-vacío ``<nombre>.lock`` junto al JSON, durante toda la secuencia.
+Every write is a read-modify-rewrite sequence over the whole file. Without
+exclusion, two processes writing at the same time (two CLIs, a bot and a CLI)
+can read the same state and the second ``os.replace`` overwrites the first: an
+attempt is lost with no exception, a silent violation of I8. That is why every
+write takes an **exclusive** ``fcntl.flock`` over an empty sidecar file
+``<name>.lock`` next to the JSON, for the whole sequence.
 
-* Garantía: un solo escritor a la vez por archivo, dentro del mismo host. El
-  segundo escritor **espera** (no falla) hasta que el primero suelta el lock.
-  Si el lock no se puede obtener (permisos, descriptor cerrado...) se lanza
-  :class:`~core.errors.StorageError`, nunca silencio.
-* Las lecturas puras no toman el lock: ``os.replace`` es atómico, así que un
-  lector ve o el archivo anterior o el nuevo, nunca una mezcla.
-* Limitación: ``flock`` no es fiable en sistemas de archivos de red (NFS,
-  SMB) ni entre hosts distintos. Ahí no hay garantía de exclusión.
-* El ``.lock`` es un archivo adicional y vacío; el formato del JSON no cambia
-  y borrarlo es inocuo (se recrea en la siguiente escritura).
+* Guarantee: a single writer at a time per file, within the same host. The
+  second writer **waits** (it does not fail) until the first one releases the
+  lock. If the lock cannot be acquired (permissions, closed descriptor...)
+  :class:`~core.errors.StorageError` is raised, never silence.
+* Pure reads do not take the lock: ``os.replace`` is atomic, so a reader sees
+  either the previous file or the new one, never a mixture.
+* Limitation: ``flock`` is not reliable on network file systems (NFS, SMB) nor
+  across different hosts. There is no exclusion guarantee there.
+* The ``.lock`` is an extra, empty file; the JSON format does not change and
+  deleting it is harmless (it is recreated on the next write).
+
+Exception message texts stay in Spanish: they can reach the user through the
+CLI.
 """
 
 from __future__ import annotations
@@ -62,7 +65,7 @@ from ._common import (
 _FORMAT_VERSION = 1
 
 
-# ------------------------------------------------------------------ (de)serialización
+# --------------------------------------------------------------- (de)serialization
 
 
 def _dt_to_json(moment: datetime | None) -> str | None:
@@ -122,21 +125,21 @@ def _profile_from_json(data: dict[str, Any]) -> Profile:
     )
 
 
-# ------------------------------------------------------------------ archivo
+# ------------------------------------------------------------------------- file
 
 
 def lock_path_for(path: Path) -> Path:
-    """Ruta del sidecar de bloqueo: ``<nombre>.lock`` junto al JSON."""
+    """Path of the lock sidecar: ``<name>.lock`` next to the JSON."""
     return path.with_name(path.name + ".lock")
 
 
 @contextmanager
 def _exclusive_lock(path: Path) -> Iterator[None]:
-    """Bloqueo exclusivo entre procesos para escribir ``path``.
+    """Exclusive lock between processes to write ``path``.
 
-    Envuelve la secuencia completa leer-modificar-reescribir. Bloquea (espera)
-    si otro proceso ya lo tiene. Cualquier fallo al abrir el sidecar o al
-    tomar el lock se convierte en :class:`StorageError` (SPEC I8).
+    It wraps the complete read-modify-rewrite sequence. It blocks (waits) when
+    another process already holds it. Any failure opening the sidecar or taking
+    the lock is turned into :class:`StorageError` (SPEC I8).
     """
     lock_path = lock_path_for(path)
     try:
@@ -153,12 +156,12 @@ def _exclusive_lock(path: Path) -> Iterator[None]:
             ) from exc
         yield
     finally:
-        # Cerrar el descriptor libera el flock aunque LOCK_UN fallara.
+        # Closing the descriptor releases the flock even if LOCK_UN failed.
         os.close(fd)
 
 
 def _read_document(path: Path, root_key: str) -> list[dict[str, Any]]:
-    """Lee el archivo. Si no existe, el store está vacío (no es un error)."""
+    """Reads the file. If it does not exist, the store is empty (not an error)."""
     if not path.exists():
         return []
     try:
@@ -172,7 +175,7 @@ def _read_document(path: Path, root_key: str) -> list[dict[str, Any]]:
 
 
 def _write_document(path: Path, root_key: str, rows: list[dict[str, Any]]) -> None:
-    """Escritura atómica: temporal en el mismo directorio y ``os.replace``."""
+    """Atomic write: a temporary in the same directory plus ``os.replace``."""
     document = {"version": _FORMAT_VERSION, root_key: rows}
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -195,14 +198,14 @@ def _write_document(path: Path, root_key: str, rows: list[dict[str, Any]]) -> No
         raise StorageError(f"no se pudo escribir {path}: {exc}") from exc
 
 
-# ------------------------------------------------------------------ stores
+# ----------------------------------------------------------------------- stores
 
 
 class JsonAttemptStore:
-    """``AttemptStore`` sobre un archivo JSON. Solo añade y lee (SPEC I1).
+    """``AttemptStore`` over a JSON file. It only appends and reads (SPEC I1).
 
     Args:
-        path: archivo donde viven los intentos. Se crea al primer ``append``.
+        path: file the attempts live in. It is created on the first ``append``.
     """
 
     ROOT_KEY = "attempts"
@@ -218,7 +221,7 @@ class JsonAttemptStore:
         return [_attempt_from_json(d) for d in _read_document(self._path, self.ROOT_KEY)]
 
     def append(self, profile_id: str, attempt: Attempt) -> Attempt:
-        """Persiste un intento. Ver :meth:`core.storage.AttemptStore.append`."""
+        """Persists an attempt. See :meth:`core.storage.AttemptStore.append`."""
         with _exclusive_lock(self._path):
             raw_rows = _read_document(self._path, self.ROOT_KEY)
             existing = {d["attempt_id"] for d in raw_rows}
@@ -230,7 +233,7 @@ class JsonAttemptStore:
     def list_for_objective(
         self, profile_id: str, objective_id: str, until: datetime | None = None
     ) -> list[Attempt]:
-        """Intentos de un objetivo, ordenados por ``at`` y ``attempt_id``."""
+        """Attempts of an objective, sorted by ``at`` and ``attempt_id``."""
         return sort_attempts(
             filter_attempts(self._rows(), profile_id, objective_id, until)
         )
@@ -238,15 +241,15 @@ class JsonAttemptStore:
     def list_all(
         self, profile_id: str, until: datetime | None = None
     ) -> list[Attempt]:
-        """Todos los intentos del perfil, ordenados, con corte opcional."""
+        """Every attempt of the profile, sorted, with an optional cut."""
         return sort_attempts(filter_attempts(self._rows(), profile_id, None, until))
 
     def count(self, profile_id: str, objective_id: str | None = None) -> int:
-        """Número de intentos del perfil (o del objetivo, si se indica)."""
+        """Number of attempts of the profile (or of the objective, when given)."""
         return len(filter_attempts(self._rows(), profile_id, objective_id))
 
     def exists(self, attempt_id: str) -> bool:
-        """Si ya hay un intento con ese id, en cualquier perfil."""
+        """Whether an attempt with that id already exists, in any profile."""
         return any(
             d["attempt_id"] == attempt_id
             for d in _read_document(self._path, self.ROOT_KEY)
@@ -254,10 +257,10 @@ class JsonAttemptStore:
 
 
 class JsonProfileStore:
-    """``ProfileStore`` sobre un archivo JSON.
+    """``ProfileStore`` over a JSON file.
 
     Args:
-        path: archivo donde viven los perfiles y sus objetivos.
+        path: file the profiles and their objectives live in.
     """
 
     ROOT_KEY = "profiles"
@@ -283,14 +286,14 @@ class JsonProfileStore:
         )
 
     def get_profile(self, profile_id: str) -> Profile:
-        """Devuelve el perfil o lanza ``UnknownProfileError``."""
+        """Returns the profile or raises ``UnknownProfileError``."""
         try:
             return self._load()[profile_id]
         except KeyError:
             raise UnknownProfileError(profile_id) from None
 
     def save_profile(self, profile: Profile) -> Profile:
-        """Crea o reemplaza un perfil completo, objetivos incluidos."""
+        """Creates or replaces a whole profile, objectives included."""
         validate_profile(profile)
         with _exclusive_lock(self._path):
             profiles = self._load()
@@ -299,12 +302,12 @@ class JsonProfileStore:
         return profile
 
     def list_profiles(self) -> list[Profile]:
-        """Todos los perfiles, ordenados por ``profile_id``."""
+        """Every profile, sorted by ``profile_id``."""
         profiles = self._load()
         return [profiles[k] for k in sorted(profiles)]
 
     def get_objective(self, profile_id: str, objective_id: str) -> Objective:
-        """Un objetivo del perfil. Falla ruidosamente si no existe (SPEC C8)."""
+        """One objective of the profile. It fails loudly when missing (SPEC C8)."""
         profile = self.get_profile(profile_id)
         try:
             return profile.objectives[objective_id]
@@ -312,17 +315,17 @@ class JsonProfileStore:
             raise UnknownObjectiveError(f"{profile_id}/{objective_id}") from None
 
     def list_objectives(self, profile_id: str) -> list[Objective]:
-        """Objetivos del perfil, ordenados por ``objective_id``."""
+        """Objectives of the profile, sorted by ``objective_id``."""
         objectives = self.get_profile(profile_id).objectives
         return [objectives[k] for k in sorted(objectives)]
 
     def upsert_objectives(
         self, profile_id: str, objectives: Iterable[Objective]
     ) -> int:
-        """Añade o reemplaza objetivos del perfil. Devuelve cuántos escribió.
+        """Adds or replaces objectives of the profile. Returns how many it wrote.
 
-        La fusión vive en :func:`store._common.merge_objectives`, compartida
-        con el backend en memoria.
+        The merge lives in :func:`store._common.merge_objectives`, shared with
+        the in-memory backend.
         """
         with _exclusive_lock(self._path):
             profiles = self._load()

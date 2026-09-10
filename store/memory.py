@@ -1,10 +1,10 @@
-"""Backend en memoria. La implementación de referencia de los ``Protocol``.
+"""In-memory backend. The reference implementation of the ``Protocol`` types.
 
-No persiste nada entre procesos: sirve para tests, para el bot de verificación
-y como espejo contra el que se comprueba cualquier otro backend. Toda la lógica
-de contrato (orden, corte, duplicados, aislamiento entre perfiles) vive en
-:mod:`store._common` y se comparte con el backend JSON, de modo que ambos se
-comportan exactamente igual.
+It persists nothing across processes: it serves the tests, the verification bot,
+and acts as the mirror any other backend is checked against. All the contract
+logic (order, cut, duplicates, isolation between profiles) lives in
+:mod:`store._common` and is shared with the JSON backend, so both behave exactly
+the same.
 """
 
 from __future__ import annotations
@@ -25,19 +25,19 @@ from ._common import (
 
 
 class InMemoryAttemptStore:
-    """``AttemptStore`` en memoria. Solo añade y lee (SPEC I1).
+    """In-memory ``AttemptStore``. It only appends and reads (SPEC I1).
 
-    Fíjese en lo que **no** hay: ningún ``update``, ``remove`` ni ``clear``.
-    La ausencia es la garantía.
+    Note what is **not** here: no ``update``, no ``remove``, no ``clear``. The
+    absence is the guarantee.
     """
 
     def __init__(self) -> None:
-        # attempt_id -> (profile_id, attempt). Un solo índice global por id,
-        # para que C9 (duplicado) se detecte entre perfiles.
+        # attempt_id -> (profile_id, attempt). A single global index by id, so
+        # that C9 (duplicate) is detected across profiles.
         self._by_id: dict[str, tuple[str, Attempt]] = {}
 
     def append(self, profile_id: str, attempt: Attempt) -> Attempt:
-        """Persiste un intento. Ver :meth:`core.storage.AttemptStore.append`."""
+        """Persists an attempt. See :meth:`core.storage.AttemptStore.append`."""
         validate_attempt(profile_id, attempt, self._by_id)
         self._by_id[attempt.attempt_id] = (profile_id, attempt)
         return attempt
@@ -45,7 +45,7 @@ class InMemoryAttemptStore:
     def list_for_objective(
         self, profile_id: str, objective_id: str, until: datetime | None = None
     ) -> list[Attempt]:
-        """Intentos de un objetivo, ordenados por ``at`` y ``attempt_id``."""
+        """Attempts of an objective, sorted by ``at`` and ``attempt_id``."""
         return sort_attempts(
             filter_attempts(self._by_id.values(), profile_id, objective_id, until)
         )
@@ -53,47 +53,47 @@ class InMemoryAttemptStore:
     def list_all(
         self, profile_id: str, until: datetime | None = None
     ) -> list[Attempt]:
-        """Todos los intentos del perfil, ordenados, con corte opcional."""
+        """Every attempt of the profile, sorted, with an optional cut."""
         return sort_attempts(
             filter_attempts(self._by_id.values(), profile_id, None, until)
         )
 
     def count(self, profile_id: str, objective_id: str | None = None) -> int:
-        """Número de intentos del perfil (o del objetivo, si se indica)."""
+        """Number of attempts of the profile (or of the objective, when given)."""
         return sum(
             1 for _ in filter_attempts(self._by_id.values(), profile_id, objective_id)
         )
 
     def exists(self, attempt_id: str) -> bool:
-        """Si ya hay un intento con ese id, en cualquier perfil."""
+        """Whether an attempt with that id already exists, in any profile."""
         return attempt_id in self._by_id
 
 
 class InMemoryProfileStore:
-    """``ProfileStore`` en memoria."""
+    """In-memory ``ProfileStore``."""
 
     def __init__(self) -> None:
         self._profiles: dict[str, Profile] = {}
 
     def get_profile(self, profile_id: str) -> Profile:
-        """Devuelve el perfil o lanza ``UnknownProfileError``."""
+        """Returns the profile or raises ``UnknownProfileError``."""
         try:
             return self._profiles[profile_id]
         except KeyError:
             raise UnknownProfileError(profile_id) from None
 
     def save_profile(self, profile: Profile) -> Profile:
-        """Crea o reemplaza un perfil completo, objetivos incluidos."""
+        """Creates or replaces a whole profile, objectives included."""
         validate_profile(profile)
         self._profiles[profile.profile_id] = profile
         return profile
 
     def list_profiles(self) -> list[Profile]:
-        """Todos los perfiles, ordenados por ``profile_id``."""
+        """Every profile, sorted by ``profile_id``."""
         return [self._profiles[k] for k in sorted(self._profiles)]
 
     def get_objective(self, profile_id: str, objective_id: str) -> Objective:
-        """Un objetivo del perfil. Falla ruidosamente si no existe (SPEC C8)."""
+        """One objective of the profile. It fails loudly when missing (SPEC C8)."""
         profile = self.get_profile(profile_id)
         try:
             return profile.objectives[objective_id]
@@ -101,17 +101,17 @@ class InMemoryProfileStore:
             raise UnknownObjectiveError(f"{profile_id}/{objective_id}") from None
 
     def list_objectives(self, profile_id: str) -> list[Objective]:
-        """Objetivos del perfil, ordenados por ``objective_id``."""
+        """Objectives of the profile, sorted by ``objective_id``."""
         objectives = self.get_profile(profile_id).objectives
         return [objectives[k] for k in sorted(objectives)]
 
     def upsert_objectives(
         self, profile_id: str, objectives: Iterable[Objective]
     ) -> int:
-        """Añade o reemplaza objetivos del perfil. Devuelve cuántos escribió.
+        """Adds or replaces objectives of the profile. Returns how many it wrote.
 
-        La fusión vive en :func:`store._common.merge_objectives`, compartida
-        con el backend JSON.
+        The merge lives in :func:`store._common.merge_objectives`, shared with
+        the JSON backend.
         """
         profile = self.get_profile(profile_id)
         self._profiles[profile_id], written = merge_objectives(profile, objectives)
