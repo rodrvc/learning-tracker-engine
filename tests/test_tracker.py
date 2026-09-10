@@ -1,14 +1,15 @@
-"""Tests de ``core/tracker.py`` contra SPEC.md §5, §9.4, §9.5, §6 y §7.
+"""Tests of ``core/tracker.py`` against SPEC.md sections 5, 9.4, 9.5, 6 and 7.
 
-Convenciones:
+Conventions:
 
-* ``spec``: contrato de cada método de la tabla §9.4 y de §9.5.
-* ``invariant``: I4 (derivación total), I5 (monotonía del corte), I6
-  (reconstrucción), I8 (registro verificable), I9 (consistencia por conteo).
+* ``spec``: contract of each method of the table in section 9.4, and of
+  section 9.5.
+* ``invariant``: I4 (full derivation), I5 (monotonicity of the cut), I6
+  (rebuild), I8 (verifiable recording), I9 (consistency by count).
 * ``edge``: C4, C6, C7, C8, C9.
 
-Todo corre sobre ``InMemory*`` con ``FixedClock`` / ``OffsetClock``: la fecha
-nunca depende de cuándo se ejecuta la suite (I2).
+Everything runs over ``InMemory*`` with ``FixedClock`` / ``OffsetClock``: the
+date never depends on when the suite is run (I2).
 """
 
 from __future__ import annotations
@@ -51,7 +52,7 @@ ALL_OBJECTIVES = (O1, O2, O3, O4)
 
 
 def d(n: int) -> datetime:
-    """``T0 + n`` días."""
+    """``T0 + n`` days."""
     return T0 + DAY * n
 
 
@@ -91,7 +92,7 @@ def tracker(profiles, attempts, clock) -> LearningTracker:
 
 @pytest.mark.spec
 def test_clock_property_is_the_injected_clock(profiles, attempts, clock):
-    """§9.4 / I2: ``tracker.clock`` es exactamente el ``Clock`` inyectado."""
+    """Section 9.4 / I2: ``tracker.clock`` is exactly the injected ``Clock``."""
     tracker = LearningTracker(PID, profiles, attempts, clock)
     assert tracker.clock is clock
     assert tracker.clock.now() == d(10)
@@ -102,7 +103,7 @@ def test_clock_property_is_the_injected_clock(profiles, attempts, clock):
 
 @pytest.mark.spec
 def test_record_attempt_returns_persisted_attempt_from_store(tracker, attempts):
-    """§9.4 / I8: devuelve el Attempt tal como quedó en el store, con su id."""
+    """Section 9.4 / I8: it returns the Attempt as stored, with its id."""
     written = tracker.record_attempt(
         O1, correct=True, at=d(0), kind=AttemptKind.LAB, confidence=0.5, note="n",
         attempt_id="x1",
@@ -128,7 +129,7 @@ def test_record_attempt_generates_unique_ids_when_none(tracker):
 
 @pytest.mark.spec
 def test_record_attempt_stamps_recorded_at_from_injected_clock(tracker, clock):
-    """``recorded_at`` sale del Clock inyectado, nunca del sistema (I2)."""
+    """``recorded_at`` comes from the injected Clock, never from the system (I2)."""
     written = tracker.record_attempt(O1, correct=True, at=d(0))
     assert written.recorded_at == clock.now()
 
@@ -165,7 +166,7 @@ def test_c9_duplicate_attempt_id_raises_and_keeps_single_copy(tracker, attempts)
 
 
 class _FailingAppendStore(InMemoryAttemptStore):
-    """Store cuya escritura falla siempre: simula un disco roto."""
+    """Store whose write always fails: it simulates a broken disk."""
 
     def append(self, profile_id, attempt):
         raise StorageError("disco lleno")
@@ -183,7 +184,7 @@ def test_i8_failed_write_propagates_and_records_nothing(profiles, clock):
 
 
 class _SilentStore(InMemoryAttemptStore):
-    """Store que "acepta" y no escribe: el tracker no debe disimularlo."""
+    """Store that "accepts" and does not write: the tracker must not paper over it."""
 
     def append(self, profile_id, attempt):
         return None
@@ -191,7 +192,7 @@ class _SilentStore(InMemoryAttemptStore):
 
 @pytest.mark.invariant
 def test_i8_record_attempt_returns_exactly_what_store_returned(profiles, clock):
-    """El tracker no fabrica un éxito: devuelve lo que el store devolvió."""
+    """The tracker does not fabricate a success: it returns what the store returned."""
     silent = _SilentStore()
     tracker = LearningTracker(PID, profiles, silent, clock)
     assert tracker.record_attempt(O1, correct=True, at=d(0)) is None
@@ -221,11 +222,11 @@ def test_record_series_unknown_objective_raises(tracker):
 
 @pytest.mark.spec
 def test_session_returns_working_session_recorder(tracker, attempts):
-    """§9.6: ``session()`` devuelve un ``SessionRecorder`` real y funcional.
+    """Section 9.6: ``session()`` returns a real, working ``SessionRecorder``.
 
-    Los internos del recorder se prueban en ``test_session.py``; aquí solo que
-    la factoría del tracker entrega el objeto correcto, con el id pedido y
-    ``started_at`` tomado del reloj del tracker.
+    The internals of the recorder are tested in ``test_session.py``; here only
+    that the tracker factory hands back the right object, with the requested id
+    and ``started_at`` taken from the tracker's clock.
     """
     recorder = tracker.session("s-1")
     assert isinstance(recorder, SessionRecorder)
@@ -258,7 +259,7 @@ def test_get_level_unknown_objective_raises(tracker):
 
 @pytest.mark.spec
 def test_get_level_without_attempts_is_unassessed_not_error(tracker):
-    """C1: existe pero sin intentos → UNASSESSED."""
+    """C1: it exists but has no attempts -> UNASSESSED."""
     assert tracker.get_level(O1) is Level.UNASSESSED
     state = tracker.get_state(O1)
     assert state.total_attempts == 0
@@ -274,7 +275,7 @@ def test_get_level_matches_get_state_level(tracker):
 
 @pytest.mark.spec
 def test_as_of_none_uses_injected_clock_now(profiles, attempts):
-    """§9.4: ``as_of=None`` significa ``clock.now()``; con FixedClock es fijo."""
+    """Section 9.4: ``as_of=None`` means ``clock.now()``; with FixedClock it is fixed."""
     tracker = LearningTracker(PID, profiles, attempts, FixedClock(d(3)))
     tracker.record_series(O1, [True, True, True, True], start=d(0))
     assert tracker.get_state(O1).as_of == d(3)
@@ -299,7 +300,7 @@ def test_offset_clock_moves_the_default_as_of(profiles, attempts):
 
 @pytest.mark.invariant
 def test_i4_get_state_is_compute_state_over_store_contents(tracker, attempts):
-    """I4: el tracker envuelve ``compute_state``; no calcula nada aparte."""
+    """I4: the tracker wraps ``compute_state``; it computes nothing of its own."""
     tracker.record_series(O1, [False, True, True, False, True], start=d(0))
     for as_of in (d(-1), d(0), d(2), d(4), d(40)):
         expected = compute_state(
@@ -311,7 +312,7 @@ def test_i4_get_state_is_compute_state_over_store_contents(tracker, attempts):
 
 @pytest.mark.invariant
 def test_i4_state_has_no_streak_field(tracker):
-    """I10 de rebote: el estado que devuelve el tracker no expone racha."""
+    """I10 by rebound: the state the tracker returns exposes no run."""
     tracker.record_series(O1, [True, True], start=d(0))
     assert not hasattr(tracker.get_state(O1), "streak")
 
@@ -321,7 +322,7 @@ def test_i4_state_has_no_streak_field(tracker):
 
 @pytest.mark.spec
 def test_get_state_at_ignores_attempts_after_as_of(tracker):
-    """§5.1: todo intento con ``at > as_of`` se ignora."""
+    """Section 5.1: every attempt with ``at > as_of`` is ignored."""
     tracker.record_series(O1, [True, True, False, False], start=d(0))
     assert tracker.get_state_at(O1, d(1)).total_attempts == 2
     assert tracker.get_state_at(O1, d(1)).level is Level.COMPETENT
@@ -330,7 +331,7 @@ def test_get_state_at_ignores_attempts_after_as_of(tracker):
 
 @pytest.mark.spec
 def test_get_state_at_does_not_change_when_later_attempts_arrive(tracker):
-    """§5.1: reproducibilidad histórica — lo pasado no se reescribe."""
+    """Section 5.1: historical reproducibility - the past is not rewritten."""
     tracker.record_series(O1, [True, True], start=d(0))
     before = tracker.get_state_at(O1, d(1))
     tracker.record_series(O1, [False] * 5, start=d(2))
@@ -339,7 +340,7 @@ def test_get_state_at_does_not_change_when_later_attempts_arrive(tracker):
 
 @pytest.mark.spec
 def test_get_state_at_is_insensitive_to_write_order(profiles, clock):
-    """§5.1: registrar en cualquier orden da los mismos estados."""
+    """Section 5.1: recording in any order gives the same states."""
     series = [(d(i), r) for i, r in enumerate([False, True, True, False, True])]
 
     def build(order):
@@ -358,10 +359,10 @@ def test_get_state_at_is_insensitive_to_write_order(profiles, clock):
 
 @pytest.mark.edge
 def test_c4_late_insertion_changes_state_on_that_date_but_not_before(profiles, attempts):
-    """C4: insertar con ``at`` antiguo y ``recorded_at`` reciente.
+    """C4: inserting with an old ``at`` and a recent ``recorded_at``.
 
-    El estado en ``día 4`` cambia (se añadió información sobre el pasado) y
-    eso es correcto; los estados anteriores a ``at`` no cambian.
+    The state on ``day 4`` changes (information about the past was added) and
+    that is correct; the states earlier than ``at`` do not change.
     """
     tracker = LearningTracker(PID, profiles, attempts, FixedClock(d(0)))
     tracker.record_attempt(O1, correct=True, at=d(1), attempt_id="d1")
@@ -381,11 +382,11 @@ def test_c4_late_insertion_changes_state_on_that_date_but_not_before(profiles, a
     assert after_day4.total_attempts == 2
     assert after_day4.level is Level.COMPETENT
     assert after_day4 != before_day4
-    # Anterior a at=d(3): nada cambia.
+    # Earlier than at=d(3): nothing changes.
     assert tracker.get_state_at(O1, d(2)) == before_day2
     assert tracker.get_state_at(O1, d(0)) == before_day0
-    # El corte es por at, nunca por recorded_at: el intento con recorded_at
-    # d(100) cuenta en d(4).
+    # The cut is by at, never by recorded_at: the attempt with recorded_at
+    # d(100) counts on d(4).
     assert tracker.get_state_at(O1, d(4)).last_attempt_at == d(3)
 
 
@@ -414,7 +415,8 @@ def test_c7_as_of_in_the_future_applies_decay(tracker):
 
 @pytest.mark.invariant
 def test_i5_attempt_set_is_monotone_in_as_of_but_level_is_not(tracker, attempts):
-    """I5: t1 <= t2 ⇒ intentos(t1) ⊆ intentos(t2). El nivel no es monótono."""
+    """I5: t1 <= t2 implies attempts(t1) is a subset of attempts(t2). The level
+    is not monotone."""
     tracker.record_series(O1, [True, True, False, False, False], start=d(0))
     cuts = [d(n) for n in range(-1, 8)]
     for t1, t2 in zip(cuts, cuts[1:]):
@@ -423,7 +425,7 @@ def test_i5_attempt_set_is_monotone_in_as_of_but_level_is_not(tracker, attempts)
         assert ids1 <= ids2
         s1, s2 = tracker.get_state_at(O1, t1), tracker.get_state_at(O1, t2)
         assert s1.total_attempts <= s2.total_attempts
-    # Nivel NO monótono: COMPETENT en d(1), WEAK en d(2) tras el fallo.
+    # Level NOT monotone: COMPETENT on d(1), WEAK on d(2) after the miss.
     assert tracker.get_level(O1, d(1)) is Level.COMPETENT
     assert tracker.get_level(O1, d(2)) is Level.WEAK
     assert tracker.get_level(O1, d(2)) < tracker.get_level(O1, d(1))
@@ -449,14 +451,14 @@ def test_get_all_states_covers_every_objective_ordered_by_id(tracker):
 
 @pytest.mark.spec
 def test_get_due_orders_most_overdue_first_then_score_then_id(tracker):
-    """§5.2: vencido mayor primero; empate → score menor; empate → id asc."""
-    # O2: next_review = d(2) + 1 = d(3)  (run de aciertos 0 → 1 día)
+    """Section 5.2: most overdue first; tie -> lower score; tie -> id ascending."""
+    # O2: next_review = d(2) + 1 = d(3)  (hit run 0 -> 1 day)
     tracker.record_series(O2, [True, True, False], start=d(0))
-    # O1: next_review = d(1) + 3 = d(4); score alto
+    # O1: next_review = d(1) + 3 = d(4); high score
     tracker.record_series(O1, [True, True], start=d(0))
-    # O3: next_review = d(1) + 3 = d(4); score más bajo que O1 (dos fallos)
+    # O3: next_review = d(1) + 3 = d(4); lower score than O1 (two misses)
     tracker.record_series(O3, [False, False, True, True], start=d(-2))
-    # O4: sin intentos → nunca vencido
+    # O4: no attempts -> never due
     as_of = d(20)
     due = tracker.get_due(as_of)
     assert [s.objective_id for s in due] == [O2, O3, O1]
@@ -496,7 +498,7 @@ def test_get_due_respects_limit_and_default_clock(tracker):
 def test_get_unstarted_lists_objectives_without_attempts_until_as_of(tracker):
     tracker.record_series(O1, [True], start=d(5))
     assert [s.objective_id for s in tracker.get_unstarted(d(6))] == [O2, O3, O4]
-    # Antes del primer intento de O1, también O1 está sin empezar (C6).
+    # Before the first attempt of O1, O1 is unstarted too (C6).
     assert [s.objective_id for s in tracker.get_unstarted(d(4))] == list(sorted(ALL_OBJECTIVES))
     assert all(s.level is Level.UNASSESSED for s in tracker.get_unstarted())
 
@@ -511,13 +513,13 @@ def test_get_stale_uses_default_stale_days_and_excludes_unstarted(tracker):
     tracker.record_series(O2, [True], start=d(10))
     at = d(DEFAULT_STALE_DAYS + 1)
     assert [s.objective_id for s in tracker.get_stale(at)] == [O1]
-    # Exactamente en el umbral no es stale (estrictamente mayor).
+    # Exactly at the threshold is not stale (strictly greater).
     assert tracker.get_stale(d(DEFAULT_STALE_DAYS)) == []
-    # Con as_of anterior a la segunda actividad de O2, O2 también es stale:
-    # el corte es por at (§5.1).
+    # With an as_of earlier than the second activity of O2, O2 is stale too:
+    # the cut is by at (section 5.1).
     assert [s.objective_id for s in tracker.get_stale(d(DEFAULT_STALE_DAYS + 1), days=5)] == [O1]
     assert [s.objective_id for s in tracker.get_stale(d(9), days=5)] == [O1, O2]
-    # Los sin intentos nunca aparecen aquí: van en get_unstarted.
+    # The ones without attempts never show up here: they go in get_unstarted.
     assert O3 not in {s.objective_id for s in tracker.get_stale(d(500))}
 
 
@@ -577,7 +579,7 @@ def test_compare_states_detects_improvement(tracker):
 
 @pytest.mark.spec
 def test_compare_states_detects_regression_two_weeks_ago(tracker):
-    """La pregunta del usuario: ¿hace dos semanas estaba mejor?"""
+    """The user's question: was I better two weeks ago?"""
     tracker.record_series(O1, [True, True], start=d(0))
     today = d(15)
     cmp = tracker.compare_states(O1, earlier=today - DAY * 14, later=today)
@@ -663,7 +665,7 @@ def test_check_consistency_ok_on_healthy_store(tracker):
 
 @pytest.mark.spec
 def test_check_consistency_reports_numbers_on_both_sides(tracker):
-    """§9.5: cada check lleva expected y actual numéricos, no conjuntos."""
+    """Section 9.5: every check carries numeric expected and actual, not sets."""
     tracker.record_series(O1, [True, True], start=d(0))
     for check in tracker.check_consistency().checks:
         assert isinstance(check.expected, (int, float))
@@ -673,7 +675,7 @@ def test_check_consistency_reports_numbers_on_both_sides(tracker):
 
 @pytest.mark.spec
 def test_check_consistency_not_ok_with_zero_objectives(profiles, attempts, clock):
-    """Un reporte vacío no es verde: ok exige objectives_checked >= 1."""
+    """An empty report is not green: ok demands objectives_checked >= 1."""
     profiles.save_profile(Profile(profile_id="empty", name="e"))
     report = LearningTracker("empty", profiles, attempts, clock).check_consistency()
     assert report.objectives_checked == 0
@@ -682,7 +684,7 @@ def test_check_consistency_not_ok_with_zero_objectives(profiles, attempts, clock
 
 
 class _DuplicatingListStore(InMemoryAttemptStore):
-    """Store corrupto: ``list_all`` devuelve un intento dos veces."""
+    """Corrupt store: ``list_all`` returns one attempt twice."""
 
     def list_all(self, profile_id, until=None):
         listed = super().list_all(profile_id, until)
@@ -690,7 +692,7 @@ class _DuplicatingListStore(InMemoryAttemptStore):
 
 
 class _LyingCountStore(InMemoryAttemptStore):
-    """Store corrupto: ``count`` devuelve uno más de lo que hay."""
+    """Corrupt store: ``count`` returns one more than there is."""
 
     def count(self, profile_id, objective_id=None):
         return super().count(profile_id, objective_id) + 1
@@ -704,7 +706,7 @@ def test_i9_detects_count_mismatch_from_duplicated_listing(profiles, clock):
     report = tracker.check_consistency()
     assert report.ok is False
     failed = {c.name for c in report.failures}
-    # Un comparador de conjuntos no vería nada: el duplicado es el mismo id.
+    # A set comparator would see nothing: the duplicate is the same id.
     assert "unique_attempt_ids" in failed
     assert "attempt_count" in failed or "profile_attempt_count" in failed
     dup = next(c for c in report.failures if c.name == "unique_attempt_ids")
@@ -727,7 +729,7 @@ def test_i9_detects_orphan_attempts(profiles, clock):
     store = InMemoryAttemptStore()
     tracker = LearningTracker(PID, profiles, store, clock)
     tracker.record_series(O1, [True], start=d(0))
-    # Escribir directamente en el store, saltándose C8 del tracker.
+    # Write straight into the store, bypassing the tracker's C8.
     store.append(PID, Attempt("orphan", "ghost", d(0), True))
     report = tracker.check_consistency()
     assert report.ok is False
@@ -751,7 +753,7 @@ def test_i6_rebuild_recomputes_every_objective_and_changes_nothing(tracker):
 
 @pytest.mark.invariant
 def test_i6_rebuild_after_dropping_a_cache_gives_identical_state(tracker):
-    """Si alguna implementación cacheara, borrar y recalcular es idéntico."""
+    """If some implementation cached, dropping and recomputing is identical."""
     tracker.record_series(O1, [True, True, False, True], start=d(0))
     snapshot = [tracker.get_state_at(O1, d(n)) for n in range(6)]
     for attr in list(vars(tracker)):
@@ -761,11 +763,11 @@ def test_i6_rebuild_after_dropping_a_cache_gives_identical_state(tracker):
     assert [tracker.get_state_at(O1, d(n)) for n in range(6)] == snapshot
 
 
-# ------------------------------------------------ rendimiento: una sola lectura
+# --------------------------------------------------- performance: a single read
 
 
 class _CountingStore(InMemoryAttemptStore):
-    """Cuenta las lecturas para verificar que las consultas agregadas leen una vez."""
+    """Counts the reads to verify that aggregate queries read only once."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -782,17 +784,17 @@ class _CountingStore(InMemoryAttemptStore):
 
 
 def _mixed_histories(tracker: LearningTracker) -> None:
-    """Varios historiales distintos; O4 queda sin intentos (C1)."""
+    """Several different histories; O4 is left without attempts (C1)."""
     tracker.record_series(O1, [False, False, False, True, False], start=d(0))
     tracker.record_series(O2, [True, True, True, True], start=d(2))
-    # O3 insertado fuera de orden (C4) y con un intento futuro a d(10).
+    # O3 inserted out of order (C4) and with a future attempt at d(10).
     tracker.record_attempt(O3, correct=True, at=d(5))
     tracker.record_attempt(O3, correct=False, at=d(1))
     tracker.record_attempt(O3, correct=True, at=d(12))
 
 
 @pytest.mark.spec
-def test_get_all_states_lee_el_store_una_sola_vez(profiles, clock):
+def test_get_all_states_reads_the_store_only_once(profiles, clock):
     store = _CountingStore()
     tracker = LearningTracker(PID, profiles, store, clock)
     _mixed_histories(tracker)
@@ -805,7 +807,7 @@ def test_get_all_states_lee_el_store_una_sola_vez(profiles, clock):
 
 
 @pytest.mark.spec
-def test_get_summary_lee_el_store_una_sola_vez(profiles, clock):
+def test_get_summary_reads_the_store_only_once(profiles, clock):
     store = _CountingStore()
     tracker = LearningTracker(PID, profiles, store, clock)
     _mixed_histories(tracker)
@@ -818,7 +820,7 @@ def test_get_summary_lee_el_store_una_sola_vez(profiles, clock):
 
 
 @pytest.mark.spec
-def test_get_due_unstarted_stale_no_leen_por_objetivo(profiles, clock):
+def test_get_due_unstarted_stale_do_not_read_per_objective(profiles, clock):
     store = _CountingStore()
     tracker = LearningTracker(PID, profiles, store, clock)
     _mixed_histories(tracker)
@@ -830,11 +832,12 @@ def test_get_due_unstarted_stale_no_leen_por_objetivo(profiles, clock):
 
 
 @pytest.mark.invariant
-def test_check_consistency_mantiene_dos_caminos_de_lectura(profiles, clock):
-    """I9: el lado recalculado NO sale de la misma list_all que el lado store.
+def test_check_consistency_keeps_two_read_paths(profiles, clock):
+    """I9: the recomputed side does NOT come from the same list_all as the
+    store side.
 
-    Si saliera, un list_all que duplica un intento cuadraria consigo mismo
-    (test_i9_detects_count_mismatch_from_duplicated_listing dejaria de fallar).
+    If it did, a list_all that duplicates an attempt would agree with itself
+    (test_i9_detects_count_mismatch_from_duplicated_listing would stop failing).
     """
     store = _CountingStore()
     tracker = LearningTracker(PID, profiles, store, clock)
@@ -844,18 +847,18 @@ def test_check_consistency_mantiene_dos_caminos_de_lectura(profiles, clock):
     report = tracker.check_consistency()
 
     assert report.ok
-    # Una lectura con corte (as_of) y otra sin corte para el check store_count.
+    # One read with a cut (as_of) and another without, for the store_count check.
     assert store.list_all_calls == 2
     assert store.list_for_objective_calls == len(ALL_OBJECTIVES)
 
 
 @pytest.mark.invariant
-def test_get_all_states_es_identico_a_get_state_por_objetivo(tracker):
+def test_get_all_states_is_identical_to_get_state_per_objective(tracker):
     _mixed_histories(tracker)
     for as_of in (d(0), d(3), d(6), d(10), d(20)):
         expected = [tracker.get_state(o, as_of) for o in ALL_OBJECTIVES]
         assert tracker.get_all_states(as_of) == expected
-    # O4 sigue apareciendo aunque no tenga intentos, con historial vacio.
+    # O4 still shows up even without attempts, with an empty history.
     states = tracker.get_all_states()
     assert [s.objective_id for s in states] == list(ALL_OBJECTIVES)
     assert states[-1].total_attempts == 0

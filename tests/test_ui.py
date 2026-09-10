@@ -1,15 +1,18 @@
-"""Tests de ``ui/`` (CLI) contra la API pública de ``LearningTracker``.
+"""Tests of ``ui/`` (the CLI) against the public API of ``LearningTracker``.
 
-Convenciones:
+Conventions:
 
-* ``spec``: cada subcomando produce lo que el motor responde (SPEC §5, §9.4)
-  y ``--as-of`` respeta la garantía temporal de §5.1.
-* ``invariant``: la restricción estructural de ``ui/`` (no recalcula, no lee
-  intentos por su cuenta) protege I4 e I2.
+* ``spec``: each subcommand produces what the engine answers (SPEC sections 5
+  and 9.4) and ``--as-of`` honours the time guarantee of section 5.1.
+* ``invariant``: the structural constraint of ``ui/`` (it does not recompute,
+  it does not read attempts on its own) protects I4 and I2.
 
-Todo corre con :func:`ui.cli.run` sobre ``tmp_path`` como ``--data``, con un
-``FixedClock`` inyectado y capturando ``stdout`` en memoria: sin subprocesos,
-sin reloj de sistema, sin dependencias de cuándo se ejecuta la suite.
+Everything runs through :func:`ui.cli.run` with ``tmp_path`` as ``--data``, an
+injected ``FixedClock`` and ``stdout`` captured in memory: no subprocesses, no
+system clock, no dependency on when the suite is run.
+
+The expected texts are in Spanish because the CLI speaks to the user in
+Spanish; the documentation of the tests is in English.
 """
 
 from __future__ import annotations
@@ -38,7 +41,7 @@ def _iso(day: int, hour: int = 10) -> str:
 
 
 class Cli:
-    """Invoca ``run`` con un ``--data`` fijo y devuelve ``(code, stdout, stderr)``."""
+    """Calls ``run`` with a fixed ``--data`` and returns ``(code, stdout, stderr)``."""
 
     def __init__(self, data: Path, clock: FixedClock) -> None:
         self.data = data
@@ -65,7 +68,8 @@ def cli_(tmp_path: Path) -> Cli:
 
 @pytest.fixture
 def seeded(cli_: Cli) -> Cli:
-    """Perfil con dos objetivos y la serie de SPEC §3 en ``D3.2``: mal×3, bien, mal."""
+    """Profile with two objectives and the series of SPEC section 3 in ``D3.2``:
+    wrong x3, right, wrong."""
     cli_.ok("profile", "create", PROFILE, "--name", "AI-103", profile=None)
     cli_.ok("objective", "add", "D3.2", "--title", "Content understanding", "--domain", "D3")
     cli_.ok("objective", "add", "D1.1", "--title", "Basics", "--weight", "2")
@@ -74,7 +78,7 @@ def seeded(cli_: Cli) -> Cli:
     return cli_
 
 
-# --------------------------------------------------------------- perfiles y objetivos
+# ------------------------------------------------------- profiles and objectives
 
 
 @pytest.mark.spec
@@ -149,7 +153,7 @@ def test_record_naive_at_is_assumed_utc(seeded: Cli) -> None:
     assert "2026-01-09T10:00:00+00:00" in out
 
 
-# --------------------------------------------------------------- consultas
+# ----------------------------------------------------------------------- queries
 
 
 @pytest.mark.spec
@@ -173,7 +177,7 @@ def test_due_orders_by_urgency_and_respects_limit(seeded: Cli) -> None:
     seeded.ok("record", "D1.1", "--correct", "--at", _iso(4))
     out = seeded.ok("--as-of", _iso(10), "due")
     ids = [line.split()[0] for line in out.splitlines()[2:]]
-    # D1.1 vence antes (un acierto el día 4 -> repaso día 5) que D3.2 (fallo día 5 -> día 6).
+    # D1.1 falls due earlier (a hit on day 4 -> review day 5) than D3.2 (miss day 5 -> day 6).
     assert ids == ["D1.1", "D3.2"]
     limited = seeded.ok("--as-of", _iso(10), "due", "--limit", "1")
     assert [line.split()[0] for line in limited.splitlines()[2:]] == ["D1.1"]
@@ -249,20 +253,20 @@ def test_compare_reverse_range_is_domain_error(seeded: Cli) -> None:
     assert code == EXIT_ERROR and "InvalidRangeError" in err
 
 
-# --------------------------------------------------------------- §5.1 garantía temporal
+# --------------------------------------------------- section 5.1 time guarantee
 
 
 @pytest.mark.spec
 def test_as_of_state_in_the_past_does_not_change_after_later_attempts(seeded: Cli) -> None:
-    """SPEC §5.1: lo pasado no se reescribe. El estado en una fecha pasada es
-    idéntico antes y después de registrar intentos posteriores."""
+    """SPEC section 5.1: the past is not rewritten. The state at a past date is
+    identical before and after recording later attempts."""
     before = seeded.ok("--as-of", _iso(3, 12), "state", "D3.2")
     seeded.ok("record", "D3.2", "--correct", "--at", _iso(20))
     seeded.ok("record", "D3.2", "--correct", "--at", _iso(21))
     after = seeded.ok("--as-of", _iso(3, 12), "state", "D3.2")
     assert before == after
     assert "total_attempts    3" in after
-    # Y la consulta sin --as-of (reloj inyectado, marzo) sí ve los nuevos.
+    # And the query without --as-of (injected clock, March) does see the new ones.
     assert "total_attempts    7" in seeded.ok("state", "D3.2")
 
 
@@ -278,7 +282,7 @@ def test_as_of_invalid_iso_is_usage_error(seeded: Cli) -> None:
     assert code == EXIT_ERROR and "ISO 8601" in err
 
 
-# --------------------------------------------------------------- check y exit codes
+# ------------------------------------------------------------ check and exit codes
 
 
 @pytest.mark.spec
@@ -291,7 +295,8 @@ def test_check_ok_exits_zero(seeded: Cli) -> None:
 
 @pytest.mark.spec
 def test_check_without_objectives_is_not_ok(cli_: Cli) -> None:
-    """``ok`` es positivo: no haber mirado nada no es estar bien (SPEC §9.5)."""
+    """``ok`` is positive: having looked at nothing is not being fine (SPEC
+    section 9.5)."""
     cli_.ok("profile", "create", PROFILE, "--name", "vacío", profile=None)
     code, out, _ = cli_("check")
     assert code == EXIT_CHECK_FAILED
@@ -377,13 +382,13 @@ def test_main_uses_sys_stdout(seeded: Cli, capsys: pytest.CaptureFixture[str], m
     assert f"as_of             {NOW.isoformat()}" in captured.out
 
 
-# --------------------------------------------------------------- restricción estructural
+# ----------------------------------------------------------- structural constraint
 
 
 ALLOWED_PROJECT_IMPORTS = {
     "core.tracker", "core.session", "core.models", "core.errors", "core.clock", "store",
-    # Solo Protocols (ProfileStore/AttemptStore) para tipar el Context; no
-    # abre ninguna lectura: FORBIDDEN_ATTRS sigue vetando list_* en ui/.
+    # Protocols only (ProfileStore/AttemptStore) to type the Context; it opens
+    # no read path: FORBIDDEN_ATTRS still vetoes list_* in ui/.
     "core.storage",
 }
 FORBIDDEN_IMPORTS = {"core.leveling", "core.scheduling", "core.constants", "store.memory", "store.json_store"}
@@ -405,7 +410,8 @@ def _imports(tree: ast.Module) -> set[str]:
 
 @pytest.mark.invariant
 def test_ui_only_uses_the_public_tracker_api() -> None:
-    """``ui/`` no recalcula ni lee intentos por su cuenta (I4 por la puerta de atrás)."""
+    """``ui/`` neither recomputes nor reads attempts on its own (I4 through the
+    back door)."""
     stdlib = set(sys.stdlib_module_names)
     for source in UI_DIR.glob("*.py"):
         tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
@@ -423,26 +429,27 @@ def test_ui_only_uses_the_public_tracker_api() -> None:
 
 @pytest.mark.invariant
 def test_ui_never_calls_datetime_now_directly() -> None:
-    """I2: el reloj real entra solo por ``SystemClock`` (de ``store``), inyectable."""
+    """I2: the real clock enters only through ``SystemClock`` (from ``store``),
+    injectable."""
     for source in UI_DIR.glob("*.py"):
         text = source.read_text(encoding="utf-8")
         assert "datetime.now(" not in text and "utcnow(" not in text, source.name
 
 
-# --------------------------------------------------------------- dónde viven los datos
+# ------------------------------------------------------------- where the data lives
 
 
-#: Store de perfiles vacío, en el formato real en disco.
+#: Empty profile store, in the real on-disk format.
 _EMPTY_PROFILES = '{"version": 1, "profiles": []}'
 
 
 def _env(**extra: str) -> dict[str, str]:
-    """Entorno sintético: nunca se lee el real, ni siquiera para heredar."""
+    """Synthetic environment: the real one is never read, not even to inherit."""
     return dict(extra)
 
 
 @pytest.mark.spec
-def test_default_data_dir_en_macos(tmp_path: Path) -> None:
+def test_default_data_dir_on_macos(tmp_path: Path) -> None:
     home = tmp_path / "home"
     assert datadir.default_data_dir("darwin", _env(), home) == (
         home / "Library" / "Application Support" / "learning-tracker"
@@ -450,7 +457,7 @@ def test_default_data_dir_en_macos(tmp_path: Path) -> None:
 
 
 @pytest.mark.spec
-def test_default_data_dir_en_linux_sigue_xdg(tmp_path: Path) -> None:
+def test_default_data_dir_on_linux_follows_xdg(tmp_path: Path) -> None:
     home = tmp_path / "home"
     assert datadir.default_data_dir("linux", _env(), home) == (
         home / ".local" / "share" / "learning-tracker"
@@ -462,8 +469,8 @@ def test_default_data_dir_en_linux_sigue_xdg(tmp_path: Path) -> None:
 
 
 @pytest.mark.edge
-def test_xdg_data_home_vacia_se_ignora(tmp_path: Path) -> None:
-    """Una variable definida pero vacía no es una ruta: se usa el default."""
+def test_an_empty_xdg_data_home_is_ignored(tmp_path: Path) -> None:
+    """A defined but empty variable is not a path: the default is used."""
     home = tmp_path / "home"
     assert datadir.default_data_dir("linux", _env(XDG_DATA_HOME=""), home) == (
         home / ".local" / "share" / "learning-tracker"
@@ -471,7 +478,7 @@ def test_xdg_data_home_vacia_se_ignora(tmp_path: Path) -> None:
 
 
 @pytest.mark.spec
-def test_precedencia_data_gana_a_entorno_gana_a_default(tmp_path: Path) -> None:
+def test_precedence_data_beats_environment_beats_default(tmp_path: Path) -> None:
     home, env_dir, flag_dir = tmp_path / "home", tmp_path / "env", tmp_path / "flag"
     env = _env(LEARNING_TRACKER_DATA=str(env_dir))
     assert datadir.resolve_data_dir(None, "darwin", _env(), home) == (
@@ -482,7 +489,7 @@ def test_precedencia_data_gana_a_entorno_gana_a_default(tmp_path: Path) -> None:
 
 
 @pytest.mark.edge
-def test_la_variable_de_entorno_vacia_no_gana(tmp_path: Path) -> None:
+def test_an_empty_environment_variable_does_not_win(tmp_path: Path) -> None:
     home = tmp_path / "home"
     assert datadir.default_data_dir("linux", _env(LEARNING_TRACKER_DATA=""), home) == (
         home / ".local" / "share" / "learning-tracker"
@@ -490,28 +497,28 @@ def test_la_variable_de_entorno_vacia_no_gana(tmp_path: Path) -> None:
 
 
 def _data_help(parser: argparse.ArgumentParser) -> str:
-    """Texto de ayuda de ``--data``, antes de que argparse lo re-indente."""
+    """Help text of ``--data``, before argparse re-indents it."""
     (action,) = [a for a in parser._actions if a.dest == "data"]
     return action.help or ""
 
 
 @pytest.mark.spec
-def test_el_help_de_data_muestra_el_default_efectivo(tmp_path: Path) -> None:
+def test_the_data_help_shows_the_effective_default(tmp_path: Path) -> None:
     home, env_dir = tmp_path / "home", tmp_path / "env"
-    # Sobre el help sin formatear: argparse re-parte y re-indenta las líneas
-    # largas, y una ruta de usuario es larga.
+    # Over the unformatted help: argparse re-wraps and re-indents long lines,
+    # and a home path is long.
     macos = _data_help(cli.build_parser(datadir.describe_default("darwin", _env(), home)))
     assert str(home / "Library" / "Application Support" / "learning-tracker") in macos
-    con_var = _data_help(
+    with_var = _data_help(
         cli.build_parser(
             datadir.describe_default("linux", _env(LEARNING_TRACKER_DATA=str(env_dir)), home)
         )
     )
-    assert str(env_dir) in con_var and "LEARNING_TRACKER_DATA" in con_var
+    assert str(env_dir) in with_var and "LEARNING_TRACKER_DATA" in with_var
 
 
 @pytest.mark.spec
-def test_el_directorio_de_datos_se_crea_solo_para_su_dueno(tmp_path: Path) -> None:
+def test_the_data_directory_is_created_for_its_owner_only(tmp_path: Path) -> None:
     target = tmp_path / "padre" / "datos"
     datadir.ensure_data_dir(target)
     assert target.is_dir()
@@ -519,8 +526,9 @@ def test_el_directorio_de_datos_se_crea_solo_para_su_dueno(tmp_path: Path) -> No
 
 
 @pytest.mark.spec
-def test_run_usa_el_default_del_so_sin_data(tmp_path: Path) -> None:
-    """Sin ``--data`` ni variable, los datos van al directorio del SO, no al cwd."""
+def test_run_uses_the_os_default_without_data(tmp_path: Path) -> None:
+    """Without ``--data`` or the variable, data goes to the OS directory, not
+    the cwd."""
     home, cwd = tmp_path / "home", tmp_path / "cwd"
     cwd.mkdir()
     out, err = io.StringIO(), io.StringIO()
@@ -534,14 +542,14 @@ def test_run_usa_el_default_del_so_sin_data(tmp_path: Path) -> None:
         home=home,
         cwd=cwd,
     )
-    destino = home / "Library" / "Application Support" / "learning-tracker"
+    destination = home / "Library" / "Application Support" / "learning-tracker"
     assert code == EXIT_OK, err.getvalue()
-    assert (destino / cli.PROFILES_FILE).exists()
+    assert (destination / cli.PROFILES_FILE).exists()
     assert not (cwd / "data").exists()
 
 
 @pytest.mark.spec
-def test_run_respeta_la_variable_de_entorno(tmp_path: Path) -> None:
+def test_run_honours_the_environment_variable(tmp_path: Path) -> None:
     home, cwd, env_dir = tmp_path / "home", tmp_path / "cwd", tmp_path / "env"
     cwd.mkdir()
     out, err = io.StringIO(), io.StringIO()
@@ -561,7 +569,7 @@ def test_run_respeta_la_variable_de_entorno(tmp_path: Path) -> None:
 
 
 def _legacy(tmp_path: Path) -> tuple[Path, Path, Path]:
-    """cwd con un ``./data`` heredado que ya tiene datos, y un home limpio."""
+    """A cwd with a legacy ``./data`` that already holds data, and a clean home."""
     cwd, home = tmp_path / "cwd", tmp_path / "home"
     (cwd / "data").mkdir(parents=True)
     (cwd / "data" / cli.PROFILES_FILE).write_text(_EMPTY_PROFILES, encoding="utf-8")
@@ -569,7 +577,7 @@ def _legacy(tmp_path: Path) -> tuple[Path, Path, Path]:
 
 
 @pytest.mark.spec
-def test_avisa_de_los_datos_heredados_sin_mover_nada(tmp_path: Path) -> None:
+def test_it_warns_about_legacy_data_without_moving_anything(tmp_path: Path) -> None:
     cwd, home, legacy = _legacy(tmp_path)
     out, err = io.StringIO(), io.StringIO()
     code = run(
@@ -582,22 +590,22 @@ def test_avisa_de_los_datos_heredados_sin_mover_nada(tmp_path: Path) -> None:
         home=home,
         cwd=cwd,
     )
-    destino = home / "Library" / "Application Support" / "learning-tracker"
+    destination = home / "Library" / "Application Support" / "learning-tracker"
     assert code == EXIT_OK
-    mensaje = err.getvalue()
-    assert str(legacy.resolve()) in mensaje and str(destino.resolve()) in mensaje
-    assert "mv " in mensaje and "mkdir -p" in mensaje
-    # El aviso es un aviso: los datos siguen donde estaban y no se copiaron.
+    message = err.getvalue()
+    assert str(legacy.resolve()) in message and str(destination.resolve()) in message
+    assert "mv " in message and "mkdir -p" in message
+    # The notice is a notice: the data stays where it was and was not copied.
     assert (legacy / cli.PROFILES_FILE).read_text(encoding="utf-8") == _EMPTY_PROFILES
-    assert not (destino / cli.PROFILES_FILE).exists()
+    assert not (destination / cli.PROFILES_FILE).exists()
 
 
 @pytest.mark.spec
-def test_no_avisa_si_el_destino_ya_tiene_datos(tmp_path: Path) -> None:
+def test_no_warning_when_the_destination_already_holds_data(tmp_path: Path) -> None:
     cwd, home, _ = _legacy(tmp_path)
-    destino = home / "Library" / "Application Support" / "learning-tracker"
-    destino.mkdir(parents=True)
-    (destino / cli.PROFILES_FILE).write_text(_EMPTY_PROFILES, encoding="utf-8")
+    destination = home / "Library" / "Application Support" / "learning-tracker"
+    destination.mkdir(parents=True)
+    (destination / cli.PROFILES_FILE).write_text(_EMPTY_PROFILES, encoding="utf-8")
     out, err = io.StringIO(), io.StringIO()
     code = run(
         ["profile", "list"],
@@ -613,12 +621,12 @@ def test_no_avisa_si_el_destino_ya_tiene_datos(tmp_path: Path) -> None:
 
 
 @pytest.mark.spec
-def test_no_avisa_si_se_paso_data_o_la_variable(tmp_path: Path) -> None:
+def test_no_warning_when_data_or_the_variable_was_given(tmp_path: Path) -> None:
     cwd, home, _ = _legacy(tmp_path)
-    explicito = tmp_path / "explicito"
+    explicit = tmp_path / "explicit"
     for extra, environ in (
-        (["--data", str(explicito)], {}),
-        ([], {"LEARNING_TRACKER_DATA": str(explicito)}),
+        (["--data", str(explicit)], {}),
+        ([], {"LEARNING_TRACKER_DATA": str(explicit)}),
     ):
         out, err = io.StringIO(), io.StringIO()
         code = run(
@@ -635,16 +643,17 @@ def test_no_avisa_si_se_paso_data_o_la_variable(tmp_path: Path) -> None:
 
 
 @pytest.mark.edge
-def test_no_avisa_si_el_data_heredado_esta_vacio_o_no_existe(tmp_path: Path) -> None:
+def test_no_warning_when_the_legacy_data_is_empty_or_missing(tmp_path: Path) -> None:
     cwd, home = tmp_path / "cwd", tmp_path / "home"
-    (cwd / "data").mkdir(parents=True)  # existe pero sin ningún *.json
-    destino = home / "Library" / "Application Support" / "learning-tracker"
-    assert datadir.migration_notice(cwd, destino) is None
-    assert datadir.migration_notice(tmp_path / "otro", destino) is None
+    (cwd / "data").mkdir(parents=True)  # it exists but holds no *.json
+    destination = home / "Library" / "Application Support" / "learning-tracker"
+    assert datadir.migration_notice(cwd, destination) is None
+    assert datadir.migration_notice(tmp_path / "other", destination) is None
 
 
 @pytest.mark.edge
-def test_no_avisa_si_el_destino_es_el_propio_data_heredado(tmp_path: Path) -> None:
-    """``LEARNING_TRACKER_DATA`` apuntando al ``./data`` de siempre: nada que migrar."""
+def test_no_warning_when_the_destination_is_the_legacy_data_itself(tmp_path: Path) -> None:
+    """``LEARNING_TRACKER_DATA`` pointing at the usual ``./data``: nothing to
+    migrate."""
     cwd, _, legacy = _legacy(tmp_path)
     assert datadir.migration_notice(cwd, legacy) is None
