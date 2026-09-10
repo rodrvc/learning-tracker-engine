@@ -1,14 +1,15 @@
-"""Tests de ``core/session.py`` contra SPEC.md §9.6, §8 (fallo 4), §6 (I1, I2, I8).
+"""Tests of ``core/session.py`` against SPEC.md section 9.6, section 8
+(failure 4) and section 6 (I1, I2, I8).
 
-Convenciones:
+Conventions:
 
-* ``spec``: contrato de cada método de ``SessionRecorder`` (§9.6).
-* ``invariant``: I1 (lo ya registrado no se pierde), I2 (tiempo inyectado),
-  I8 (un intento fallido no cuenta).
-* ``edge``: sesión vacía, cierre repetido, registro tras el cierre.
+* ``spec``: contract of each ``SessionRecorder`` method (section 9.6).
+* ``invariant``: I1 (what was already recorded is not lost), I2 (injected
+  time), I8 (a failed attempt does not count).
+* ``edge``: empty session, repeated close, recording after the close.
 
-Todo corre sobre ``InMemory*`` con ``FixedClock``: la fecha nunca depende de
-cuándo se ejecuta la suite (I2).
+Everything runs over ``InMemory*`` with a ``FixedClock``: the date never depends
+on when the suite is run (I2).
 """
 
 from __future__ import annotations
@@ -87,10 +88,10 @@ def test_init_uses_given_id_and_started_at(tracker):
 
 @pytest.mark.invariant
 def test_init_defaults_come_from_tracker_clock_not_system_time(tracker):
-    """I2: ``started_at=None`` usa el reloj inyectado en el tracker."""
+    """I2: ``started_at=None`` uses the clock injected in the tracker."""
     s = SessionRecorder(tracker)
     assert s.started_at == NOW
-    assert s.session_id  # generado, no vacío
+    assert s.session_id  # generated, not empty
 
 
 @pytest.mark.spec
@@ -121,16 +122,17 @@ def test_record_delegates_to_tracker_and_returns_persisted_attempt(tracker, atte
 
 @pytest.mark.invariant
 def test_record_persists_immediately_not_on_close(tracker, attempts):
-    """I1/I8: cada intento queda en el store en el momento, no al cerrar."""
+    """I1/I8: every attempt lands in the store right away, not on close."""
     s = SessionRecorder(tracker, "s-1")
     s.record(O1, correct=False, at=d(0))
     s.record(O2, correct=True, at=d(1))
-    assert attempts.count(PID) == 2  # sin haber cerrado
+    assert attempts.count(PID) == 2  # without having closed
 
 
 @pytest.mark.invariant
 def test_record_failure_propagates_and_does_not_count(profiles, attempts):
-    """I8: si la escritura falla, la excepción sale y el informe no miente al alza."""
+    """I8: if the write fails, the exception escapes and the report does not
+    overstate."""
 
     class BrokenStore(InMemoryAttemptStore):
         def append(self, profile_id, attempt):
@@ -192,7 +194,8 @@ def test_close_produces_recorded_report(tracker):
 
 @pytest.mark.spec
 def test_close_empty_session_is_visible_as_empty(tracker):
-    """§8 fallo 4 / §9.6: cerrar en blanco es un resultado explícito, no un no-evento."""
+    """Section 8 failure 4 / section 9.6: closing blank is an explicit result,
+    not a non-event."""
     s = SessionRecorder(tracker, "s-1", started_at=d(5))
     report = s.close(ended_at=d(6))
     assert report.status is SessionStatus.EMPTY
@@ -200,12 +203,12 @@ def test_close_empty_session_is_visible_as_empty(tracker):
     assert report.objectives_touched == ()
     assert report.started_at == d(5)
     assert report.ended_at == d(6)
-    assert s.report is report  # y queda consultable después
+    assert s.report is report  # and it stays queryable afterwards
 
 
 @pytest.mark.invariant
 def test_close_default_ended_at_comes_from_tracker_clock(tracker):
-    """I2: ``ended_at=None`` usa el reloj inyectado en el tracker."""
+    """I2: ``ended_at=None`` uses the clock injected in the tracker."""
     s = SessionRecorder(tracker, "s-1")
     assert s.close().ended_at == NOW
 
@@ -222,7 +225,7 @@ def test_objectives_touched_counts_distinct_objectives(tracker):
     assert report.attempts_recorded == 5
     assert len(report.objectives_touched) == 3
     assert set(report.objectives_touched) == {O1, O2, O3}
-    assert report.objectives_touched == (O2, O1, O3)  # orden de primer toque
+    assert report.objectives_touched == (O2, O1, O3)  # order of first touch
 
 
 @pytest.mark.edge
@@ -278,7 +281,7 @@ def test_enter_returns_self_and_exit_closes(tracker):
         assert s is recorder
         s.record(O1, correct=True, at=d(0))
         with pytest.raises(TrackerError):
-            s.report  # aún abierta
+            s.report  # still open
     assert s.report.status is SessionStatus.RECORDED
     assert s.report.attempts_recorded == 1
 
@@ -292,8 +295,9 @@ def test_with_empty_block_ends_as_empty(tracker):
 
 @pytest.mark.invariant
 def test_exception_inside_with_propagates_and_keeps_recorded_attempts(tracker, attempts):
-    """I1 + §9.6: el ``with`` revienta a mitad; lo ya escrito se queda y la
-    excepción sale sin que ``__exit__`` la trague."""
+    """I1 + section 9.6: the ``with`` blows up halfway; what was already
+    written stays and the exception escapes without ``__exit__`` swallowing
+    it."""
 
     class Boom(RuntimeError):
         pass
@@ -302,10 +306,10 @@ def test_exception_inside_with_propagates_and_keeps_recorded_attempts(tracker, a
         with SessionRecorder(tracker, "s-1") as s:
             s.record(O1, correct=True, at=d(0))
             s.record(O2, correct=False, at=d(1))
-            raise Boom("a mitad")
+            raise Boom("halfway")
     assert attempts.count(PID) == 2
     assert {a.objective_id for a in attempts.list_all(PID)} == {O1, O2}
-    # La sesión quedó cerrada e informa lo que sí se registró.
+    # The session ended up closed and reports what did get recorded.
     assert s.report.status is SessionStatus.RECORDED
     assert s.report.attempts_recorded == 2
 
@@ -323,7 +327,7 @@ def test_exit_never_suppresses_exceptions(tracker):
 
 @pytest.mark.spec
 def test_tracker_session_factory_returns_functional_recorder(tracker, attempts):
-    """§9.4 / §9.6: ``tracker.session()`` entrega un recorder real."""
+    """Sections 9.4 / 9.6: ``tracker.session()`` hands back a real recorder."""
     with tracker.session("s-9") as s:
         assert isinstance(s, SessionRecorder)
         s.record(O1, correct=True, at=d(0))
@@ -335,11 +339,12 @@ def test_tracker_session_factory_returns_functional_recorder(tracker, attempts):
 
 @pytest.mark.spec
 def test_tracker_session_accepts_injected_started_at(tracker):
-    """SPEC seccion 9.6 e I2: ``tracker.session(started_at=...)`` inyecta la apertura."""
+    """SPEC section 9.6 and I2: ``tracker.session(started_at=...)`` injects the
+    opening instant."""
     opened = d(3)
     with tracker.session("s-10", started_at=opened) as s:
         assert s.started_at == opened
     assert s.report.started_at == opened
-    # Sin started_at, sigue viniendo del reloj del tracker, no del sistema.
+    # Without started_at it still comes from the tracker's clock, not the system's.
     with tracker.session("s-11") as s2:
         assert s2.started_at == NOW
