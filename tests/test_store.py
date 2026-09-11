@@ -234,6 +234,29 @@ def test_append_preserves_the_instant_across_a_non_utc_offset(attempts):
 
 
 @pytest.mark.spec
+def test_each_backend_keeps_its_documented_offset_behaviour(attempts, backend):
+    """What each backend does with the offset, pinned down.
+
+    The shared contract is only the instant, so this is the one place the
+    suite branches per backend on purpose: it pins the documented behaviour of
+    each one. Without it, memory and JSON could silently start normalizing to
+    UTC and nothing would notice - the assertion that used to catch that lived
+    in ``test_append_preserves_every_field_across_read`` until Postgres, which
+    cannot honour it, forced it out of the shared contract.
+    """
+    tz = timezone(timedelta(hours=-5))
+    at = datetime(2026, 3, 1, 10, 0, tzinfo=tz)
+    attempts.append(P1, make_attempt("a1", at=at))
+    (read,) = attempts.list_all(P1)
+    if backend == "postgres":
+        # timestamptz stores an instant, so the offset it was given is gone.
+        assert read.at.utcoffset() == timedelta(0)
+    else:
+        # Memory and JSON hand back the literal offset they were given.
+        assert read.at.utcoffset() == tz.utcoffset(None)
+
+
+@pytest.mark.spec
 def test_append_rejects_naive_at(attempts):
     with pytest.raises(InvalidAttemptError):
         attempts.append(P1, make_attempt("a1", at=datetime(2026, 1, 1)))
