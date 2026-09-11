@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "learning-tracker"
+version = "0.1.0"
+description = "Learning tracking engine: attempts, levels and spaced repetition. The contract lives in SPEC.md."
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+learning-tracker = "ui.cli:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[tool.setuptools]
+packages = ["core", "store", "ui"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-q --strict-markers"
+markers = [
+    "spec: verifies a concrete rule of SPEC.md",
+    "invariant: verifies an invariant of SPEC.md section 6",
+    "edge: verifies an edge case of SPEC.md section 7",
+]
