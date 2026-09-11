@@ -210,44 +210,64 @@ export function levelLabel(level) {
 }
 
 /** The level breakdown (SPEC section 9.4's `by_level`), one row per level in
- * ladder order, zero counts included: "0 dominados" is information too. */
+ * ladder order, zero counts included: "0 dominados" is information too.
+ *
+ * Iterates `LEVEL_ORDER` first, then appends any key the response carries
+ * that the ladder does not name, so a level this front end has not been
+ * taught yet still gets a row (through `levelLabel`'s own fallback) instead
+ * of silently vanishing - the engine always sends exactly the five SPEC 1.4
+ * levels today, but nothing here should assume it always will. */
 export function levelBreakdownView(byLevel) {
   const source = byLevel || {};
-  return LEVEL_ORDER.map(
-    (level) =>
-      `<li class="level-row"><span class="level-name">${escapeHtml(
-        levelLabel(level),
-      )}</span><span class="level-count">${escapeHtml(source[level] || 0)}</span></li>`,
-  ).join("");
+  const extraLevels = Object.keys(source).filter((level) => !LEVEL_ORDER.includes(level));
+  return [...LEVEL_ORDER, ...extraLevels]
+    .map(
+      (level) =>
+        `<li class="level-row"><span class="level-name">${escapeHtml(
+          levelLabel(level),
+        )}</span><span class="level-count">${escapeHtml(source[level] ?? 0)}</span></li>`,
+    )
+    .join("");
 }
 
 // One row of the "due" or "never practised" lists: the objective's own
-// name (looked up by the caller, the progress endpoints return only an id),
-// its current level, and a link into practising the topic - see
-// views/progress.js's module docstring for why that link cannot target this
-// one objective specifically.
-export function objectiveRowView(state, title, topicId) {
+// name (looked up by the caller, the progress endpoints return only an id)
+// and its current level. No link here - see `progressActionView` for why a
+// direct path into practising this screen owes lives once per list, not
+// once per row.
+export function objectiveRowView(state, title) {
   return `<li class="progress-item">
       <span class="progress-item-title">${escapeHtml(title || state.objective_id)}</span>
       <span class="progress-item-level">${escapeHtml(levelLabel(state.level))}</span>
-      <a href="#/practice/${encodeURIComponent(topicId)}">Practicar</a>
     </li>`;
+}
+
+// The one honest "direct path to practising" a list can promise: the engine
+// - not this row, not this button - chooses which objective comes up, so
+// the copy says so rather than implying the click targets whatever row it
+// sits next to. `GET .../practice/next` (web/routers/practice.py) picks
+// due-first-most-overdue, then unstarted, and skips any objective with no
+// stored question as it goes (HANDOFF.md: this repo has questions for only
+// a fraction of its objectives) - so not even the top row of `due` is a
+// guaranteed match, and no row-level link here could honestly claim to be.
+function progressActionView(topicId, label) {
+  return `<a class="progress-action" href="#/practice/${encodeURIComponent(topicId)}">${escapeHtml(
+    label,
+  )}</a>`;
 }
 
 export function dueListView(states, titleFor, topicId) {
   if (!states.length) return '<p class="empty-view">No hay nada vencido por ahora.</p>';
-  return `<ul class="progress-list">${states
-    .map((state) => objectiveRowView(state, titleFor(state.objective_id), topicId))
-    .join("")}</ul>`;
+  const rows = states.map((state) => objectiveRowView(state, titleFor(state.objective_id))).join("");
+  return `${progressActionView(topicId, "Practicar lo más urgente (lo elige el motor)")}<ul class="progress-list">${rows}</ul>`;
 }
 
 export function unstartedListView(states, titleFor, topicId) {
   if (!states.length) {
     return '<p class="empty-view">Ya se practicó cada objetivo al menos una vez.</p>';
   }
-  return `<ul class="progress-list">${states
-    .map((state) => objectiveRowView(state, titleFor(state.objective_id), topicId))
-    .join("")}</ul>`;
+  const rows = states.map((state) => objectiveRowView(state, titleFor(state.objective_id))).join("");
+  return `${progressActionView(topicId, "Empezar algo nuevo (lo elige el motor)")}<ul class="progress-list">${rows}</ul>`;
 }
 
 // The only failure this view distinguishes is "the topic does not exist" -

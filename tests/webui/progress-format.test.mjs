@@ -60,26 +60,44 @@ test("levelBreakdownView shows a level missing from the response as a zero, not 
   assert.ok(html.includes(">0<"));
 });
 
+test("levelBreakdownView appends a level the ladder does not name, through levelLabel's own fallback", () => {
+  // Review round 1 (ACU-268): the previous version only ever iterated
+  // LEVEL_ORDER, so a key present in the response but absent from the
+  // ladder never rendered at all - the row vanished and levelLabel's
+  // documented "show something instead of a blank row" fallback was
+  // unreachable from here. Escaped, since an unknown identifier now
+  // reaches the same interpolation a title does.
+  const html = levelBreakdownView({ WEAK: 1, "<b>NEW</b>": 3 });
+  assert.equal(html.includes("<b>NEW</b>"), false);
+  assert.ok(html.includes("&lt;b&gt;NEW&lt;/b&gt;"));
+  assert.ok(html.includes(">3<"));
+});
+
 test("objectiveRowView escapes an attacker-controlled title", () => {
   const state = { objective_id: "obj-1", level: "WEAK" };
-  const html = objectiveRowView(state, "<img src=x onerror=alert(1)>", "topic-1");
+  const html = objectiveRowView(state, "<img src=x onerror=alert(1)>");
   assert.equal(html.includes("<img src"), false);
   assert.ok(html.includes("&lt;img src=x onerror=alert(1)&gt;"));
 });
 
 test("objectiveRowView falls back to the objective id when no title was found", () => {
-  const html = objectiveRowView({ objective_id: "obj-9", level: "MASTERED" }, undefined, "t1");
+  const html = objectiveRowView({ objective_id: "obj-9", level: "MASTERED" }, undefined);
   assert.ok(html.includes("obj-9"));
 });
 
 test("objectiveRowView shows the level the API returned, translated to Spanish", () => {
-  const html = objectiveRowView({ objective_id: "o1", level: "COMPETENT" }, "Title", "t1");
+  const html = objectiveRowView({ objective_id: "o1", level: "COMPETENT" }, "Title");
   assert.ok(html.includes("Competente"));
 });
 
-test("objectiveRowView links into practising the topic, percent-encoded", () => {
-  const html = objectiveRowView({ objective_id: "o1", level: "WEAK" }, "Title", "a b");
-  assert.ok(html.includes('href="#/practice/a%20b"'));
+test("objectiveRowView carries no link of its own - see the section-level action instead", () => {
+  // Review round 1 (ACU-268): a per-row "Practicar" link beside this row's
+  // own title and level implied a click there would practise this row's
+  // objective. The endpoint gives no such guarantee (not even for the due
+  // list's first row - it skips any objective with no stored question), so
+  // the row promises nothing it cannot keep.
+  const html = objectiveRowView({ objective_id: "o1", level: "WEAK" }, "Title");
+  assert.equal(html.includes("<a "), false);
 });
 
 test("dueListView shows the specific empty-state message when nothing is due", () => {
@@ -98,6 +116,17 @@ test("dueListView renders one row per due objective, using the caller's title lo
   assert.ok(html.includes("Second"));
 });
 
+test("dueListView's action names the engine as the one choosing, and links into practice", () => {
+  const html = dueListView([{ objective_id: "o1", level: "WEAK" }], () => "x", "a b");
+  assert.ok(html.includes("Practicar lo más urgente (lo elige el motor)"));
+  assert.ok(html.includes('href="#/practice/a%20b"'));
+});
+
+test("dueListView with nothing due carries no action link - there is nothing urgent to start", () => {
+  const html = dueListView([], () => "x", "t1");
+  assert.equal(html.includes("<a "), false);
+});
+
 test("unstartedListView shows the specific empty-state message when everything was practised", () => {
   const html = unstartedListView([], () => "x", "t1");
   assert.ok(html.includes("Ya se practicó cada objetivo al menos una vez."));
@@ -108,6 +137,12 @@ test("unstartedListView renders one row per unstarted objective", () => {
   const html = unstartedListView(states, () => "Third", "t1");
   assert.ok(html.includes("Third"));
   assert.ok(html.includes("Sin evaluar"));
+});
+
+test("unstartedListView's action also names the engine as the one choosing, and links into practice", () => {
+  const html = unstartedListView([{ objective_id: "o1", level: "UNASSESSED" }], () => "x", "a b");
+  assert.ok(html.includes("Empezar algo nuevo (lo elige el motor)"));
+  assert.ok(html.includes('href="#/practice/a%20b"'));
 });
 
 test("describeProgressError names the missing topic on a 404 unknown-topic response", () => {
@@ -123,4 +158,19 @@ test("describeProgressError passes every other failure through verbatim", () => 
     describeProgressError({ status: 500, message: "boom" }, { topicId: "ai-103" }),
     "boom",
   );
+});
+
+test("describeProgressError does not special-case a non-404 status even if the message reads unknown topic", () => {
+  // Closes the `&&` -> `||` mutant: with `||`, a non-404 status alone would
+  // be enough to trigger the Spanish rewrite.
+  assert.equal(
+    describeProgressError({ status: 500, message: "unknown topic: ai-103" }, { topicId: "ai-103" }),
+    "unknown topic: ai-103",
+  );
+});
+
+test("describeProgressError does not special-case a 404 with an unrelated message", () => {
+  // Closes the same mutant from the other side: with `||`, a 404 status
+  // alone would be enough, regardless of what the message actually says.
+  assert.equal(describeProgressError({ status: 404, message: "boom" }, { topicId: "ai-103" }), "boom");
 });

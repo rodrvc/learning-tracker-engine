@@ -4,19 +4,22 @@ import { ApiError } from "../api.js";
 import { levelBreakdownView, dueListView, unstartedListView, describeProgressError } from "../format.js";
 
 // Renders the progress view for one topic (ACU-268): the level breakdown,
-// what is due and what was never practised, each with a way into practising.
+// what is due and what was never practised, each list with one honest way
+// into practising.
 //
-// **Why every "Practicar" link goes to `#/practice/{topicId}`, not to one
-// objective:** `GET /topics/{id}/practice/next` (web/routers/practice.py)
-// picks the objective itself - due first, most overdue first, then
-// unstarted - and takes no objective id to narrow that choice. Reimplementing
-// that choice here to jump straight to a row's own objective would be the
-// exact divergence SPEC exists to prevent: this layer would be re-deciding
-// what the engine already decides. So the direct path this view offers is
-// into the practice flow that the engine itself will resolve to the most
-// urgent objective - which, for the top row of the due list, is this row.
-// If per-objective practice is ever wanted, it needs a new query parameter
-// on that endpoint, not a client-side workaround.
+// **Why the action is once per list, not once per row:** `GET
+// /topics/{id}/practice/next` (web/routers/practice.py) picks the objective
+// itself - due first, most overdue first, then unstarted - and skips any
+// candidate with no stored question as it walks that order (HANDOFF.md:
+// this repo has questions for only a fraction of its objectives), so not
+// even the top row of `due` is a guaranteed match. A link beside a specific
+// row would tell someone they are about to practise that objective, which
+// would usually be false. See `progressActionView` in format.js for the
+// section-level action this renders instead, and its copy that says the
+// engine chooses. Reimplementing the engine's own choice here to target a
+// row for real would be the exact divergence SPEC exists to prevent - that
+// stays the engine's, on a future `objective_id` parameter, not a
+// client-side workaround.
 //
 // State here is nothing but the three fetched lists: there is no in-flight
 // mutation this view starts (unlike material's generation, or practice's

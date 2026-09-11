@@ -63,3 +63,4 @@ main { padding: var(--gap); max-width: 40rem; margin: 0 auto; }
 .level-breakdown, .progress-list { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 0.5rem; margin: 0 0 var(--gap); }
 .level-row, .progress-item { display: flex; justify-content: space-between; align-items: center; gap: var(--gap); padding: 0.5rem 0.75rem; border: 1px solid var(--border); border-radius: 0.5rem; }
 .progress-item-title { flex: 1; }
+.progress-action { display: inline-block; margin-bottom: 0.5rem; }
