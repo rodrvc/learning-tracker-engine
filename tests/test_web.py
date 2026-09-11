@@ -22,7 +22,7 @@ from fastapi.testclient import TestClient
 
 from migrations.runner import apply_migrations
 from web.app import create_app
-from web.config import DATABASE_URL_VAR, MissingSettingError, Settings
+from web.config import Settings
 
 POSTGRES_PORT = os.environ.get("POSTGRES_PORT", "5432")
 POSTGRES_DSN = os.environ.get(

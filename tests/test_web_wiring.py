@@ -20,6 +20,7 @@ from fastapi.testclient import TestClient
 from core.errors import StorageError
 from web.app import STORAGE_UNAVAILABLE_DETAIL, create_app
 from web.config import DATABASE_URL_VAR, MissingSettingError, Settings
+from web import deps
 from web.deps import build_resources, close_resources
 
 #: Syntactically valid, deliberately unreachable, and carrying credentials that
@@ -61,7 +62,9 @@ def test_both_stores_share_the_pool_and_the_pool_closes_on_shutdown(dead_setting
 
 
 @pytest.mark.spec
-def test_storage_failure_is_503_and_never_echoes_the_connection_string(dead_settings):
+def test_storage_failure_is_503_and_never_echoes_the_connection_string(
+    dead_settings, monkeypatch
+):
     """A dead database answers 503, and the answer names nothing.
 
     Before this handler existed every route answered a dead database with a
@@ -71,6 +74,12 @@ def test_storage_failure_is_503_and_never_echoes_the_connection_string(dead_sett
     psycopg connection error embeds host, port, user and database name. So the
     detail is constant and this test pins that it stays constant.
     """
+    # How long the pool waits for a connection is irrelevant to what this
+    # proves, and at the production value it made this one test fifteen times
+    # slower than the slowest of the other five hundred. ``build_resources``
+    # reads the module global when it is called, which is inside the lifespan,
+    # so patching it here reaches the pool without a parameter nobody asked for.
+    monkeypatch.setattr(deps, "POOL_CHECKOUT_TIMEOUT_SECONDS", 0.05)
     with TestClient(create_app(dead_settings), raise_server_exceptions=False) as client:
         for method, path in (("get", "/topics"), ("get", "/topics/whatever")):
             response = getattr(client, method)(path)
@@ -79,6 +88,26 @@ def test_storage_failure_is_503_and_never_echoes_the_connection_string(dead_sett
             body = response.text
             for secret in ("leaky_user", "leaky_password", "nowhere", "127.0.0.1:1"):
                 assert secret not in body, f"{secret} leaked through {path}"
+
+
+@pytest.mark.spec
+def test_health_reports_unhealthy_when_storage_is_unreachable(dead_settings):
+    """The half of the health endpoint that says something is wrong.
+
+    The happy path is covered against a live database in ``tests/test_web.py``.
+    This is the branch that matters operationally, and it needs a database that
+    does not answer, so it belongs here rather than in a module whose fixture
+    demands one.
+
+    It was briefly lost: it lived in the module-scoped file, was deleted rather
+    than moved when the database-free tests were split out, and for one commit
+    the whole suite stayed green with an endpoint reporting "ok" over dead
+    storage (ACU-246 review).
+    """
+    with TestClient(create_app(dead_settings), raise_server_exceptions=False) as client:
+        response = client.get("/health")
+    assert response.status_code == 503
+    assert response.json() == {"status": "unhealthy"}
 
 
 @pytest.mark.spec
