@@ -78,10 +78,13 @@ async function withStubbedFetch(json, run) {
   }
 }
 
-test("api.listMaterial requests the topic's material collection", async () => {
+test("api.listMaterial requests the topic's material collection with GET", async () => {
   await withStubbedFetch([], async (fetchImpl) => {
     await api.listMaterial("t 1");
     assert.equal(fetchImpl.calls[0].url, "/topics/t%201/material");
+    // Not a mutation of style: listing must not be the POST that creates a
+    // material, or every page load would upload an empty one.
+    assert.equal(fetchImpl.calls[0].options.method, undefined);
   });
 });
 
@@ -92,10 +95,10 @@ test("api.getMaterial requests one material by id, both segments encoded", async
   });
 });
 
-test("api.uploadMaterial posts title, source and body to the topic's material collection", async () => {
+test("api.uploadMaterial posts title, source and body, the topic id encoded", async () => {
   await withStubbedFetch({}, async (fetchImpl) => {
-    await api.uploadMaterial("t1", { title: "T", source: "S", body: "B" });
-    assert.equal(fetchImpl.calls[0].url, "/topics/t1/material");
+    await api.uploadMaterial("t 1", { title: "T", source: "S", body: "B" });
+    assert.equal(fetchImpl.calls[0].url, "/topics/t%201/material");
     assert.equal(fetchImpl.calls[0].options.method, "POST");
     assert.deepEqual(JSON.parse(fetchImpl.calls[0].options.body), {
       title: "T",
@@ -105,10 +108,10 @@ test("api.uploadMaterial posts title, source and body to the topic's material co
   });
 });
 
-test("api.generateMaterial posts to the material's generate endpoint", async () => {
+test("api.generateMaterial posts to the material's generate endpoint, both segments encoded", async () => {
   await withStubbedFetch({}, async (fetchImpl) => {
-    await api.generateMaterial("t1", "m1");
-    assert.equal(fetchImpl.calls[0].url, "/topics/t1/material/m1/generate");
+    await api.generateMaterial("t 1", "m 1");
+    assert.equal(fetchImpl.calls[0].url, "/topics/t%201/material/m%201/generate");
     assert.equal(fetchImpl.calls[0].options.method, "POST");
   });
 });

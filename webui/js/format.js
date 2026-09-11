@@ -68,3 +68,37 @@ export function describeGenerationError(err) {
   const message = (err && err.message) || "Error inesperado.";
   return err && err.status === 503 ? `Problema de configuración: ${message}` : message;
 }
+
+/**
+ * A local file's name, stripped of its extension, as a starting point for a
+ * material's title. Pure on purpose: it is the browser-side inference the
+ * brief allows (saving a round trip), not a decision the server would make
+ * differently, so it belongs next to the other DOM-free helpers rather than
+ * inline in an event handler.
+ */
+export function titleFromFilename(filename) {
+  return String(filename).replace(/\.[^./]+$/, "");
+}
+
+/**
+ * One material's detail panel, including the "Generar preguntas" button and
+ * its feedback line rendered in whatever state `generation` describes.
+ *
+ * Taking that state as a plain argument, rather than reading it off the DOM,
+ * is what lets a re-render (reopening this same material while a generation
+ * it started is still in flight) restore the running/succeeded/failed state
+ * instead of losing it - see `views/material.js`, which is the only place
+ * that owns the state itself.
+ */
+export function materialDetailView(material, generation) {
+  const state = generation || { running: false, message: "", error: false };
+  return `
+      <article class="material-detail" data-material-id="${escapeHtml(material.material_id)}">
+        <h3>${escapeHtml(material.title)}</h3>
+        <p class="material-source">${escapeHtml(material.source)}</p>
+        <pre class="material-body">${escapeHtml(material.body)}</pre>
+        <button type="button" id="generate-button"${state.running ? " disabled" : ""}>Generar preguntas</button>
+        <p id="generate-feedback" class="${state.error ? "error" : ""}">${escapeHtml(state.message || "")}</p>
+      </article>
+    `;
+}
