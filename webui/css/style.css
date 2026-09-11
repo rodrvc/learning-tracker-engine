@@ -39,5 +39,5 @@ main { padding: var(--gap); max-width: 40rem; margin: 0 auto; }
 
 .objectives-list li { padding: 0.5rem 0.75rem; border: 1px solid var(--border); border-radius: 0.5rem; }
 .empty, .empty-view { opacity: 0.7; padding: 0.5rem 0; }
-.error { color: #c0392b; }
+.error { color: light-dark(#c0392b, #ff8a80); }
 .back-link { display: inline-block; margin-bottom: var(--gap); }

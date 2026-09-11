@@ -26,6 +26,9 @@ test("a 2xx response resolves with the parsed body", async () => {
 test("a non-ok response throws ApiError instead of resolving", async () => {
   const fetchImpl = fakeFetch({ ok: false, status: 404, json: { detail: "unknown topic: t1" } });
   await assert.rejects(() => request("/topics/t1", {}, fetchImpl), ApiError);
+  await assert.rejects(() => request("/topics/t1", {}, fetchImpl), {
+    message: "unknown topic: t1",
+  });
 });
 
 test("detailFrom joins a FastAPI 422 validation list into a readable message", () => {
