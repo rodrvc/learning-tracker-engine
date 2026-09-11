@@ -18,10 +18,12 @@ import logging
 import os
 import sys
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import AsyncIterator
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from content.errors import StorageError as ContentStorageError
 from core.errors import StorageError
@@ -31,6 +33,12 @@ from .deps import build_resources, close_resources
 from .routers import material, practice, progress, topics
 
 logger = logging.getLogger(__name__)
+
+#: The front end lives entirely in ``webui/``, a sibling of this package, and
+#: is mounted as plain static files - no templates, no server-side rendering.
+#: Removing the front end is deleting that folder and the one ``app.mount``
+#: call below.
+WEBUI_DIR = Path(__file__).resolve().parent.parent / "webui"
 
 #: What a caller is told when storage fails. Deliberately constant.
 #:
@@ -97,6 +105,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(material.router)
     app.include_router(practice.router)
     app.include_router(progress.router)
+    # Registered last: a Mount only ever answers a request no router above
+    # already matched, so the API keeps owning its paths and this is purely
+    # the fallback that serves the page and its assets.
+    app.mount("/", StaticFiles(directory=WEBUI_DIR, html=True), name="webui")
     return app
 
 
