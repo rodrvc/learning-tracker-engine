@@ -154,7 +154,7 @@ def attempts(backend, tmp_path) -> AttemptStore:
         return InMemoryAttemptStore()
     if backend == "postgres":
         _reset_postgres_schema()
-        return PostgresAttemptStore(POSTGRES_DSN, schema=POSTGRES_SCHEMA)
+        return PostgresAttemptStore.from_dsn(POSTGRES_DSN, schema=POSTGRES_SCHEMA)
     return JsonAttemptStore(tmp_path / "attempts.json")
 
 
@@ -165,7 +165,7 @@ def profiles(backend, tmp_path) -> ProfileStore:
         return InMemoryProfileStore()
     if backend == "postgres":
         _reset_postgres_schema()
-        return PostgresProfileStore(POSTGRES_DSN, schema=POSTGRES_SCHEMA)
+        return PostgresProfileStore.from_dsn(POSTGRES_DSN, schema=POSTGRES_SCHEMA)
     return JsonProfileStore(tmp_path / "profiles.json")
 
 
@@ -975,3 +975,56 @@ def test_c9_duplicate_error_is_a_tracker_error(attempts):
     attempts.append(P1, make_attempt("dup"))
     with pytest.raises(TrackerError):
         attempts.append(P1, make_attempt("dup"))
+
+
+# ================================================= postgres connection provider (ACU-255)
+
+
+@pytest.mark.spec
+@pytest.mark.skipif(psycopg is None, reason="requiere el driver psycopg")
+def test_failing_connection_provider_raises_storage_error_not_driver_exception():
+    def broken():
+        raise RuntimeError("no hay red")
+
+    with pytest.raises(StorageError):
+        PostgresAttemptStore(broken).append(P1, make_attempt("a1"))
+    with pytest.raises(StorageError):
+        PostgresAttemptStore(broken).count(P1)
+    with pytest.raises(StorageError):
+        PostgresProfileStore(broken).get_profile(P1)
+
+
+@pytest.mark.spec
+@pytest.mark.skipif(psycopg is None, reason="requiere el driver psycopg")
+def test_connection_provider_is_invoked_once_per_operation_never_reused():
+    if not POSTGRES_AVAILABLE:
+        pytest.skip(_SKIP_REASON)
+    _reset_postgres_schema()
+    calls: list[object] = []
+
+    def counting_connect():
+        conn = psycopg.connect(POSTGRES_DSN)
+        calls.append(conn)
+        return conn
+
+    store = PostgresAttemptStore(counting_connect, schema=POSTGRES_SCHEMA)
+    store.append(P1, make_attempt("a1"))
+    store.append(P1, make_attempt("a2", at=day(1)))
+    store.count(P1)
+    # One connection per operation: the provider ran three times, and every
+    # connection it handed out is closed by the time the operation returns —
+    # the store does not hold one open between calls.
+    assert len(calls) == 3
+    assert all(conn.closed for conn in calls)
+
+
+@pytest.mark.spec
+@pytest.mark.skipif(psycopg is None, reason="requiere el driver psycopg")
+def test_from_dsn_is_equivalent_to_an_injected_provider():
+    if not POSTGRES_AVAILABLE:
+        pytest.skip(_SKIP_REASON)
+    _reset_postgres_schema()
+    injected = PostgresAttemptStore(lambda: psycopg.connect(POSTGRES_DSN), schema=POSTGRES_SCHEMA)
+    from_dsn = PostgresAttemptStore.from_dsn(POSTGRES_DSN, schema=POSTGRES_SCHEMA)
+    injected.append(P1, make_attempt("a1"))
+    assert from_dsn.list_all(P1) == injected.list_all(P1)
