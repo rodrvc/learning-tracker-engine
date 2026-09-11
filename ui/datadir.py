@@ -26,7 +26,7 @@ DATA_ENV_VAR = "LEARNING_TRACKER_DATA"
 #: Name of our own folder inside the data directory of the OS.
 APP_DIR_NAME = "learning-tracker"
 
-#: Legacy directory, relative to the cwd, used as the default until ACU-215.
+#: Legacy directory, relative to the cwd, used as the default in earlier versions.
 LEGACY_DATA_DIR = "./data"
 
 #: Permissions of the data directory: only its owner gets in (``rwx------``).
