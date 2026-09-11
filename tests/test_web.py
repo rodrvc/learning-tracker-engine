@@ -15,12 +15,13 @@ from __future__ import annotations
 
 import os
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
 
-from core.constants import WINDOW
+from core.constants import DEFAULT_STALE_DAYS, WINDOW
 from migrations.runner import apply_migrations
 from web.app import create_app
 from web.config import Settings
@@ -166,6 +167,11 @@ def _seed_attempt(
         conn.commit()
 
 
+def _iso(at: datetime) -> str:
+    """Formats an aware ``datetime`` as the ``...Z`` shape the query params use."""
+    return at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 @pytest.mark.spec
 def test_objective_states_shape(client: TestClient) -> None:
     _seed_objective("ai-103", "D1.1-foo")
@@ -254,25 +260,57 @@ def test_due_limit_caps_and_keeps_the_most_overdue(client: TestClient) -> None:
 
 
 @pytest.mark.spec
-def test_summary_shape(client: TestClient) -> None:
-    _seed_objective("ai-103", "D1.1-foo")
-    _seed_attempt("ai-103", "D1.1-foo", "a1", "2020-01-01T00:00:00Z", True)
+def test_summary_reports_real_computed_values(client: TestClient) -> None:
+    """Pins actual numbers, not just key presence, for every aggregate field.
 
-    response = client.get("/topics/ai-103/summary?as_of=2020-06-01T00:00:00Z")
+    Three objectives, each contributing a known, distinct state:
+
+    * ``D1.1-foo`` gets two same-day hits (score 1.0, COMPETENT — n=2 meets
+      MIN_ATTEMPTS, the window's two weights are both correct so raw=1.0, and
+      querying at the moment of the last attempt makes gap=0 so
+      retention=1.0; it does not reach MASTERED because both attempts land on
+      a single calendar day). Not due: its next review (3 days out, S=2) is
+      well past ``as_of``.
+    * ``D1.2-bar`` has no attempts at all (score 0.0, UNASSESSED, unstarted).
+    * ``D1.3-baz`` has exactly one miss, a week before ``as_of`` (score 0.0,
+      UNASSESSED per SPEC C2 — a single attempt is never enough — but
+      *started*, not unstarted). Its next review was one day after that miss,
+      long past by ``as_of``, so it is the one due objective.
+
+    With those three known states, every aggregate below is forced to a
+    specific, mostly non-zero number — ``due_objectives`` in particular,
+    which a fixture with nothing due could not tell apart from a router that
+    hardcodes it to zero. A router that hardcodes any of ``mean_score``,
+    ``coverage``, ``assessed_objectives``, ``unstarted_objectives`` or
+    ``due_objectives``, or restates them without going through
+    ``get_summary``, is caught here — where the old ``test_summary_shape``
+    only checked that the keys existed.
+    """
+    _seed_objective("ai-103", "D1.1-foo")
+    _seed_objective("ai-103", "D1.2-bar")
+    _seed_objective("ai-103", "D1.3-baz")
+    _seed_attempt("ai-103", "D1.1-foo", "a1", "2020-01-01T00:00:00Z", True)
+    _seed_attempt("ai-103", "D1.1-foo", "a2", "2020-01-01T01:00:00Z", True)
+    _seed_attempt("ai-103", "D1.3-baz", "a3", "2019-12-25T00:00:00Z", False)
+
+    response = client.get("/topics/ai-103/summary?as_of=2020-01-01T01:00:00Z")
     assert response.status_code == 200
     summary = response.json()
     assert summary["topic_id"] == "ai-103"
-    assert summary["total_objectives"] == 1
-    assert summary["total_attempts"] == 1
-    assert set(summary["by_level"]) == {
-        "UNASSESSED",
-        "WEAK",
-        "LEARNING",
-        "COMPETENT",
-        "MASTERED",
+    assert summary["total_objectives"] == 3
+    assert summary["total_attempts"] == 3
+    assert summary["assessed_objectives"] == 1
+    assert summary["unstarted_objectives"] == 1
+    assert summary["due_objectives"] == 1
+    assert summary["coverage"] == pytest.approx(1 / 3)
+    assert summary["mean_score"] == pytest.approx(1 / 3)
+    assert summary["by_level"] == {
+        "UNASSESSED": 2,
+        "WEAK": 0,
+        "LEARNING": 0,
+        "COMPETENT": 1,
+        "MASTERED": 0,
     }
-    assert "mean_score" in summary
-    assert "coverage" in summary
 
 
 @pytest.mark.spec
@@ -290,21 +328,50 @@ def test_cut_date_changes_summary(client: TestClient) -> None:
 
 
 @pytest.mark.spec
-def test_recent_window_capped_at_window_size(client: TestClient) -> None:
+def test_recent_window_capped_and_ordered_oldest_to_newest(client: TestClient) -> None:
     """More than WINDOW attempts: the window stays capped, not truncated to
-    an arbitrary smaller size. Asserted with more attempts than the cap, so a
-    regression that shrinks the window would actually be caught here rather
-    than silently matching a coincidentally small fixture."""
+    an arbitrary smaller size, and keeps the oldest-to-newest order the spec
+    requires (the weights are positional, so a reversed window would plot a
+    client's progress backwards). Asserted with more attempts than the cap
+    and an alternating hit/miss pattern, so a regression that shrinks the
+    window or reverses it is actually caught here rather than silently
+    matching a uniform or coincidentally small fixture."""
     _seed_objective("ai-103", "D1.1-foo")
-    for index in range(WINDOW + 2):
+    results = [index % 2 == 0 for index in range(WINDOW + 2)]
+    for index, correct in enumerate(results):
         _seed_attempt(
-            "ai-103", "D1.1-foo", f"a{index}", f"2020-01-{index + 1:02d}T00:00:00Z", True
+            "ai-103",
+            "D1.1-foo",
+            f"a{index}",
+            f"2020-01-{index + 1:02d}T00:00:00Z",
+            correct,
         )
 
     response = client.get("/topics/ai-103/objectives/states?as_of=2020-06-01T00:00:00Z")
     state = response.json()[0]
     assert state["total_attempts"] == WINDOW + 2
-    assert len(state["recent_window"]) == WINDOW
+    assert state["recent_window"] == results[-WINDOW:]
+
+
+@pytest.mark.spec
+def test_unstarted_respects_the_cut_date(client: TestClient) -> None:
+    """Replacing the engine call's ``as_of`` with ``None`` would make this
+    route silently use the real clock instead of the requested cut date.
+    ``/due`` and ``/stale`` already bind this; this pins it for
+    ``/unstarted`` too, straddling the one attempt with two ``as_of``
+    values."""
+    _seed_objective("ai-103", "D1.1-foo")
+    _seed_attempt("ai-103", "D1.1-foo", "a1", "2020-01-10T00:00:00Z", True)
+
+    before = client.get(
+        "/topics/ai-103/objectives/unstarted?as_of=2020-01-05T00:00:00Z"
+    ).json()
+    after = client.get(
+        "/topics/ai-103/objectives/unstarted?as_of=2020-01-15T00:00:00Z"
+    ).json()
+
+    assert [item["objective_id"] for item in before] == ["D1.1-foo"]
+    assert after == []
 
 
 @pytest.mark.spec
@@ -334,6 +401,54 @@ def test_stale_lists_objectives_without_recent_activity(client: TestClient) -> N
 
     assert fresh == []
     assert [item["objective_id"] for item in stale] == ["D1.1-foo"]
+
+
+@pytest.mark.spec
+def test_stale_uses_the_engine_default_when_days_is_omitted(client: TestClient) -> None:
+    """``days`` is left out of the query entirely, so the engine's own
+    ``DEFAULT_STALE_DAYS`` must be what decides the boundary. Restating ``14``
+    in the router, or dropping ``days`` from the ``get_stale`` call so it
+    silently falls back to some other value, both pass a suite that always
+    sends ``days`` explicitly — which is what every other stale test here
+    does. This one imports the constant rather than writing ``14``, so it
+    keeps pinning the exact boundary if the constant ever moves."""
+    at = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    _seed_objective("ai-103", "D1.1-foo")
+    _seed_attempt("ai-103", "D1.1-foo", "a1", _iso(at), True)
+
+    not_yet_stale = client.get(
+        "/topics/ai-103/objectives/stale"
+        f"?as_of={_iso(at + timedelta(days=DEFAULT_STALE_DAYS - 1))}"
+    ).json()
+    now_stale = client.get(
+        "/topics/ai-103/objectives/stale"
+        f"?as_of={_iso(at + timedelta(days=DEFAULT_STALE_DAYS + 1))}"
+    ).json()
+
+    assert not_yet_stale == []
+    assert [item["objective_id"] for item in now_stale] == ["D1.1-foo"]
+
+
+@pytest.mark.spec
+def test_stale_days_parameter_overrides_the_default(client: TestClient) -> None:
+    """A hardcoded ``14`` in the router is byte-identical to passing ``None``
+    today, since ``DEFAULT_STALE_DAYS`` is 14 — no test of the omitted-``days``
+    path alone can ever tell them apart. An explicit override that is nowhere
+    near the default can: at gap=5 days, the default says "not stale" and
+    ``days=1`` says "stale". Only forwarding the caller's ``days`` all the way
+    to the engine satisfies both."""
+    at = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    _seed_objective("ai-103", "D1.1-foo")
+    _seed_attempt("ai-103", "D1.1-foo", "a1", _iso(at), True)
+    as_of = _iso(at + timedelta(days=5))
+
+    with_default = client.get(f"/topics/ai-103/objectives/stale?as_of={as_of}").json()
+    with_override = client.get(
+        f"/topics/ai-103/objectives/stale?as_of={as_of}&days=1"
+    ).json()
+
+    assert with_default == []
+    assert [item["objective_id"] for item in with_override] == ["D1.1-foo"]
 
 
 @pytest.mark.spec
