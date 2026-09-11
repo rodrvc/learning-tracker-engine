@@ -62,6 +62,19 @@ export const api = {
       body: JSON.stringify({ topic_id: topicId, name }),
     }),
   getTopic: (topicId) => request(`/topics/${encodeURIComponent(topicId)}`),
+  listMaterial: (topicId) => request(`/topics/${encodeURIComponent(topicId)}/material`),
+  getMaterial: (topicId, materialId) =>
+    request(`/topics/${encodeURIComponent(topicId)}/material/${encodeURIComponent(materialId)}`),
+  uploadMaterial: (topicId, { title, source, body }) =>
+    request(`/topics/${encodeURIComponent(topicId)}/material`, {
+      method: "POST",
+      body: JSON.stringify({ title, source, body }),
+    }),
+  generateMaterial: (topicId, materialId) =>
+    request(
+      `/topics/${encodeURIComponent(topicId)}/material/${encodeURIComponent(materialId)}/generate`,
+      { method: "POST" },
+    ),
 };
 
 export { ApiError };
