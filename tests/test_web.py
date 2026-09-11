@@ -597,6 +597,101 @@ def test_next_question_prefers_due_over_unstarted(client: TestClient, practice_t
 
 
 @pytest.mark.spec
+def test_next_question_orders_most_overdue_due_objective_first(
+    client: TestClient, practice_topic: str
+) -> None:
+    """"Most overdue first" is the headline rule of SPEC section 5.2.
+
+    Distinct from the due-vs-unstarted preference above: both objectives
+    here are due, so this is the only test that actually exercises ordering
+    among several due objectives rather than the due/unstarted boundary.
+    """
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        _insert_objective(conn, "obj-barely-due")
+        _insert_objective(conn, "obj-very-overdue")
+        now = datetime.now(timezone.utc)
+        # A miss sets next_review_at = at + 1 day (SPEC section 4.2, S=0).
+        # obj-barely-due: next_review_at = now - 1 day (just crossed is_due).
+        # obj-very-overdue: next_review_at = now - 9 days (far more overdue).
+        _insert_attempt(conn, "obj-barely-due", now - timedelta(days=2), correct=False)
+        _insert_attempt(conn, "obj-very-overdue", now - timedelta(days=10), correct=False)
+        _insert_question(conn, "q-barely-due", "obj-barely-due")
+        _insert_question(conn, "q-very-overdue", "obj-very-overdue")
+        conn.commit()
+
+    response = client.get(f"/topics/{practice_topic}/practice/next")
+    assert response.status_code == 200
+    assert response.json()["objective_id"] == "obj-very-overdue"
+
+
+@pytest.mark.edge
+def test_next_question_skips_due_objective_without_a_question(
+    client: TestClient, practice_topic: str
+) -> None:
+    """A content gap on the most urgent objective must not brick the endpoint.
+
+    The consumer repo has questions for only a fraction of its objectives
+    (HANDOFF.md, Open questions). The single most likely production state is
+    exactly this one: the most overdue objective has no question. ``/next``
+    must keep walking the engine's order until it finds an objective that
+    does, not stop at the first element and 404 forever.
+    """
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        _insert_objective(conn, "obj-mute-but-urgent")
+        _insert_objective(conn, "obj-covered")
+        now = datetime.now(timezone.utc)
+        # obj-mute-but-urgent is far more overdue, but has no question.
+        _insert_attempt(conn, "obj-mute-but-urgent", now - timedelta(days=20), correct=False)
+        _insert_attempt(conn, "obj-covered", now - timedelta(days=2), correct=False)
+        _insert_question(conn, "q-covered", "obj-covered")
+        conn.commit()
+
+    response = client.get(f"/topics/{practice_topic}/practice/next")
+    assert response.status_code == 200
+    assert response.json()["objective_id"] == "obj-covered"
+
+
+@pytest.mark.edge
+def test_next_question_rotates_through_available_questions(
+    client: TestClient, practice_topic: str
+) -> None:
+    """A fixed "first in canonical order" pick would serve the same card
+    forever until the level moved, testing card recall rather than mastery
+    of the objective. The pick must rotate as ``total_attempts`` grows.
+
+    The second attempt is inserted directly (rather than via ``POST
+    .../answer``) with a date far enough in the past to make the objective
+    due again immediately: recording through the API always leaves
+    ``next_review_at`` in the future relative to "now", so the objective
+    would otherwise vanish from both ``get_due`` and ``get_unstarted``
+    between the two ``GET`` calls -- true of the real app too, not a test
+    artifact, which is exactly why the rotation index has to come from state
+    already in hand rather than a second engine round trip.
+    """
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        _insert_objective(conn, "obj-rotate")
+        _insert_question(conn, "q-rotate-0", "obj-rotate")
+        _insert_question(conn, "q-rotate-1", "obj-rotate")
+        conn.commit()
+
+    # total_attempts == 0: unstarted, index 0 % 2 == 0.
+    first = client.get(f"/topics/{practice_topic}/practice/next")
+    assert first.status_code == 200
+    assert first.json()["question_id"] == "q-rotate-0"
+
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        _insert_attempt(
+            conn, "obj-rotate", datetime.now(timezone.utc) - timedelta(days=5), correct=False
+        )
+        conn.commit()
+
+    # total_attempts == 1, now due: index 1 % 2 == 1.
+    second = client.get(f"/topics/{practice_topic}/practice/next")
+    assert second.status_code == 200
+    assert second.json()["question_id"] == "q-rotate-1"
+
+
+@pytest.mark.spec
 def test_next_question_falls_back_to_unstarted_when_nothing_is_due(
     client: TestClient, practice_topic: str
 ) -> None:
@@ -652,6 +747,7 @@ def test_due_objective_without_questions_fails_clearly(
 def test_next_unknown_topic_fails(client: TestClient) -> None:
     response = client.get("/topics/does-not-exist/practice/next")
     assert response.status_code == 404
+    assert "does-not-exist" in response.json()["detail"]
 
 
 @pytest.mark.spec
@@ -674,6 +770,8 @@ def test_answering_correctly_records_one_attempt_and_new_state(
     assert body["objective_id"] == "obj-answer"
     assert body["state"]["total_attempts"] == 1
     assert body["state"]["correct_attempts"] == 1
+    # n=1 < MIN_ATTEMPTS (SPEC C2): one attempt is not enough evidence yet.
+    assert body["state"]["level"] == "UNASSESSED"
 
     with psycopg.connect(POSTGRES_DSN) as conn:
         (count,) = conn.execute(

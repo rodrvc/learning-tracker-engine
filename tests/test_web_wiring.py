@@ -111,10 +111,17 @@ def test_storage_failure_is_503_and_never_echoes_the_connection_string(
 def test_practice_storage_failure_is_503(dead_settings, monkeypatch):
     """ACU-250: the practice endpoints inherit the same 503 mapping.
 
-    Both a failed question lookup (``content.errors.StorageError``, its own
-    class, unrelated to the engine's) and a failed attempt recording
-    (``core.errors.StorageError``) must surface as the same honest 503, never
-    as a silent success or an opaque 500.
+    The two requests happen to exercise the two different ``StorageError``
+    classes, by accident of which store each route calls first rather than
+    by design: ``GET .../practice/next`` calls ``LearningTracker.get_due``
+    before it ever reaches the question store, so it only proves
+    ``core.errors.StorageError`` is mapped; ``POST .../practice/answer``
+    looks the question up first, so it is the one that actually exercises
+    ``content.errors.StorageError`` (its own class, unrelated to the
+    engine's). Both must surface as the same honest 503, never a silent
+    success or an opaque 500 -- this test only pins that both routes end up
+    covered between the two calls, not that either call alone covers both
+    classes.
     """
     monkeypatch.setattr(deps, "POOL_CHECKOUT_TIMEOUT_SECONDS", 0.05)
     with TestClient(create_app(dead_settings), raise_server_exceptions=False) as client:
