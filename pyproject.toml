@@ -20,9 +20,10 @@ web = [
     "uvicorn[standard]>=0.29",
     "psycopg[binary,pool]>=3.1",
 ]
+generate = ["anthropic>=1.0", "pydantic>=2.0"]
 
 [tool.setuptools]
-packages = ["core", "store", "ui", "migrations", "content", "web", "web.routers"]
+packages = ["core", "store", "ui", "migrations", "content", "web", "web.routers", "generate"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

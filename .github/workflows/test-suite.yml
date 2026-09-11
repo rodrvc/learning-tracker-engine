@@ -44,8 +44,12 @@ jobs:
       # cannot even import migrations.runner, and the whole Postgres side of
       # the suite is skipped rather than run. The 'web' extra pulls in
       # FastAPI/uvicorn/httpx, needed to import and run tests/test_web.py.
-      - name: Install the package with the dev, postgres and web extras
-        run: pip install -e ".[dev,postgres,web]"
+      # The 'generate' extra pulls in anthropic/pydantic, needed to import
+      # generate/claude.py: the import is at module level on purpose, so a
+      # type checker (and this install) can catch a mistake on the
+      # credential/parsing path that no test exercises.
+      - name: Install the package with the dev, postgres, web and generate extras
+        run: pip install -e ".[dev,postgres,web,generate]"
 
       - name: Apply migrations to the real schema
         run: python -m migrations.runner "$LEARNING_TRACKER_TEST_DATABASE_URL"
