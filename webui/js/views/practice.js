@@ -7,7 +7,12 @@ import {
   practiceAlreadyRecordedView,
   describePracticeUnavailable,
 } from "../format.js";
-import { resolveKeyAction, isAlreadyRecorded, makeAttemptId } from "../practice-keys.js";
+import {
+  resolveKeyAction,
+  targetOwnsKey,
+  isAlreadyRecorded,
+  makeAttemptId,
+} from "../practice-keys.js";
 
 // Renders the practice view for one topic: one question at a time, answer
 // it, see immediately whether it was right with the explanation, carry on
@@ -48,19 +53,22 @@ export async function renderPractice(container, api, topicId) {
   // its own descendants - it would miss every question's first keypress.
   // Removed on the next hash change so it never outlives this render.
   //
-  // A document-wide listener also sees keys meant elsewhere (review round
-  // 1): Enter on a focused nav or back-link, or a Cmd/Ctrl/Alt shortcut.
-  // Bailing when the target already owns Enter costs nothing - the option
-  // and submit buttons produce the same action via their click handlers -
-  // and `resolveKeyAction` itself refuses every modifier combination.
+  // A document-wide listener also sees keys meant elsewhere: Enter on a
+  // focused nav or back-link, or a Cmd/Ctrl/Alt shortcut. What the focused
+  // element keeps is `targetOwnsKey`'s call; all this does is read the DOM
+  // to say what kind of element has focus.
+  function targetKind(target) {
+    if (!(target instanceof Element)) return "none";
+    if (target.closest("input, textarea, select, [contenteditable]")) return "text-entry";
+    if (target.closest("a, button")) return "activatable";
+    return "none";
+  }
   function onKeydown(event) {
-    if (event.target instanceof Element && event.target.closest("a, button, input, textarea, select")) {
-      return;
-    }
     const optionCount = question ? question.options.length : 0;
     const hasModifier = event.ctrlKey || event.metaKey || event.altKey;
     const action = resolveKeyAction(event.key, { phase, optionCount, hasModifier });
     if (!action) return;
+    if (targetOwnsKey(targetKind(event.target), action)) return;
     event.preventDefault();
     if (action.type === "select") select(question.options[action.index].key);
     else if (action.type === "submit") submit();

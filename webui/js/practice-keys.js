@@ -24,6 +24,17 @@ export function resolveKeyAction(key, { phase, optionCount, hasModifier = false 
   return null;
 }
 
+// Which keys an already-focused element keeps. A link or a button owns
+// Enter and nothing else - a digit has no native meaning on either - and a
+// text-entry control owns everything. Bailing on every key instead, as the
+// first fix did, let one Tab onto the header nav kill the number shortcut
+// the options still paint 1/2/3 badges promising.
+export function targetOwnsKey(kind, action) {
+  if (kind === "text-entry") return true;
+  if (kind === "activatable") return action.type !== "select";
+  return false;
+}
+
 // Whether an answer failure means the attempt is already recorded (SPEC
 // C9), not that something broke - one of the three non-negotiable rules,
 // so pure and tested here, not buried where a 409-to-410 mutant survives.

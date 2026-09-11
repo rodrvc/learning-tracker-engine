@@ -170,7 +170,7 @@ export function describePracticeUnavailable(err, { objectiveCount, topicId } = {
   const message = (err && err.message) || "Error inesperado.";
   if (err && err.status === 404) {
     if (message.startsWith("unknown topic:")) {
-      return `No existe el tema "${topicId ?? ""}".`;
+      return `No existe el tema "${topicId}".`;
     }
     if (message.includes("no question for any due or unstarted")) {
       return "Todavía no hay preguntas para los objetivos pendientes.";

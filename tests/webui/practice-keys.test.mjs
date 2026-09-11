@@ -6,7 +6,12 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resolveKeyAction, isAlreadyRecorded, makeAttemptId } from "../../webui/js/practice-keys.js";
+import {
+  resolveKeyAction,
+  targetOwnsKey,
+  isAlreadyRecorded,
+  makeAttemptId,
+} from "../../webui/js/practice-keys.js";
 
 test("a digit within range selects that option while answering", () => {
   assert.deepEqual(resolveKeyAction("1", { phase: "answering", optionCount: 3 }), {
@@ -76,4 +81,15 @@ test("makeAttemptId falls back to a unique-enough id when randomUUID is unavaila
   const second = makeAttemptId(undefined);
   assert.equal(typeof first, "string");
   assert.notEqual(first, second);
+});
+
+test("only Enter is surrendered to a focused link or button, never a number", () => {
+  const select = { type: "select", index: 0 };
+  assert.equal(targetOwnsKey("activatable", { type: "submit" }), true);
+  assert.equal(targetOwnsKey("activatable", { type: "next" }), true);
+  assert.equal(targetOwnsKey("activatable", select), false); // the round-2 regression
+  assert.equal(targetOwnsKey("text-entry", select), true);
+  assert.equal(targetOwnsKey("text-entry", { type: "submit" }), true);
+  assert.equal(targetOwnsKey("none", { type: "submit" }), false);
+  assert.equal(targetOwnsKey("none", select), false);
 });
