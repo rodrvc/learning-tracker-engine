@@ -81,7 +81,8 @@ def require_session(request: Request) -> None:
     client = _jwks_client(issuer)
     try:
         signing_key = client.get_signing_key_from_jwt(token)
-        jwt.decode(token, signing_key.key, algorithms=ALGORITHMS, issuer=issuer)
+        # Without ``require`` a token from this issuer carrying no ``exp`` verifies and never expires.
+        jwt.decode(token, signing_key.key, algorithms=ALGORITHMS, issuer=issuer, options={"require": ["exp"]})
     except jwt.ExpiredSignatureError as exc:
         raise SessionError("session expired") from exc
     except jwt.PyJWTError as exc:
