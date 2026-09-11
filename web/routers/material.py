@@ -24,7 +24,7 @@ from datetime import datetime
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from content.errors import UnknownMaterialError
 from content.models import Material
@@ -47,11 +47,26 @@ MAX_BODY_CHARS = 200_000
 
 
 class MaterialIn(BaseModel):
-    """A page of study notes being uploaded."""
+    """A page of study notes being uploaded.
+
+    Every field is rejected when it is only whitespace, and that is not
+    decoration. ``Material`` considers a blank field empty and refuses to be
+    built from one, so without this check a title of three spaces passed
+    validation here, failed inside the domain model, and reached the caller as
+    an unhandled 500: a client mistake reported as a server fault. The two
+    layers have to agree on what "not empty" means.
+    """
 
     title: str = Field(min_length=1, max_length=300)
     source: str = Field(min_length=1, max_length=500)
     body: str = Field(min_length=1)
+
+    @field_validator("title", "source", "body")
+    @classmethod
+    def _not_only_whitespace(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be blank")
+        return value
 
 
 class MaterialSummaryOut(BaseModel):

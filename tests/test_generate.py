@@ -238,3 +238,21 @@ class TestOpenAIGenerator:
         gen = OpenAIGenerator(client=_FakeClient(raises=_auth_error()))
         with pytest.raises(MissingCredentialsError):
             gen.generate(MATERIAL, existing_objectives=[], now=FixedClock(T0))
+
+
+@pytest.mark.spec
+def test_no_credential_configured_raises_missing_credentials_not_a_crash(monkeypatch):
+    """The unconfigured case, reached for real rather than hand-raised.
+
+    The suite's other credential test injects a fake that raises the exception
+    it then asserts on, which proves the router's handler works and nothing
+    about whether that exception is ever reachable. It is not, unless the
+    client is built inside the guard: with no key resolvable the SDK raises
+    from its own constructor, and building it outside let that escape as an
+    unhandled error and surface as a 500 (ACU-249 review).
+    """
+    for var in ("OPENAI_API_KEY", "OPENAI_ADMIN_KEY", "OPENAI_BASE_URL"):
+        monkeypatch.delenv(var, raising=False)
+
+    with pytest.raises(MissingCredentialsError):
+        OpenAIGenerator().generate(MATERIAL, existing_objectives=[], now=FixedClock(T0))

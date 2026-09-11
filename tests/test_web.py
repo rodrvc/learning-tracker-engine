@@ -1014,3 +1014,44 @@ def test_missing_credential_fails_only_generation(client: TestClient, material_t
     assert _upload(client, material_topic, title="Otra").status_code == 201
     assert client.get(f"/topics/{material_topic}/material").status_code == 200
     assert client.get(f"/topics/{material_topic}/material/{material_id}").status_code == 200
+
+
+@pytest.mark.spec
+def test_blank_fields_are_rejected_as_a_client_error(
+    client: TestClient, material_topic: str
+) -> None:
+    """Whitespace is not a title, and saying so is this layer's job.
+
+    ``Material`` refuses to be built from a blank field. Without a matching
+    check here, a title of three spaces passed request validation, failed
+    inside the domain model, and reached the caller as an unhandled 500: a
+    client mistake reported as a server fault (ACU-249 review).
+    """
+    for field in ("title", "source", "body"):
+        payload = {"title": "T", "source": "s.md", "body": "cuerpo", field: "   "}
+        response = client.post(f"/topics/{material_topic}/material", json=payload)
+        assert response.status_code == 422, f"{field} blank returned {response.status_code}"
+
+
+@pytest.mark.spec
+def test_generation_failure_is_502_not_a_crash(client: TestClient, material_topic: str) -> None:
+    """A model that fails is a bad gateway, not a broken server."""
+    from generate.errors import GenerationError
+
+    class Failing:
+        def generate(self, material, existing_objectives, *, now):
+            raise GenerationError("the model produced no structured output")
+
+    client.app.state.resources.generator = Failing()
+    material_id = _upload(client, material_topic).json()["material_id"]
+    response = client.post(f"/topics/{material_topic}/material/{material_id}/generate")
+    assert response.status_code == 502
+    assert "structured output" in response.json()["detail"]
+
+
+@pytest.mark.spec
+def test_listing_an_unknown_topic_is_404_not_an_empty_list(client: TestClient) -> None:
+    """A front end must be able to tell "no such topic" from "topic is empty"."""
+    response = client.get("/topics/no-such-topic/material")
+    assert response.status_code == 404
+    assert "no-such-topic" in response.json()["detail"]

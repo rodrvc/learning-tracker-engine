@@ -82,7 +82,18 @@ class OpenAIGenerator:
         now: Clock,
     ) -> GenerationResult:
         """See ``generate.generator.QuestionGenerator.generate``."""
-        client = self._client or openai.OpenAI()
+        try:
+            # Built inside the guard on purpose. With no credential resolvable
+            # the SDK raises from the constructor, not from the request, so
+            # building it outside would have let that escape unhandled and
+            # surface as a 500 - the shape of failure this package exists to
+            # prevent, on the most ordinary configuration mistake there is.
+            client = self._client or openai.OpenAI()
+        except openai.OpenAIError as exc:
+            raise MissingCredentialsError(
+                "no OpenAI credential is configured, so question generation is "
+                "unavailable. Everything else keeps working."
+            ) from exc
 
         try:
             response = client.responses.parse(
