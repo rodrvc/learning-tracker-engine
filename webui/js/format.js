@@ -242,32 +242,36 @@ export function objectiveRowView(state, title) {
     </li>`;
 }
 
-// The one honest "direct path to practising" a list can promise: the engine
-// - not this row, not this button - chooses which objective comes up, so
-// the copy says so rather than implying the click targets whatever row it
-// sits next to. `GET .../practice/next` (web/routers/practice.py) picks
-// due-first-most-overdue, then unstarted, and skips any objective with no
-// stored question as it goes (HANDOFF.md: this repo has questions for only
-// a fraction of its objectives) - so not even the top row of `due` is a
-// guaranteed match, and no row-level link here could honestly claim to be.
-function progressActionView(topicId, label) {
+// The one honest "direct path to practising" this screen can promise, and
+// there is exactly one of it. `GET .../practice/next`
+// (web/routers/practice.py) walks `(*due, *unstarted)` and picks the
+// objective itself, skipping any with no stored question as it goes
+// (HANDOFF.md: this repo has questions for only a fraction of its
+// objectives). So a link beside a row cannot honestly claim to target that
+// row - not even the top of `due` - and a second link over the unstarted
+// list cannot claim to start something new either: due comes first
+// globally, so it returns an old objective whenever any due one has a
+// question, which is the normal state of a topic in use. One control, one
+// behaviour, and copy that describes the order the engine actually walks.
+export function progressActionView(topicId) {
+  const label = "Practicar (el motor elige: primero lo vencido, después lo nunca practicado)";
   return `<a class="progress-action" href="#/practice/${encodeURIComponent(topicId)}">${escapeHtml(
     label,
   )}</a>`;
 }
 
-export function dueListView(states, titleFor, topicId) {
+export function dueListView(states, titleFor) {
   if (!states.length) return '<p class="empty-view">No hay nada vencido por ahora.</p>';
   const rows = states.map((state) => objectiveRowView(state, titleFor(state.objective_id))).join("");
-  return `${progressActionView(topicId, "Practicar lo más urgente (lo elige el motor)")}<ul class="progress-list">${rows}</ul>`;
+  return `<ul class="progress-list">${rows}</ul>`;
 }
 
-export function unstartedListView(states, titleFor, topicId) {
+export function unstartedListView(states, titleFor) {
   if (!states.length) {
     return '<p class="empty-view">Ya se practicó cada objetivo al menos una vez.</p>';
   }
   const rows = states.map((state) => objectiveRowView(state, titleFor(state.objective_id))).join("");
-  return `${progressActionView(topicId, "Empezar algo nuevo (lo elige el motor)")}<ul class="progress-list">${rows}</ul>`;
+  return `<ul class="progress-list">${rows}</ul>`;
 }
 
 // The only failure this view distinguishes is "the topic does not exist" -

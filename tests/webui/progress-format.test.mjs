@@ -13,6 +13,7 @@ import {
   objectiveRowView,
   dueListView,
   unstartedListView,
+  progressActionView,
   describeProgressError,
 } from "../../webui/js/format.js";
 
@@ -101,7 +102,7 @@ test("objectiveRowView carries no link of its own - see the section-level action
 });
 
 test("dueListView shows the specific empty-state message when nothing is due", () => {
-  const html = dueListView([], () => "x", "t1");
+  const html = dueListView([], () => "x");
   assert.ok(html.includes("No hay nada vencido por ahora."));
 });
 
@@ -111,38 +112,36 @@ test("dueListView renders one row per due objective, using the caller's title lo
     { objective_id: "o2", level: "LEARNING" },
   ];
   const titleFor = (id) => ({ o1: "First", o2: "Second" })[id];
-  const html = dueListView(states, titleFor, "t1");
+  const html = dueListView(states, titleFor);
   assert.ok(html.includes("First"));
   assert.ok(html.includes("Second"));
 });
 
-test("dueListView's action names the engine as the one choosing, and links into practice", () => {
-  const html = dueListView([{ objective_id: "o1", level: "WEAK" }], () => "x", "a b");
-  assert.ok(html.includes("Practicar lo más urgente (lo elige el motor)"));
+test("neither list carries an action of its own - the page has exactly one", () => {
+  // Two links meant two promises for one behaviour, and the unstarted one
+  // was false whenever a due objective had a question, which is the normal
+  // state of a topic in use.
+  const states = [{ objective_id: "o1", level: "WEAK" }];
+  assert.equal(dueListView(states, () => "x").includes("<a "), false);
+  assert.equal(unstartedListView(states, () => "x").includes("<a "), false);
+});
+
+test("the action names the order the engine walks, and links into practice", () => {
+  const html = progressActionView("a b");
+  assert.ok(html.includes("primero lo vencido, después lo nunca practicado"));
   assert.ok(html.includes('href="#/practice/a%20b"'));
 });
 
-test("dueListView with nothing due carries no action link - there is nothing urgent to start", () => {
-  const html = dueListView([], () => "x", "t1");
-  assert.equal(html.includes("<a "), false);
-});
-
 test("unstartedListView shows the specific empty-state message when everything was practised", () => {
-  const html = unstartedListView([], () => "x", "t1");
+  const html = unstartedListView([], () => "x");
   assert.ok(html.includes("Ya se practicó cada objetivo al menos una vez."));
 });
 
 test("unstartedListView renders one row per unstarted objective", () => {
   const states = [{ objective_id: "o3", level: "UNASSESSED" }];
-  const html = unstartedListView(states, () => "Third", "t1");
+  const html = unstartedListView(states, () => "Third");
   assert.ok(html.includes("Third"));
   assert.ok(html.includes("Sin evaluar"));
-});
-
-test("unstartedListView's action also names the engine as the one choosing, and links into practice", () => {
-  const html = unstartedListView([{ objective_id: "o1", level: "UNASSESSED" }], () => "x", "a b");
-  assert.ok(html.includes("Empezar algo nuevo (lo elige el motor)"));
-  assert.ok(html.includes('href="#/practice/a%20b"'));
 });
 
 test("describeProgressError names the missing topic on a 404 unknown-topic response", () => {

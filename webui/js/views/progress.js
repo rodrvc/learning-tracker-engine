@@ -1,7 +1,13 @@
 "use strict";
 
 import { ApiError } from "../api.js";
-import { levelBreakdownView, dueListView, unstartedListView, describeProgressError } from "../format.js";
+import {
+  levelBreakdownView,
+  dueListView,
+  unstartedListView,
+  progressActionView,
+  describeProgressError,
+} from "../format.js";
 
 // Renders the progress view for one topic (ACU-268): the level breakdown,
 // what is due and what was never practised, each list with one honest way
@@ -14,12 +20,14 @@ import { levelBreakdownView, dueListView, unstartedListView, describeProgressErr
 // this repo has questions for only a fraction of its objectives), so not
 // even the top row of `due` is a guaranteed match. A link beside a specific
 // row would tell someone they are about to practise that objective, which
-// would usually be false. See `progressActionView` in format.js for the
-// section-level action this renders instead, and its copy that says the
-// engine chooses. Reimplementing the engine's own choice here to target a
-// row for real would be the exact divergence SPEC exists to prevent - that
-// stays the engine's, on a future `objective_id` parameter, not a
-// client-side workaround.
+// would usually be false, and a per-list one is no better: due is walked
+// before unstarted globally, so an action over the unstarted list would
+// return an old objective whenever a due one has a question. See
+// `progressActionView` in format.js for the single action this renders
+// instead. Reimplementing the engine's own choice here to target a row for
+// real would be the exact divergence SPEC exists to prevent - that stays
+// the engine's, on a future `objective_id` parameter, not a client-side
+// workaround.
 //
 // State here is nothing but the three fetched lists: there is no in-flight
 // mutation this view starts (unlike material's generation, or practice's
@@ -55,13 +63,14 @@ export async function renderProgress(container, api, topicId) {
         <h3>Reparto por nivel</h3>
         <ul class="level-breakdown">${levelBreakdownView(summary.by_level)}</ul>
       </section>
+      ${progressActionView(topicId)}
       <section>
         <h3>Vencido (${due.length})</h3>
-        ${dueListView(due, titleFor, topicId)}
+        ${dueListView(due, titleFor)}
       </section>
       <section>
         <h3>Nunca practicado (${unstarted.length})</h3>
-        ${unstartedListView(unstarted, titleFor, topicId)}
+        ${unstartedListView(unstarted, titleFor)}
       </section>
     `;
   } catch (err) {
