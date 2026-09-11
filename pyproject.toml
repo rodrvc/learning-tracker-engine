@@ -13,11 +13,16 @@ dependencies = []
 learning-tracker = "ui.cli:main"
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0"]
+dev = ["pytest>=7.0", "httpx>=0.27"]
 postgres = ["psycopg[binary]>=3.1"]
+web = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "psycopg[binary,pool]>=3.1",
+]
 
 [tool.setuptools]
-packages = ["core", "store", "ui", "migrations"]
+packages = ["core", "store", "ui", "migrations", "web", "web.routers"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
