@@ -182,3 +182,106 @@ export function describePracticeUnavailable(err, { objectiveCount, topicId } = {
   }
   return message;
 }
+
+// --- Progress view (ACU-268) ---
+//
+// The engine computes the level and the threshold that produced it
+// (SPEC section 2); this module only translates the five identifiers that
+// travel over the API into the Spanish names a person reads, in the exact
+// order SPEC section 1.4 lists them. Nothing here derives a level from a
+// score or a date - every `ObjectiveStateOut` and `ProfileSummaryOut` field
+// used below is copied from the API response, not recomputed.
+
+export const LEVEL_ORDER = ["UNASSESSED", "WEAK", "LEARNING", "COMPETENT", "MASTERED"];
+
+const LEVEL_LABELS = {
+  UNASSESSED: "Sin evaluar",
+  WEAK: "Débil",
+  LEARNING: "Aprendiendo",
+  COMPETENT: "Competente",
+  MASTERED: "Dominado",
+};
+
+// Falls back to the raw identifier - visible and debuggable - rather than
+// to an empty string, so a level this map has not been taught yet still
+// shows something instead of a blank row.
+export function levelLabel(level) {
+  return LEVEL_LABELS[level] || String(level);
+}
+
+/** The level breakdown (SPEC section 9.4's `by_level`), one row per level in
+ * ladder order, zero counts included: "0 dominados" is information too.
+ *
+ * Iterates `LEVEL_ORDER` first, then appends any key the response carries
+ * that the ladder does not name, so a level this front end has not been
+ * taught yet still gets a row (through `levelLabel`'s own fallback) instead
+ * of silently vanishing - the engine always sends exactly the five SPEC 1.4
+ * levels today, but nothing here should assume it always will. */
+export function levelBreakdownView(byLevel) {
+  const source = byLevel || {};
+  const extraLevels = Object.keys(source).filter((level) => !LEVEL_ORDER.includes(level));
+  return [...LEVEL_ORDER, ...extraLevels]
+    .map(
+      (level) =>
+        `<li class="level-row"><span class="level-name">${escapeHtml(
+          levelLabel(level),
+        )}</span><span class="level-count">${escapeHtml(source[level] ?? 0)}</span></li>`,
+    )
+    .join("");
+}
+
+// One row of the "due" or "never practised" lists: the objective's own
+// name (looked up by the caller, the progress endpoints return only an id)
+// and its current level. No link here - see `progressActionView` for why a
+// direct path into practising this screen owes lives once per list, not
+// once per row.
+export function objectiveRowView(state, title) {
+  return `<li class="progress-item">
+      <span class="progress-item-title">${escapeHtml(title || state.objective_id)}</span>
+      <span class="progress-item-level">${escapeHtml(levelLabel(state.level))}</span>
+    </li>`;
+}
+
+// The one honest "direct path to practising" this screen can promise, and
+// there is exactly one of it. `GET .../practice/next`
+// (web/routers/practice.py) walks `(*due, *unstarted)` and picks the
+// objective itself, skipping any with no stored question as it goes
+// (HANDOFF.md: this repo has questions for only a fraction of its
+// objectives). So a link beside a row cannot honestly claim to target that
+// row - not even the top of `due` - and a second link over the unstarted
+// list cannot claim to start something new either: due comes first
+// globally, so it returns an old objective whenever any due one has a
+// question, which is the normal state of a topic in use. One control, one
+// behaviour, and copy that describes the order the engine actually walks.
+export function progressActionView(topicId) {
+  const label = "Practicar (el motor elige: primero lo vencido, después lo nunca practicado)";
+  return `<a class="progress-action" href="#/practice/${encodeURIComponent(topicId)}">${escapeHtml(
+    label,
+  )}</a>`;
+}
+
+export function dueListView(states, titleFor) {
+  if (!states.length) return '<p class="empty-view">No hay nada vencido por ahora.</p>';
+  const rows = states.map((state) => objectiveRowView(state, titleFor(state.objective_id))).join("");
+  return `<ul class="progress-list">${rows}</ul>`;
+}
+
+export function unstartedListView(states, titleFor) {
+  if (!states.length) {
+    return '<p class="empty-view">Ya se practicó cada objetivo al menos una vez.</p>';
+  }
+  const rows = states.map((state) => objectiveRowView(state, titleFor(state.objective_id))).join("");
+  return `<ul class="progress-list">${rows}</ul>`;
+}
+
+// The only failure this view distinguishes is "the topic does not exist" -
+// the same wording `describePracticeUnavailable` uses for it, kept
+// consistent across views - versus everything else, shown verbatim rather
+// than guessed at.
+export function describeProgressError(err, { topicId } = {}) {
+  const message = (err && err.message) || "Error inesperado.";
+  if (err && err.status === 404 && message.startsWith("unknown topic:")) {
+    return `No existe el tema "${topicId}".`;
+  }
+  return message;
+}

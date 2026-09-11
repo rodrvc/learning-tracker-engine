@@ -1,10 +1,6 @@
 "use strict";
 
-// The four views ACU-252 defines. Only "topics" has a view registered yet;
-// the other three are declared here as real destinations - the nav links to
-// them and the router recognises them - rather than left out entirely, which
-// is what turns them into filler screens instead of an honest "not built
-// yet".
+// The four views ACU-252 defines, all now wired to a real view in app.js.
 export const VIEWS = ["topics", "material", "practice", "progress"];
 const DEFAULT_VIEW = "topics";
 

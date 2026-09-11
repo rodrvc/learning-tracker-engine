@@ -83,6 +83,15 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ question_id, attempt_id, selected_key }),
     }),
+  // The three progress reads (ACU-268): the level breakdown, what is due
+  // and what was never practised. Every field on what they return is
+  // already derived by the engine (web/routers/progress.py) - this client
+  // adds no query parameter of its own that would let this layer pick a
+  // date or a threshold in the engine's place.
+  getSummary: (topicId) => request(`/topics/${encodeURIComponent(topicId)}/summary`),
+  getDue: (topicId) => request(`/topics/${encodeURIComponent(topicId)}/objectives/due`),
+  getUnstarted: (topicId) =>
+    request(`/topics/${encodeURIComponent(topicId)}/objectives/unstarted`),
 };
 
 export { ApiError };
