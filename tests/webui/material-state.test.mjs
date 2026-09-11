@@ -7,7 +7,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createGenerationTracker, createUploadTracker } from "../../webui/js/material-state.js";
+import { createGenerationTracker } from "../../webui/js/material-state.js";
 
 test("generation tracker: unknown material, then start/succeed/fail transitions", () => {
   const tracker = createGenerationTracker();
@@ -36,30 +36,18 @@ test("generation tracker keeps each material's state independent", () => {
   assert.equal(tracker.get("m2").running, false);
 });
 
-test("upload tracker: idle, then start/finish", () => {
-  const tracker = createUploadTracker();
-  assert.deepEqual(tracker.get(), { running: false, message: "" });
-  tracker.start("Subiendo...");
-  assert.deepEqual(tracker.get(), { running: true, message: "Subiendo..." });
-  tracker.finish();
-  assert.deepEqual(tracker.get(), { running: false, message: "" });
-});
-
 // The property the review's blocker turned on: `views/material.js` imports
-// the pre-built `generationTracker`/`uploadTracker`, not the factories
-// above, so that two calls to `renderMaterial` (two imports of this module,
-// which the runtime resolves to the one already-evaluated module) observe
-// the same state instead of each minting an empty one.
-test("generationTracker and uploadTracker survive a re-render: a second import sees the first's writes", async () => {
+// the pre-built `generationTracker`, not the factory above, so that two
+// calls to `renderMaterial` (two imports of this module, which the runtime
+// resolves to the one already-evaluated module) observe the same state
+// instead of each minting an empty one.
+test("generationTracker survives a re-render: a second import sees the first's writes", async () => {
   const firstRender = await import("../../webui/js/material-state.js");
   firstRender.generationTracker.start("survives", "Generando…");
-  firstRender.uploadTracker.start("Subiendo...");
   const secondRender = await import("../../webui/js/material-state.js");
   assert.deepEqual(secondRender.generationTracker.get("survives"), {
     running: true,
     message: "Generando…",
     error: false,
   });
-  assert.deepEqual(secondRender.uploadTracker.get(), { running: true, message: "Subiendo..." });
-  secondRender.uploadTracker.finish();
 });

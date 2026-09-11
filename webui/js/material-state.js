@@ -25,22 +25,12 @@ export function createGenerationTracker() {
   };
 }
 
-/** The upload form's in-flight state - one topic's material view has exactly
- * one upload form, so unlike generation this needs no key. */
-export function createUploadTracker() {
-  let state = { running: false, message: "" };
-  return {
-    get: () => state,
-    start: (message) => {
-      state = { running: true, message };
-    },
-    finish: () => {
-      state = { running: false, message: "" };
-    },
-  };
-}
-
 // Built once, at import time: this is what makes the state survive a
 // re-render, by giving every caller the same object instead of a fresh one.
+// Generation earns that treatment because it is slow and paid. Upload does
+// not: it is a second-long call, and the duplicate it would guard against
+// needs the user to leave, come back and retype every field inside that
+// second, because the new render's form is empty. Module scope there cost
+// more than it bought - it left a fresh render painted disabled with nothing
+// to repaint it, and one topic's upload disabled another topic's form.
 export const generationTracker = createGenerationTracker();
-export const uploadTracker = createUploadTracker();

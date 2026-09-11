@@ -38,7 +38,11 @@ test("topicItem links to the topic's own id, percent-encoded", () => {
 });
 
 test("objectiveItem escapes an attacker-controlled objective title", () => {
-  assert.equal(objectiveItem({ title: "<img src=x onerror=alert(1)>" }).includes("<img"), false);
+  // Both halves on purpose: asserting only the absence of the raw tag passes
+  // just as happily when the title is dropped from the markup altogether.
+  const html = objectiveItem({ title: "<img src=x onerror=alert(1)>" });
+  assert.equal(html.includes("<img"), false);
+  assert.ok(html.includes("&lt;img src=x onerror=alert(1)&gt;"));
 });
 
 test("formatDate keeps only the minute-precision, human part of the timestamp", () => {

@@ -8,15 +8,15 @@ import {
   generationSummary,
   describeGenerationError,
 } from "../format.js";
-import { generationTracker, uploadTracker } from "../material-state.js";
+import { generationTracker } from "../material-state.js";
 
 // Renders the material view for one topic: upload a page of notes, list the
 // pages already there, open one and generate questions from it. There is no
 // route without a topic, so a missing `topicId` points back at the topics
-// list. `generationTracker`/`uploadTracker` (material-state.js) are
-// imported, not built here: this function reruns on every visit, including
-// the back-link to the topic and the only way back in, so state it owned
-// itself would be discarded on exactly those two links.
+// list. `generationTracker` (material-state.js) is imported, not built
+// here: this function reruns on every visit, including the back-link to the
+// topic and the only way back in, so state it owned itself would be
+// discarded on exactly those two links.
 export async function renderMaterial(container, api, topicId) {
   if (!topicId) {
     container.innerHTML =
@@ -55,10 +55,6 @@ export async function renderMaterial(container, api, topicId) {
   // first one's fetch resolves) - scoped to this render on purpose, since a
   // newer render replaces these list buttons entirely.
   let openMaterialId = null;
-
-  // An upload already in flight from before this render (started, then the
-  // user came back via the back-link) has to look that way immediately.
-  paintUpload();
 
   fileInput.addEventListener("change", async () => {
     uploadFeedback.textContent = "";
@@ -147,20 +143,13 @@ export async function renderMaterial(container, api, topicId) {
     feedback.textContent = (state && state.message) || "";
   }
 
-  /** Reflects `uploadTracker` on the (freshly rendered) upload button. */
-  function paintUpload() {
-    const state = uploadTracker.get();
-    uploadButton.disabled = state.running;
-    uploadFeedback.textContent = state.running ? state.message : "";
-  }
-
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    if (uploadTracker.get().running) return; // already running; nothing to start twice
+    if (uploadButton.disabled) return; // already running; nothing to start twice
     // A material's id is minted server-side, so a duplicate POST cannot 409
     // like a topic's would - it just succeeds, with no delete to undo it.
-    uploadTracker.start("Subiendo...");
-    paintUpload();
+    uploadButton.disabled = true;
+    uploadFeedback.textContent = "Subiendo...";
     const title = titleInput.value.trim();
     const source = sourceInput.value.trim();
     const body = bodyInput.value;
@@ -174,7 +163,6 @@ export async function renderMaterial(container, api, topicId) {
       uploadFeedback.textContent = "";
       showError(uploadFeedback, err);
     } finally {
-      uploadTracker.finish();
       uploadButton.disabled = false;
     }
   });
