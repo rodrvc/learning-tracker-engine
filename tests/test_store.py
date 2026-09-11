@@ -9,9 +9,13 @@ Conventions:
   (isolation between profiles), I8 (verifiable recording).
 * ``edge``: C4 (out-of-order insertion) and C9 (duplicate ``attempt_id``).
 
-The whole suite runs against both backends (memory and JSON) through the
-``attempts`` / ``profiles`` fixture: a backend that deviates from the other
-fails.
+The whole suite runs against three backends (memory, JSON and Postgres)
+through the ``attempts`` / ``profiles`` fixture: a backend that deviates from
+the others fails. Postgres tests skip, with an explicit reason, when no
+database is reachable (set ``LEARNING_TRACKER_TEST_DATABASE_URL`` or run
+``docker compose up -d postgres``); they never fail silently and never run
+against production data, since each test session gets its own throwaway
+schema, dropped at the end of the run.
 """
 
 from __future__ import annotations
@@ -23,6 +27,7 @@ import multiprocessing
 import os
 import pathlib
 import threading
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -50,12 +55,70 @@ from store import (
 )
 from store.json_store import lock_path_for
 
+try:
+    import psycopg
+
+    from migrations.runner import apply_migrations
+    from store.postgres import PostgresAttemptStore, PostgresProfileStore
+except ImportError:  # pragma: no cover - exercised when the postgres extra is absent
+    psycopg = None
+
 UTC = timezone.utc
 T0 = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 P1, P2 = "ai-103", "az-900"
 O1, O2 = "D1.1-foo", "D1.2-bar"
 
-BACKENDS = ["memory", "json"]
+BACKENDS = ["memory", "json", "postgres"]
+
+# The compose file lets the host port move (5432 is usually taken by another
+# project), so the default DSN has to follow it. Otherwise the normal case
+# becomes "forgot the second variable, tests skipped, suite green".
+POSTGRES_PORT = os.environ.get("POSTGRES_PORT", "5432")
+POSTGRES_DSN = os.environ.get(
+    "LEARNING_TRACKER_TEST_DATABASE_URL",
+    f"postgresql://learning_tracker:learning_tracker@localhost:{POSTGRES_PORT}"
+    "/learning_tracker",
+)
+POSTGRES_SCHEMA = f"learning_test_{uuid.uuid4().hex[:8]}"
+
+
+def _postgres_reachable() -> bool:
+    if psycopg is None:
+        return False
+    try:
+        with psycopg.connect(POSTGRES_DSN, connect_timeout=1):
+            return True
+    except psycopg.Error:
+        return False
+
+
+POSTGRES_AVAILABLE = _postgres_reachable()
+_SKIP_REASON = (
+    "postgres no disponible: instala el extra 'postgres', exporta "
+    "LEARNING_TRACKER_TEST_DATABASE_URL o levanta `docker compose up -d postgres`"
+)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _postgres_test_schema():
+    """Builds a throwaway schema for the whole session and drops it after."""
+    if POSTGRES_AVAILABLE:
+        apply_migrations(POSTGRES_DSN, schema=POSTGRES_SCHEMA)
+    yield
+    if POSTGRES_AVAILABLE:
+        with psycopg.connect(POSTGRES_DSN) as conn:
+            conn.execute(f"DROP SCHEMA IF EXISTS {POSTGRES_SCHEMA} CASCADE")
+            conn.commit()
+
+
+def _reset_postgres_schema() -> None:
+    """Empties the throwaway schema so tests do not leak state into each other."""
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        conn.execute(
+            f"TRUNCATE {POSTGRES_SCHEMA}.attempts, {POSTGRES_SCHEMA}.objectives, "
+            f"{POSTGRES_SCHEMA}.profiles CASCADE"
+        )
+        conn.commit()
 
 
 def day(n: int) -> datetime:
@@ -79,17 +142,30 @@ def backend(request) -> str:
     return request.param
 
 
+def _skip_if_postgres_unavailable(backend: str) -> None:
+    if backend == "postgres" and not POSTGRES_AVAILABLE:
+        pytest.skip(_SKIP_REASON)
+
+
 @pytest.fixture
 def attempts(backend, tmp_path) -> AttemptStore:
+    _skip_if_postgres_unavailable(backend)
     if backend == "memory":
         return InMemoryAttemptStore()
+    if backend == "postgres":
+        _reset_postgres_schema()
+        return PostgresAttemptStore(POSTGRES_DSN, schema=POSTGRES_SCHEMA)
     return JsonAttemptStore(tmp_path / "attempts.json")
 
 
 @pytest.fixture
 def profiles(backend, tmp_path) -> ProfileStore:
+    _skip_if_postgres_unavailable(backend)
     if backend == "memory":
         return InMemoryProfileStore()
+    if backend == "postgres":
+        _reset_postgres_schema()
+        return PostgresProfileStore(POSTGRES_DSN, schema=POSTGRES_SCHEMA)
     return JsonProfileStore(tmp_path / "profiles.json")
 
 
@@ -142,8 +218,51 @@ def test_append_preserves_every_field_across_read(attempts):
     )
     attempts.append(P1, a)
     (read,) = attempts.list_all(P1)
+    # `==` on ``Attempt`` (and on the aware ``datetime`` inside it) compares
+    # instants, not offsets: the shared contract across backends is "the same
+    # instant comes back" (Postgres normalizes to UTC, JSON keeps the literal
+    # offset - see the dedicated test right below, which exercises exactly
+    # that distinction without branching per backend).
     assert read == a
-    assert read.at == a.at and read.at.utcoffset() == a.at.utcoffset()
+    assert read.at == a.at
+
+
+#: What each backend does with the offset it was given, declared rather than
+#: defaulted: a new backend has to add its row here, which is the point. Memory
+#: and JSON hand back the literal offset; Postgres stores an instant in a
+#: ``timestamptz`` and returns it in UTC.
+OFFSET_BEHAVIOUR = {
+    "memory": "preserved",
+    "json": "preserved",
+    "postgres": "normalized-to-utc",
+}
+
+
+@pytest.mark.spec
+def test_offset_handling_is_the_documented_one_per_backend(attempts, backend):
+    """The shared contract is the instant; the offset is each backend's own.
+
+    This is the one test in the suite that branches per backend on purpose. It
+    is not a contract test: it characterizes a documented divergence, so that
+    memory or JSON silently starting to normalize to UTC would fail. That check
+    lived inside ``test_append_preserves_every_field_across_read`` until
+    Postgres, which cannot honour it, forced it out of the shared contract
+    (ACU-247).
+    """
+    tz = timezone(timedelta(hours=-5))
+    at = datetime(2026, 3, 1, 10, 0, tzinfo=tz)
+    attempts.append(P1, make_attempt("a1", at=at))
+    (read,) = attempts.list_all(P1)
+
+    # The shared part: every backend owes the same instant, aware.
+    assert read.at == at
+    assert read.at.tzinfo is not None
+
+    expected = OFFSET_BEHAVIOUR[backend]
+    if expected == "preserved":
+        assert read.at.utcoffset() == tz.utcoffset(None)
+    else:
+        assert read.at.utcoffset() == timedelta(0)
 
 
 @pytest.mark.spec
@@ -187,6 +306,24 @@ def test_list_for_objective_orders_by_at_then_attempt_id(attempts):
     attempts.append(P1, make_attempt("c", at=day(0)))
     ids = [a.attempt_id for a in attempts.list_for_objective(P1, O1)]
     assert ids == ["c", "a", "z", "b"]
+
+
+@pytest.mark.edge
+def test_ties_order_by_codepoint_not_by_locale(attempts):
+    """The tie-break is codepoint order, and every backend owes the same one.
+
+    All-lowercase ASCII ids hide the failure this guards: a SQL backend orders
+    text under the database collation, which typically ignores case and
+    punctuation, while Python compares codepoints. Mixed case and punctuation
+    are where the two disagree. It matters because ties at the same ``at`` are
+    ordinary and ``recent_window`` is a positional sequence: a different order
+    is a different score, and can be a different level (SPEC C3, C4, I3).
+    """
+    ids = ["a1", "A1", "B-2", "b_2", "Z9", "z9", "a-1"]
+    for attempt_id in ids:
+        attempts.append(P1, make_attempt(attempt_id, at=day(1)))
+    assert [a.attempt_id for a in attempts.list_for_objective(P1, O1)] == sorted(ids)
+    assert [a.attempt_id for a in attempts.list_all(P1)] == sorted(ids)
 
 
 @pytest.mark.spec
@@ -300,6 +437,19 @@ def test_list_profiles_sorted_by_id(profiles, profile):
     profiles.save_profile(profile)
     assert [p.profile_id for p in profiles.list_profiles()] == sorted([P1, P2])
     assert profiles.list_profiles()[0] == profile
+
+
+@pytest.mark.edge
+def test_list_profiles_orders_by_codepoint_not_by_locale(profiles):
+    """Same collation trap as the attempts, and here it needs no odd input.
+
+    Profile ids are written by hand and mixed case is their normal shape, so
+    this is the ordering a locale-dependent backend gets wrong first.
+    """
+    ids = ["a1", "ai-103", "Az-900", "B1"]
+    for profile_id in ids:
+        profiles.save_profile(Profile(profile_id=profile_id, name=profile_id))
+    assert [p.profile_id for p in profiles.list_profiles()] == sorted(ids)
 
 
 @pytest.mark.spec
