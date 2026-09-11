@@ -1029,6 +1029,45 @@ def test_failing_connection_provider_raises_storage_error_not_driver_exception()
 
 @pytest.mark.spec
 @pytest.mark.skipif(psycopg is None, reason="requires the psycopg driver")
+def test_provider_that_fails_on_checkout_also_raises_storage_error():
+    """Acquisition is two steps and the second one is how a pool really fails.
+
+    The test above covers a provider that raises when it is called. A pool does
+    not fail there: describing a checkout always succeeds, and the failure -
+    exhaustion, a dead connection - arrives when the connection is actually
+    checked out, which is ``__enter__``. Guarding only the call let the failure
+    mode that happens in production leak the raw exception straight through
+    every method, which is precisely what I8 forbids.
+    """
+
+    class ExhaustedPool:
+        def __enter__(self):
+            raise RuntimeError("pool exhausted")
+
+        def __exit__(self, *exc_info):
+            return False
+
+    def checkout_fails():
+        return ExhaustedPool()
+
+    attempts = PostgresAttemptStore(checkout_fails)
+    profiles = PostgresProfileStore(checkout_fails)
+    for call in (
+        lambda: attempts.append(P1, make_attempt("a1")),
+        lambda: attempts.list_all(P1),
+        lambda: attempts.list_for_objective(P1, O1),
+        lambda: attempts.count(P1),
+        lambda: attempts.exists("a1"),
+        lambda: profiles.get_profile(P1),
+        lambda: profiles.list_profiles(),
+        lambda: profiles.save_profile(Profile(profile_id=P1, name="x")),
+    ):
+        with pytest.raises(StorageError):
+            call()
+
+
+@pytest.mark.spec
+@pytest.mark.skipif(psycopg is None, reason="requires the psycopg driver")
 def test_connection_provider_is_invoked_once_per_operation_never_reused():
     if not POSTGRES_AVAILABLE:
         pytest.skip(_SKIP_REASON)

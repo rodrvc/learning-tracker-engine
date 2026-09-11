@@ -52,8 +52,9 @@ observe the difference through ``==``; only code that inspects ``.tzinfo`` or
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import datetime, timezone
-from typing import Callable, ContextManager, Iterable
+from typing import Callable, ContextManager, Iterable, Iterator
 
 import psycopg
 from psycopg import errors as pg_errors
@@ -80,20 +81,43 @@ DEFAULT_SCHEMA = "learning"
 ConnectionProvider = Callable[[], ContextManager[psycopg.Connection]]
 
 
-def _open_connection(connect: ConnectionProvider) -> ContextManager[psycopg.Connection]:
-    """Calls ``connect`` and turns whatever it raises into ``StorageError``.
+@contextmanager
+def _open_connection(connect: ConnectionProvider) -> Iterator[psycopg.Connection]:
+    """Acquires a connection, turning any acquisition failure into ``StorageError``.
 
     The provider is arbitrary caller code, not necessarily ``psycopg.connect``,
     so this catches broadly rather than only ``psycopg.Error``: a failing
-    provider must surface as ``StorageError``, never as a leaked driver (or
-    other) exception (SPEC I8 — no silent half success, and no leaking
+    provider must surface as ``StorageError``, never as a leaked driver or
+    other exception (SPEC I8 - no silent half success, and no leaking
     concretions either). ``KeyboardInterrupt`` still propagates: it is a
     ``BaseException``, not an ``Exception``.
+
+    **Acquisition is two steps, and both can fail.** Calling the provider is
+    one; entering the context manager it returns is the other, and that is
+    where a real pool fails - an exhausted pool raises when a connection is
+    checked out, not when the checkout is described. Guarding only the call
+    would let the failure mode that actually happens in production go straight
+    through. The context manager protocol is therefore driven by hand, so that
+    a failure while acquiring is wrapped while an exception from the body is
+    not: the body's errors belong to the caller, which turns a unique violation
+    into ``DuplicateAttemptError`` and cannot do that through a wrapper.
+
+    ``__exit__`` still runs for both outcomes, which is what preserves the
+    transaction boundary: commit on a clean exit, rollback on an exception, and
+    for a pool provider, the connection returned rather than closed.
     """
     try:
-        return connect()
+        manager = connect()
+        conn = manager.__enter__()
     except Exception as exc:
         raise StorageError("no se pudo conectar a postgres") from exc
+    try:
+        yield conn
+    except BaseException as exc:
+        if not manager.__exit__(type(exc), exc, exc.__traceback__):
+            raise
+    else:
+        manager.__exit__(None, None, None)
 
 
 def _to_utc(moment: datetime | None) -> datetime | None:
