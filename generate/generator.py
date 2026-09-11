@@ -5,8 +5,8 @@ the questions produced here go on to generate.
 Same spirit as ``content/storage.py``: a single ``Protocol`` is the only
 thing a caller needs to know. ``generate.stub.StubGenerator`` is the
 reference implementation the test suite runs against (deterministic, no
-network, no credential); ``generate.claude.ClaudeGenerator`` is the real
-one.
+network, no credential); ``generate.openai_backend.OpenAIGenerator`` is
+the real one.
 
 **A generator persists nothing.** It returns proposed ``Objective`` and
 ``Question`` values; the caller decides what to store, and through what
@@ -61,7 +61,7 @@ class QuestionGenerator(Protocol):
         never read from the system clock directly (SPEC I2's discipline).
 
         Raises ``generate.errors.GenerationError`` when the response cannot
-        be turned into valid objectives/questions, or (``ClaudeGenerator``
+        be turned into valid objectives/questions, or (``OpenAIGenerator``
         only) when no credential is configured.
         """
         ...

@@ -18,7 +18,7 @@ class GenerationError(Exception):
 
 
 class MissingCredentialsError(GenerationError):
-    """``ANTHROPIC_API_KEY`` (or another supported credential) is not set.
+    """``OPENAI_API_KEY`` (or another supported credential) is not set.
 
     Raised only when generation is actually attempted, never at
     construction time: the rest of the application must keep serving

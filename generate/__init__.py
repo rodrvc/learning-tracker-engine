@@ -2,7 +2,7 @@
 
 See ``generator.py`` for the ``QuestionGenerator`` contract, ``stub.py`` for
 the deterministic implementation the test suite runs against, and
-``claude.py`` for the Claude API backed one.
+``openai_backend.py`` for the OpenAI API backed one.
 """
 
 from __future__ import annotations

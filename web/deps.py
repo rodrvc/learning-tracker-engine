@@ -17,8 +17,10 @@ from dataclasses import dataclass
 from fastapi import Request
 from psycopg_pool import ConnectionPool
 
-from content.postgres import PostgresQuestionStore
+from content.postgres import PostgresMaterialStore, PostgresQuestionStore
 from core.clock import Clock
+from generate.openai_backend import OpenAIGenerator
+from generate.generator import QuestionGenerator
 from core.tracker import LearningTracker
 from store import SystemClock
 from store.postgres import PostgresAttemptStore, PostgresProfileStore
@@ -36,7 +38,9 @@ class Resources:
     pool: ConnectionPool
     profiles: PostgresProfileStore
     attempts: PostgresAttemptStore
+    materials: PostgresMaterialStore
     questions: PostgresQuestionStore
+    generator: QuestionGenerator
     clock: Clock
 
     def tracker_for(self, profile_id: str) -> LearningTracker:
@@ -94,9 +98,19 @@ def build_resources(settings: Settings) -> Resources:
     kwargs = {"schema": settings.schema} if settings.schema else {}
     profiles = PostgresProfileStore(pool.connection, **kwargs)
     attempts = PostgresAttemptStore(pool.connection, **kwargs)
+    materials = PostgresMaterialStore(pool.connection, **kwargs)
     questions = PostgresQuestionStore(pool.connection, **kwargs)
     return Resources(
-        pool=pool, profiles=profiles, attempts=attempts, questions=questions, clock=SystemClock()
+        pool=pool,
+        profiles=profiles,
+        attempts=attempts,
+        materials=materials,
+        questions=questions,
+        # Constructed unconditionally. The client resolves its credential
+        # lazily, so a missing key fails the generation request and nothing
+        # else: uploading, reading, practising and progress keep working.
+        generator=OpenAIGenerator(),
+        clock=SystemClock(),
     )
 
 

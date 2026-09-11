@@ -1,8 +1,8 @@
 """A deterministic ``QuestionGenerator`` that needs no network and no key -
 what the test suite runs against. Produces real, constructible ``Question``
-values from the material's own sentences, matching ``ClaudeGenerator``'s
+values from the material's own sentences, matching ``OpenAIGenerator``'s
 shape, but makes no claim to the distractor quality that is the actual
-point of this package - that is ``ClaudeGenerator``'s prompt to deliver.
+point of this package - that is ``OpenAIGenerator``'s prompt to deliver.
 """
 
 from __future__ import annotations

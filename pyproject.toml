@@ -19,8 +19,13 @@ web = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
     "psycopg[binary,pool]>=3.1",
+    # The web application wires a generator at startup, so the generation
+    # package is not optional for it. Leaving it out did not degrade
+    # generation gracefully, it stopped the application from importing at
+    # all: uploading, reading, practising and progress went down with it.
+    "learning-tracker[generate]",
 ]
-generate = ["anthropic>=1.0", "pydantic>=2.0"]
+generate = ["openai>=2.0", "pydantic>=2.0"]
 
 [tool.setuptools]
 packages = ["core", "store", "ui", "migrations", "content", "web", "web.routers", "generate"]

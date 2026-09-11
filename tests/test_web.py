@@ -73,8 +73,13 @@ def client(settings: Settings):
     with TestClient(app) as test_client:
         yield test_client
     with psycopg.connect(POSTGRES_DSN) as conn:
+        # Materials and questions are truncated too. They have no foreign key
+        # to profiles, so truncating profiles does not cascade to them, and
+        # they used to survive from one test into the next. Anything asserting
+        # on a whole listing then saw rows another test had left behind.
         conn.execute(
-            f"TRUNCATE {POSTGRES_SCHEMA}.attempts, {POSTGRES_SCHEMA}.objectives, "
+            f"TRUNCATE {POSTGRES_SCHEMA}.attempts, {POSTGRES_SCHEMA}.questions, "
+            f"{POSTGRES_SCHEMA}.materials, {POSTGRES_SCHEMA}.objectives, "
             f"{POSTGRES_SCHEMA}.profiles CASCADE"
         )
         conn.commit()
@@ -836,3 +841,217 @@ def test_answer_unknown_question_fails_instead_of_empty_success(
     )
     assert response.status_code == 404
     assert "does-not-exist" in response.json()["detail"]
+
+
+# ============================================================ material (ACU-249)
+
+
+@pytest.fixture
+def material_topic(client: TestClient):
+    """A topic plus a generator that needs no network and no credential.
+
+    The application builds the real generator at startup; swapping it here is
+    what keeps the suite from depending on a key or on the model being up,
+    and what makes generation assertions deterministic.
+    """
+    from generate.stub import StubGenerator
+
+    client.post("/topics", json={"topic_id": "ai-103", "name": "AI-103"})
+    client.app.state.resources.generator = StubGenerator()
+    return "ai-103"
+
+
+def _upload(client: TestClient, topic_id: str, *, title: str = "Cuotas", body: str | None = None):
+    return client.post(
+        f"/topics/{topic_id}/material",
+        json={
+            "title": title,
+            "source": "notes.md",
+            "body": body
+            or ". ".join(f"Concepto {i} sobre cuotas y limites de la plataforma" for i in range(10)),
+        },
+    )
+
+
+@pytest.mark.spec
+def test_upload_stores_the_page_and_returns_it(client: TestClient, material_topic: str) -> None:
+    response = _upload(client, material_topic)
+    assert response.status_code == 201
+    body = response.json()
+    assert body["material_id"]
+    assert body["topic_id"] == material_topic
+    assert body["title"] == "Cuotas"
+    assert "Concepto 0" in body["body"]
+
+
+@pytest.mark.spec
+def test_listing_is_newest_first_and_carries_no_bodies(
+    client: TestClient, material_topic: str
+) -> None:
+    """Bodies are whole pages; a listing that shipped them would slow down as
+    a topic accumulates material, which is backwards."""
+    _upload(client, material_topic, title="Primera")
+    _upload(client, material_topic, title="Segunda")
+
+    listing = client.get(f"/topics/{material_topic}/material")
+    assert listing.status_code == 200
+    rows = listing.json()
+    assert [r["title"] for r in rows] == ["Segunda", "Primera"]
+    assert all("body" not in r for r in rows)
+
+
+@pytest.mark.spec
+def test_reading_one_material_includes_its_body(client: TestClient, material_topic: str) -> None:
+    material_id = _upload(client, material_topic).json()["material_id"]
+    got = client.get(f"/topics/{material_topic}/material/{material_id}")
+    assert got.status_code == 200
+    assert "Concepto 0" in got.json()["body"]
+
+
+@pytest.mark.spec
+def test_generation_writes_objectives_and_questions(
+    client: TestClient, material_topic: str
+) -> None:
+    material_id = _upload(client, material_topic).json()["material_id"]
+    generated = client.post(f"/topics/{material_topic}/material/{material_id}/generate")
+    assert generated.status_code == 200
+    body = generated.json()
+    assert body["questions_written"] > 0
+    assert body["objectives_written"] > 0
+
+    # The questions are reachable through the study path, which is the only
+    # reason to have written them.
+    nxt = client.get(f"/topics/{material_topic}/practice/next")
+    assert nxt.status_code == 200
+
+
+@pytest.mark.spec
+def test_regenerating_replaces_questions_and_never_touches_attempts(
+    client: TestClient, material_topic: str
+) -> None:
+    """The guarantee that matters most in this router.
+
+    Questions are derived and disposable. Attempts are evidence of what
+    somebody knew, are append-only by contract, and regenerating the questions
+    does not un-know it (SPEC I1).
+    """
+    material_id = _upload(client, material_topic).json()["material_id"]
+    first = client.post(f"/topics/{material_topic}/material/{material_id}/generate").json()
+
+    question = client.get(f"/topics/{material_topic}/practice/next").json()
+    answered = client.post(
+        f"/topics/{material_topic}/practice/answer",
+        json={
+            "question_id": question["question_id"],
+            "attempt_id": "att-before-regeneration",
+            "selected_key": question["options"][0]["key"],
+        },
+    )
+    assert answered.status_code == 200
+
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        before = conn.execute(f"SELECT count(*) FROM {POSTGRES_SCHEMA}.attempts").fetchone()[0]
+    assert before == 1
+
+    second = client.post(f"/topics/{material_topic}/material/{material_id}/generate").json()
+    assert second["questions_written"] == first["questions_written"]
+
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        after = conn.execute(f"SELECT count(*) FROM {POSTGRES_SCHEMA}.attempts").fetchone()[0]
+        questions = conn.execute(
+            f"SELECT count(*) FROM {POSTGRES_SCHEMA}.questions WHERE material_id = %s",
+            (material_id,),
+        ).fetchone()[0]
+    assert after == before, "regenerating destroyed recorded evidence"
+    assert questions == second["questions_written"], "regeneration accumulated duplicates"
+
+
+@pytest.mark.spec
+def test_oversized_body_is_refused_with_its_size(client: TestClient, material_topic: str) -> None:
+    from web.routers.material import MAX_BODY_CHARS
+
+    response = _upload(client, material_topic, body="x" * (MAX_BODY_CHARS + 1))
+    assert response.status_code == 413
+    assert str(MAX_BODY_CHARS) in response.json()["detail"]
+
+
+@pytest.mark.spec
+def test_upload_to_unknown_topic_fails_instead_of_orphaning(client: TestClient) -> None:
+    response = _upload(client, "no-such-topic")
+    assert response.status_code == 404
+    assert "no-such-topic" in response.json()["detail"]
+
+
+@pytest.mark.spec
+def test_material_of_another_topic_is_not_reachable(client: TestClient, material_topic: str) -> None:
+    """Material ids are unique across topics, so fetching by id alone would
+    serve somebody else's page from this topic's URL."""
+    client.post("/topics", json={"topic_id": "az-900", "name": "AZ-900"})
+    material_id = _upload(client, material_topic).json()["material_id"]
+
+    got = client.get(f"/topics/az-900/material/{material_id}")
+    assert got.status_code == 404
+    assert material_id in got.json()["detail"]
+
+
+@pytest.mark.spec
+def test_missing_credential_fails_only_generation(client: TestClient, material_topic: str) -> None:
+    """Everything that is not generation keeps working without a key."""
+    from generate.errors import MissingCredentialsError
+
+    class NoCredentials:
+        def generate(self, material, existing_objectives, *, now):
+            raise MissingCredentialsError("OPENAI_API_KEY is not set")
+
+    client.app.state.resources.generator = NoCredentials()
+    material_id = _upload(client, material_topic).json()["material_id"]
+
+    generated = client.post(f"/topics/{material_topic}/material/{material_id}/generate")
+    assert generated.status_code == 503
+    assert "OPENAI_API_KEY" in generated.json()["detail"]
+
+    # Uploading, listing and reading are unaffected.
+    assert _upload(client, material_topic, title="Otra").status_code == 201
+    assert client.get(f"/topics/{material_topic}/material").status_code == 200
+    assert client.get(f"/topics/{material_topic}/material/{material_id}").status_code == 200
+
+
+@pytest.mark.spec
+def test_blank_fields_are_rejected_as_a_client_error(
+    client: TestClient, material_topic: str
+) -> None:
+    """Whitespace is not a title, and saying so is this layer's job.
+
+    ``Material`` refuses to be built from a blank field. Without a matching
+    check here, a title of three spaces passed request validation, failed
+    inside the domain model, and reached the caller as an unhandled 500: a
+    client mistake reported as a server fault (ACU-249 review).
+    """
+    for field in ("title", "source", "body"):
+        payload = {"title": "T", "source": "s.md", "body": "cuerpo", field: "   "}
+        response = client.post(f"/topics/{material_topic}/material", json=payload)
+        assert response.status_code == 422, f"{field} blank returned {response.status_code}"
+
+
+@pytest.mark.spec
+def test_generation_failure_is_502_not_a_crash(client: TestClient, material_topic: str) -> None:
+    """A model that fails is a bad gateway, not a broken server."""
+    from generate.errors import GenerationError
+
+    class Failing:
+        def generate(self, material, existing_objectives, *, now):
+            raise GenerationError("the model produced no structured output")
+
+    client.app.state.resources.generator = Failing()
+    material_id = _upload(client, material_topic).json()["material_id"]
+    response = client.post(f"/topics/{material_topic}/material/{material_id}/generate")
+    assert response.status_code == 502
+    assert "structured output" in response.json()["detail"]
+
+
+@pytest.mark.spec
+def test_listing_an_unknown_topic_is_404_not_an_empty_list(client: TestClient) -> None:
+    """A front end must be able to tell "no such topic" from "topic is empty"."""
+    response = client.get("/topics/no-such-topic/material")
+    assert response.status_code == 404
+    assert "no-such-topic" in response.json()["detail"]
