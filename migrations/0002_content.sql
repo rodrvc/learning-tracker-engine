@@ -15,7 +15,12 @@ CREATE TABLE __SCHEMA__.materials (
     title text NOT NULL,
     source text NOT NULL,
     body text NOT NULL,
-    created_at timestamptz NOT NULL
+    created_at timestamptz NOT NULL,
+    -- Lets questions below carry a composite foreign key that enforces
+    -- Question.topic_id == its material's topic_id structurally (see
+    -- questions_material_topic_fkey). material_id alone is already unique
+    -- via the primary key; this constraint only makes the pair referenceable.
+    CONSTRAINT materials_material_topic_key UNIQUE (material_id, topic_id)
 );
 
 -- Speeds up list_for_topic's canonical order: created_at, then material_id.
@@ -35,9 +40,31 @@ CREATE TABLE __SCHEMA__.questions (
     options jsonb NOT NULL,
     correct_key text NOT NULL,
     explanation text NOT NULL,
-    material_id text COLLATE "C" NOT NULL
-        REFERENCES __SCHEMA__.materials (material_id) ON DELETE CASCADE,
-    created_at timestamptz NOT NULL
+    material_id text COLLATE "C" NOT NULL,
+    created_at timestamptz NOT NULL,
+
+    -- Ownership (content/storage.py's QuestionStore docstring): material_id
+    -- must name a material that already exists. Plain REFERENCES, no ON
+    -- DELETE CASCADE - MaterialStore is append-only by the deliberate
+    -- absence of a delete method, so CASCADE would encode a deletion the
+    -- contract says cannot happen. A stray manual delete against this
+    -- schema is refused loudly instead of silently taking the questions
+    -- with it, the same way TRUNCATE ... CASCADE in the test harness still
+    -- empties both tables without depending on this foreign key's action.
+    CONSTRAINT questions_material_id_fkey
+        FOREIGN KEY (material_id) REFERENCES __SCHEMA__.materials (material_id),
+
+    -- Topical consistency (content/storage.py's QuestionStore docstring): a
+    -- question's topic_id must equal its material's. Enforced structurally
+    -- rather than in application code, so it cannot drift the way an
+    -- unchecked second source of truth would. Named separately from the
+    -- foreign key above so content/postgres.py can tell the two failure
+    -- modes apart by constraint name and map each to the same exception the
+    -- memory backend raises for it (UnknownMaterialError for a missing
+    -- material, InvalidQuestionError for a topic mismatch).
+    CONSTRAINT questions_material_topic_fkey
+        FOREIGN KEY (material_id, topic_id)
+        REFERENCES __SCHEMA__.materials (material_id, topic_id)
 );
 
 -- Speeds up list_for_topic and list_for_objective's canonical order, and the

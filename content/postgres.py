@@ -14,6 +14,29 @@ describes it, and both steps have to surface as ``StorageError``.
 ``Question.options`` is stored as a ``jsonb`` array of ``[key, text]`` pairs
 (see ``migrations/0002_content.sql``): JSON preserves array order, so the
 tuple round-trips exactly as given.
+
+Ownership and topical consistency (``content/storage.py``'s ``QuestionStore``
+docstring) are enforced structurally here, by the two foreign keys the
+migration declares, rather than by calling ``content._common`` the way the
+memory backend does: a violation of ``questions_material_id_fkey`` (no such
+material) is mapped to :class:`~content.errors.UnknownMaterialError`, and a
+violation of ``questions_material_topic_fkey`` (material exists, topic
+differs) is mapped to :class:`~content.errors.InvalidQuestionError` -
+distinguished by constraint name, so the two backends agree on WHICH
+exception a caller sees, not merely that one is raised. The batch
+duplicate-id check IS reused from ``content._common`` : this backend
+pre-checks the incoming ids against the store, inside the same transaction
+as the writes that follow, so it can raise with the exact colliding id
+instead of leaking a driver message; the ``PRIMARY KEY`` stays as the
+backstop for a race between that check and the insert.
+
+The datetime trap
+------------------
+
+Like ``store/postgres.py``, this backend returns every ``created_at``
+normalized to UTC, while the memory backend returns whatever offset it was
+given. Aware ``datetime`` equality compares instants, so ``==`` cannot
+observe the difference; only ``.utcoffset()`` can.
 """
 
 from __future__ import annotations
@@ -27,6 +50,7 @@ from psycopg import errors as pg_errors
 
 from store.postgres import ConnectionProvider, DEFAULT_SCHEMA, _open_connection
 
+from ._common import reject_duplicate_ids
 from .errors import (
     DuplicateMaterialError,
     DuplicateQuestionError,
@@ -36,6 +60,12 @@ from .errors import (
     UnknownQuestionError,
 )
 from .models import Material, Question
+
+#: Name of the composite foreign key that enforces topical consistency (see
+#: migrations/0002_content.sql). A violation of THIS constraint means the
+#: material exists but under a different topic; any other foreign key
+#: violation on ``questions`` means the material does not exist at all.
+_TOPIC_FK_CONSTRAINT = "questions_material_topic_fkey"
 
 
 def _to_utc(moment: datetime) -> datetime:
@@ -196,36 +226,70 @@ class PostgresQuestionStore:
         return _open_connection(self._connect_fn)
 
     def _insert(self, conn: psycopg.Connection, question: Question) -> None:
-        conn.execute(
-            f"""
-            INSERT INTO {self._schema}.questions
-                (question_id, topic_id, objective_id, stem, options,
-                 correct_key, explanation, material_id, created_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """,
-            (
-                question.question_id,
-                question.topic_id,
-                question.objective_id,
-                question.stem,
-                json.dumps([list(pair) for pair in question.options]),
-                question.correct_key,
-                question.explanation,
-                question.material_id,
-                question.created_at,
-            ),
-        )
+        try:
+            conn.execute(
+                f"""
+                INSERT INTO {self._schema}.questions
+                    (question_id, topic_id, objective_id, stem, options,
+                     correct_key, explanation, material_id, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    question.question_id,
+                    question.topic_id,
+                    question.objective_id,
+                    question.stem,
+                    json.dumps([list(pair) for pair in question.options]),
+                    question.correct_key,
+                    question.explanation,
+                    question.material_id,
+                    question.created_at,
+                ),
+            )
+        except pg_errors.ForeignKeyViolation as exc:
+            if exc.diag.constraint_name == _TOPIC_FK_CONSTRAINT:
+                raise InvalidQuestionError(
+                    f"question {question.question_id!r} topic_id {question.topic_id!r} "
+                    f"no coincide con el topic_id del material {question.material_id!r}"
+                ) from exc
+            raise UnknownMaterialError(question.material_id) from exc
+
+    def _check_no_duplicates(
+        self, conn: psycopg.Connection, incoming: list[Question], exclude_material_id: str | None = None
+    ) -> None:
+        """Pre-checks the batch against already-stored ids, inside the same
+        transaction as the writes that follow, so a duplicate is reported
+        with its exact id rather than through the ``PRIMARY KEY``, which
+        stays only as the backstop for a race with this check.
+
+        ``exclude_material_id``, when given, excludes that material's own
+        current questions - they are about to be replaced, not collided
+        with (mirrors the memory backend's ``existing_elsewhere``).
+        """
+        ids = [q.question_id for q in incoming]
+        where = "WHERE question_id = ANY(%s)"
+        params: tuple = (ids,)
+        if exclude_material_id is not None:
+            where += " AND material_id != %s"
+            params += (exclude_material_id,)
+        rows = conn.execute(
+            f"SELECT question_id FROM {self._schema}.questions {where}", params
+        ).fetchall()
+        existing = {row[0] for row in rows}
+        reject_duplicate_ids(incoming, existing)
 
     def add_many(self, questions: Iterable[Question]) -> int:
         """Persists a batch of questions, atomically. See the Protocol docstring."""
         incoming = list(questions)
-        _reject_internal_duplicates(incoming)
         try:
             with self._connect() as conn:
+                self._check_no_duplicates(conn, incoming)
                 for question in incoming:
                     self._insert(conn, question)
         except pg_errors.UniqueViolation as exc:
-            raise DuplicateQuestionError(str(exc)) from exc
+            raise DuplicateQuestionError(
+                "duplicate question_id detected by the database"
+            ) from exc
         except psycopg.Error as exc:
             raise StorageError(f"no se pudieron guardar las preguntas: {exc}") from exc
         return len(incoming)
@@ -298,6 +362,14 @@ class PostgresQuestionStore:
             raise StorageError(f"no se pudo verificar la pregunta: {exc}") from exc
         return row is not None
 
+    def _check_material_exists(self, conn: psycopg.Connection, material_id: str) -> None:
+        row = conn.execute(
+            f"SELECT 1 FROM {self._schema}.materials WHERE material_id = %s",
+            (material_id,),
+        ).fetchone()
+        if row is None:
+            raise UnknownMaterialError(material_id)
+
     def replace_for_material(self, material_id: str, questions: Iterable[Question]) -> int:
         """Atomically replaces the questions of ``material_id``.
 
@@ -314,9 +386,10 @@ class PostgresQuestionStore:
                     f"question {question.question_id!r} no pertenece a "
                     f"material {material_id!r}"
                 )
-        _reject_internal_duplicates(incoming)
         try:
             with self._connect() as conn:
+                self._check_material_exists(conn, material_id)
+                self._check_no_duplicates(conn, incoming, exclude_material_id=material_id)
                 conn.execute(
                     f"DELETE FROM {self._schema}.questions WHERE material_id = %s",
                     (material_id,),
@@ -324,18 +397,12 @@ class PostgresQuestionStore:
                 for question in incoming:
                     self._insert(conn, question)
         except pg_errors.UniqueViolation as exc:
-            raise DuplicateQuestionError(str(exc)) from exc
+            raise DuplicateQuestionError(
+                "duplicate question_id detected by the database"
+            ) from exc
         except psycopg.Error as exc:
             raise StorageError(f"no se pudo reemplazar las preguntas: {exc}") from exc
         return len(incoming)
-
-
-def _reject_internal_duplicates(questions: list[Question]) -> None:
-    seen: set[str] = set()
-    for question in questions:
-        if question.question_id in seen:
-            raise DuplicateQuestionError(question.question_id)
-        seen.add(question.question_id)
 
 
 __all__ = ["PostgresMaterialStore", "PostgresQuestionStore"]

@@ -84,8 +84,11 @@ def _postgres_test_schema():
 def _reset_postgres_schema() -> None:
     """Empties the throwaway schema so tests do not leak state into each other.
 
-    Truncating ``materials`` cascades into ``questions`` via the foreign key,
-    exactly as ``ON DELETE CASCADE`` is declared in the migration.
+    ``TRUNCATE ... CASCADE`` also empties ``questions`` because it references
+    ``materials`` - this follows from the foreign keys existing at all, not
+    from their delete action (there is no ``ON DELETE CASCADE`` here: a
+    manual ``DELETE`` against a live database is refused loudly instead,
+    since ``MaterialStore`` is append-only).
     """
     with psycopg.connect(POSTGRES_DSN) as conn:
         conn.execute(f"TRUNCATE {POSTGRES_SCHEMA}.materials CASCADE")
