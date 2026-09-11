@@ -19,7 +19,7 @@ from psycopg_pool import ConnectionPool
 
 from content.postgres import PostgresMaterialStore, PostgresQuestionStore
 from core.clock import Clock
-from generate.claude import ClaudeGenerator
+from generate.openai_backend import OpenAIGenerator
 from generate.generator import QuestionGenerator
 from core.tracker import LearningTracker
 from store import SystemClock
@@ -109,7 +109,7 @@ def build_resources(settings: Settings) -> Resources:
         # Constructed unconditionally. The client resolves its credential
         # lazily, so a missing key fails the generation request and nothing
         # else: uploading, reading, practising and progress keep working.
-        generator=ClaudeGenerator(),
+        generator=OpenAIGenerator(),
         clock=SystemClock(),
     )
 

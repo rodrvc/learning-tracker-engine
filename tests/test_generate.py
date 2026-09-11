@@ -1,9 +1,9 @@
 """Tests of ``generate/`` against the ``QuestionGenerator`` contract.
 
 Everything here runs against ``StubGenerator`` or a fake, injected client -
-never the real Claude API. The ``anthropic`` package itself IS imported
-(``generate/claude.py`` imports it at module level on purpose - see that
-module's docstring), so CI installs the ``generate`` extra for this file.
+never the real OpenAI API. The ``openai`` package itself IS imported
+(``generate/openai_backend.py`` imports it at module level on purpose - see
+that module's docstring), so CI installs the ``generate`` extra for this file.
 """
 
 from __future__ import annotations
@@ -12,15 +12,15 @@ import random
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
-import anthropic
-import httpx2
+import httpx
+import openai
 import pytest
 
 from content.models import Material
 from core.clock import FixedClock
 from core.models import Objective
-from generate import claude
-from generate.claude import ClaudeGenerator
+from generate import prompting
+from generate.openai_backend import OpenAIGenerator
 from generate.errors import GenerationError, MissingCredentialsError
 from generate.stub import StubGenerator
 
@@ -95,14 +95,14 @@ class TestStubGenerator:
         assert len(result.questions[0].options) >= 2
 
 
-def _auth_error() -> anthropic.AuthenticationError:
-    response = httpx2.Response(
-        401, request=httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
+def _auth_error() -> openai.AuthenticationError:
+    response = httpx.Response(
+        401, request=httpx.Request("POST", "https://api.openai.com/v1/responses")
     )
-    return anthropic.AuthenticationError("invalid x-api-key", response=response, body=None)
+    return openai.AuthenticationError("invalid api key", response=response, body=None)
 
 
-class _FakeMessages:
+class _FakeResponses:
     def __init__(self, response: object = None, *, raises: Exception | None = None) -> None:
         self._response = response
         self._raises = raises
@@ -115,28 +115,39 @@ class _FakeMessages:
 
 class _FakeClient:
     def __init__(self, response: object = None, *, raises: Exception | None = None) -> None:
-        self.messages = _FakeMessages(response, raises=raises)
+        self.responses = _FakeResponses(response, raises=raises)
 
 
-def _response(parsed_output: object, stop_reason: str = "end_turn", **extra: object) -> object:
-    return SimpleNamespace(parsed_output=parsed_output, stop_reason=stop_reason, **extra)
+def _response(output_parsed: object, status: str = "completed", refusal: str | None = None):
+    """A response shaped like the SDK's.
+
+    A refusal arrives on an output content item rather than at the top level,
+    so the fake nests it the same way: a test that asserted on a flat field
+    would pass while the real shape went unhandled.
+    """
+    content = [SimpleNamespace(refusal=refusal)] if refusal else []
+    return SimpleNamespace(
+        output_parsed=output_parsed,
+        status=status,
+        output=[SimpleNamespace(content=content)],
+    )
 
 
-def _question(**overrides: object) -> "claude._ProposedQuestion":
+def _question(**overrides: object) -> "prompting._ProposedQuestion":
     fields = dict(
         objective_id="blob-basics",
         stem="What is blob storage optimized for?",
         options=[
-            claude._ProposedOption(
+            prompting._ProposedOption(
                 key="A", text="Unstructured object data", why_tempting="It is in fact correct."
             ),
-            claude._ProposedOption(
+            prompting._ProposedOption(
                 key="B", text="Relational tables", why_tempting="Storage accounts also offer tables."
             ),
-            claude._ProposedOption(
+            prompting._ProposedOption(
                 key="C", text="Block devices", why_tempting="Sounds like a storage primitive too."
             ),
-            claude._ProposedOption(
+            prompting._ProposedOption(
                 key="D", text="Message queues", why_tempting="Another Azure service, easily confused."
             ),
         ],
@@ -144,15 +155,15 @@ def _question(**overrides: object) -> "claude._ProposedQuestion":
         explanation="The material states blob storage is for unstructured object data.",
     )
     fields.update(overrides)
-    return claude._ProposedQuestion(**fields)
+    return prompting._ProposedQuestion(**fields)
 
 
 def _parsed(
     objectives: list | None = None, questions: list | None = None
-) -> "claude._GenerationSchema":
-    return claude._GenerationSchema(
+) -> "prompting._GenerationSchema":
+    return prompting._GenerationSchema(
         objectives=(
-            [claude._ProposedObjective(objective_id="blob-basics", title="Blob basics")]
+            [prompting._ProposedObjective(objective_id="blob-basics", title="Blob basics")]
             if objectives is None
             else objectives
         ),
@@ -160,11 +171,11 @@ def _parsed(
     )
 
 
-class TestClaudeGenerator:
+class TestOpenAIGenerator:
     """The conversion and failure-handling logic, via a fake client."""
 
     def test_converts_a_well_formed_response(self):
-        gen = ClaudeGenerator(client=_FakeClient(_response(_parsed())))
+        gen = OpenAIGenerator(client=_FakeClient(_response(_parsed())))
         result = gen.generate(MATERIAL, existing_objectives=[], now=FixedClock(T0))
         assert len(result.objectives) == 1
         assert result.objectives[0].objective_id == "blob-basics"
@@ -177,7 +188,7 @@ class TestClaudeGenerator:
     def test_attaches_to_an_existing_objective_by_id(self):
         existing = Objective(objective_id="storage-basics", title="Storage basics")
         parsed = _parsed(objectives=[], questions=[_question(objective_id="storage-basics")])
-        gen = ClaudeGenerator(client=_FakeClient(_response(parsed)))
+        gen = OpenAIGenerator(client=_FakeClient(_response(parsed)))
         result = gen.generate(MATERIAL, existing_objectives=[existing], now=FixedClock(T0))
         assert result.objectives == ()
         assert result.questions[0].objective_id == "storage-basics"
@@ -187,7 +198,7 @@ class TestClaudeGenerator:
         model happened to answer in must not leak through unchanged."""
         positions = set()
         for seed in range(10):
-            gen = ClaudeGenerator(
+            gen = OpenAIGenerator(
                 client=_FakeClient(_response(_parsed())), random_source=random.Random(seed)
             )
             result = gen.generate(MATERIAL, existing_objectives=[], now=FixedClock(T0))
@@ -204,28 +215,26 @@ class TestClaudeGenerator:
         ],
     )
     def test_malformed_response_raises_instead_of_persisting_rubbish(self, questions):
-        gen = ClaudeGenerator(client=_FakeClient(_response(_parsed(questions=questions))))
+        gen = OpenAIGenerator(client=_FakeClient(_response(_parsed(questions=questions))))
         with pytest.raises(GenerationError):
             gen.generate(MATERIAL, existing_objectives=[], now=FixedClock(T0))
 
     def test_refusal_is_reported_as_a_refusal_not_a_malformed_response(self):
-        response = _response(
-            None, stop_reason="refusal", stop_details=SimpleNamespace(category="cyber")
-        )
-        gen = ClaudeGenerator(client=_FakeClient(response))
+        response = _response(None, refusal="I can't help with that.")
+        gen = OpenAIGenerator(client=_FakeClient(response))
         with pytest.raises(GenerationError, match="refus"):
             gen.generate(MATERIAL, existing_objectives=[], now=FixedClock(T0))
 
-    def test_missing_parsed_output_without_refusal_raises(self):
-        """``parsed_output`` is ``Optional`` and can be ``None`` on a
+    def test_missing_output_parsed_without_refusal_raises(self):
+        """``output_parsed`` is ``Optional`` and can be ``None`` on a
         response that carries no parsed text block (e.g. all thinking),
         distinct from a refusal."""
-        response = _response(None, stop_reason="max_tokens")
-        gen = ClaudeGenerator(client=_FakeClient(response))
-        with pytest.raises(GenerationError, match="max_tokens"):
+        response = _response(None, status="incomplete")
+        gen = OpenAIGenerator(client=_FakeClient(response))
+        with pytest.raises(GenerationError, match="incomplete"):
             gen.generate(MATERIAL, existing_objectives=[], now=FixedClock(T0))
 
     def test_authentication_error_is_reported_as_missing_credentials(self):
-        gen = ClaudeGenerator(client=_FakeClient(raises=_auth_error()))
+        gen = OpenAIGenerator(client=_FakeClient(raises=_auth_error()))
         with pytest.raises(MissingCredentialsError):
             gen.generate(MATERIAL, existing_objectives=[], now=FixedClock(T0))
