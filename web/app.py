@@ -23,11 +23,12 @@ from typing import AsyncIterator
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from content.errors import StorageError as ContentStorageError
 from core.errors import StorageError
 
 from .config import MissingSettingError, Settings
 from .deps import build_resources, close_resources
-from .routers import progress, topics
+from .routers import practice, progress, topics
 
 logger = logging.getLogger(__name__)
 
@@ -73,15 +74,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     @app.exception_handler(StorageError)
-    def storage_unavailable(request: Request, exc: StorageError) -> JSONResponse:
+    @app.exception_handler(ContentStorageError)
+    def storage_unavailable(request: Request, exc: Exception) -> JSONResponse:
         """Turns a storage failure into 503 instead of an opaque 500.
 
         ``store.postgres`` goes to some length to guarantee that every failure
         to reach the database surfaces as ``StorageError`` rather than a leaked
-        driver exception. Without this handler the web layer threw that
-        guarantee away one level up: every route answered a dead database with
-        a generic 500 and a traceback in the log, which tells a caller nothing
-        and an operator little.
+        driver exception, and ``content.postgres`` makes the same guarantee
+        with its own ``StorageError`` class (the two packages do not share
+        exception hierarchies, so both are registered here). Without this
+        handler the web layer threw that guarantee away one level up: every
+        route answered a dead database with a generic 500 and a traceback in
+        the log, which tells a caller nothing and an operator little.
 
         503 is the honest code: the service cannot serve the request now and
         the caller may retry.
@@ -90,6 +94,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return JSONResponse({"detail": STORAGE_UNAVAILABLE_DETAIL}, status_code=503)
 
     app.include_router(topics.router)
+    app.include_router(practice.router)
     app.include_router(progress.router)
     return app
 
