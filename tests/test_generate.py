@@ -15,6 +15,7 @@ from types import SimpleNamespace
 import httpx
 import openai
 import pytest
+from pydantic import ValidationError
 
 from content.models import Material
 from core.clock import FixedClock
@@ -256,3 +257,58 @@ def test_no_credential_configured_raises_missing_credentials_not_a_crash(monkeyp
 
     with pytest.raises(MissingCredentialsError):
         OpenAIGenerator().generate(MATERIAL, existing_objectives=[], now=FixedClock(T0))
+
+
+class TestResponseSchemaEnforcement:
+    """The schema's own guarantees, asserted rather than assumed.
+
+    ``prompting`` exists to enforce what the prompt asks for, so a model that
+    ignores an instruction fails loudly instead of shipping a silent quality
+    regression. Every constraint below was reachable only through a correct
+    model response until these tests existed: the validator and the two
+    cardinality bounds could each be deleted with the whole suite still green
+    (ACU-249 review). The counts are written as literals on purpose - derived
+    from the module's constants they would assert the comparison and never the
+    value.
+    """
+
+    @pytest.mark.parametrize("missing", ["", "   ", None])
+    def test_a_wrong_option_without_why_tempting_is_rejected(self, missing):
+        options = [
+            prompting._ProposedOption(key="A", text="Correct", why_tempting=None),
+            prompting._ProposedOption(key="B", text="Wrong", why_tempting=missing),
+            prompting._ProposedOption(key="C", text="Wrong", why_tempting="Plausible."),
+            prompting._ProposedOption(key="D", text="Wrong", why_tempting="Plausible."),
+        ]
+        with pytest.raises(ValidationError, match="why_tempting"):
+            _question(options=options, correct_key="A")
+
+    def test_the_correct_option_needs_no_why_tempting(self):
+        """Only the distractors owe an explanation; the right answer does not."""
+        options = [
+            prompting._ProposedOption(key="A", text="Correct", why_tempting=None),
+            prompting._ProposedOption(key="B", text="Wrong", why_tempting="Plausible."),
+            prompting._ProposedOption(key="C", text="Wrong", why_tempting="Plausible."),
+            prompting._ProposedOption(key="D", text="Wrong", why_tempting="Plausible."),
+        ]
+        assert _question(options=options, correct_key="A").correct_key == "A"
+
+    @pytest.mark.parametrize("count", [2, 3, 5])
+    def test_a_question_takes_exactly_four_options(self, count):
+        options = [
+            prompting._ProposedOption(
+                key=key, text=f"Option {key}", why_tempting="Plausible."
+            )
+            for key in "ABCDE"[:count]
+        ]
+        with pytest.raises(ValidationError):
+            _question(options=options, correct_key="A")
+
+    def test_a_response_with_no_questions_is_rejected(self):
+        """An empty run is a failure to report, not a result to store."""
+        with pytest.raises(ValidationError):
+            _parsed(questions=[])
+
+    def test_a_response_of_more_than_eight_questions_is_rejected(self):
+        with pytest.raises(ValidationError):
+            _parsed(questions=[_question() for _ in range(9)])

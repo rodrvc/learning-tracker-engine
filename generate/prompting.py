@@ -146,14 +146,12 @@ def _shuffle_options(
     return shuffled, new_correct_key
 
 
-
-
 def build_result(
-random_source: random.Random,
-material: Material,
-existing_objectives: Sequence[Objective],
-parsed: _GenerationSchema,
-created_at: datetime,
+    random_source: random.Random,
+    material: Material,
+    existing_objectives: Sequence[Objective],
+    parsed: _GenerationSchema,
+    created_at: datetime,
 ) -> GenerationResult:
     known_ids = {obj.objective_id for obj in existing_objectives}
     try:
