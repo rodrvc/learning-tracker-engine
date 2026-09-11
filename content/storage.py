@@ -1,9 +1,8 @@
 """The persistence interfaces of the content package.
 
 Same spirit as ``core/storage.py``: these two ``Protocol`` types are the only
-thing a caller needs to know about. The concrete backend of this delivery
-lives in ``content/memory.py``; a ``postgres`` backend belongs here next,
-against these same two Protocols.
+thing a caller needs to know about. Concrete backends live in
+``content/memory.py`` (the reference) and ``content/postgres.py``.
 
 Canonical read order (imposed on read, never on write, exactly like the
 engine's ``AttemptStore``): every read below returns results sorted by

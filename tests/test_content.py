@@ -1,14 +1,15 @@
 """Tests of ``content/`` against the guarantees of ``content/storage.py``.
 
-Scope of this delivery (ACU-245): the in-memory backend only - a ``postgres``
-backend does not fit this change's line budget alongside a fully documented
-memory backend (see the pull request description). Written through the
-``materials`` / ``questions`` fixtures so a future ``postgres`` fixture needs
-no per-test changes.
+Same harness shape as ``tests/test_store.py``: one shared, parametrized suite
+runs against every backend (memory and Postgres) through the ``materials`` /
+``questions`` fixtures, no per-backend branches. Postgres tests skip, with an
+explicit reason, when no database is reachable.
 """
 
 from __future__ import annotations
 
+import os
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -25,16 +26,81 @@ from content.memory import new_memory_stores
 from content.models import Material, Question
 from content.storage import MaterialStore, QuestionStore
 
-T0 = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+try:
+    import psycopg
+
+    from migrations.runner import apply_migrations
+    from content.postgres import PostgresMaterialStore, PostgresQuestionStore
+except ImportError:  # pragma: no cover - exercised when the postgres extra is absent
+    psycopg = None
+
+UTC = timezone.utc
+T0 = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 TOPIC = "ai-103"
+
+BACKENDS = ["memory", "postgres"]
+
+# The compose file lets the host port move (5432 is usually taken by another
+# project), so the default DSN has to follow it. Otherwise the normal case
+# becomes "forgot the second variable, tests skipped, suite green".
+POSTGRES_PORT = os.environ.get("POSTGRES_PORT", "5432")
+POSTGRES_DSN = os.environ.get(
+    "LEARNING_TRACKER_TEST_DATABASE_URL",
+    f"postgresql://learning_tracker:learning_tracker@localhost:{POSTGRES_PORT}"
+    "/learning_tracker",
+)
+POSTGRES_SCHEMA = f"learning_test_content_{uuid.uuid4().hex[:8]}"
+
+
+def _postgres_reachable() -> bool:
+    if psycopg is None:
+        return False
+    try:
+        with psycopg.connect(POSTGRES_DSN, connect_timeout=1):
+            return True
+    except psycopg.Error:
+        return False
+
+
+POSTGRES_AVAILABLE = _postgres_reachable()
+_SKIP_REASON = (
+    "postgres no disponible: instala el extra 'postgres', exporta "
+    "LEARNING_TRACKER_TEST_DATABASE_URL o levanta `docker compose up -d postgres`"
+)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _postgres_test_schema():
+    """Builds a throwaway schema for the whole session and drops it after."""
+    if POSTGRES_AVAILABLE:
+        apply_migrations(POSTGRES_DSN, schema=POSTGRES_SCHEMA)
+    yield
+    if POSTGRES_AVAILABLE:
+        with psycopg.connect(POSTGRES_DSN) as conn:
+            conn.execute(f"DROP SCHEMA IF EXISTS {POSTGRES_SCHEMA} CASCADE")
+            conn.commit()
+
+
+def _reset_postgres_schema() -> None:
+    """Empties the throwaway schema so tests do not leak state into each other.
+
+    Truncating ``materials`` cascades into ``questions`` via the foreign key,
+    exactly as ``ON DELETE CASCADE`` is declared in the migration.
+    """
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        conn.execute(f"TRUNCATE {POSTGRES_SCHEMA}.materials CASCADE")
+        conn.commit()
+
 
 def day(n: int) -> datetime:
     return T0 + timedelta(days=n)
+
 
 def make_material(material_id: str, topic_id: str = TOPIC, at: datetime = T0) -> Material:
     return Material(
         material_id=material_id, topic_id=topic_id, title="T", source="s", body="b", created_at=at
     )
+
 
 def make_question(
     question_id: str, material_id: str, topic_id: str = TOPIC, objective_id: str = "D1.1", at=T0, **kw
@@ -51,26 +117,55 @@ def make_question(
         created_at=at,
     )
 
+@pytest.fixture(params=BACKENDS)
+def backend(request) -> str:
+    return request.param
+
+
+def _skip_if_postgres_unavailable(backend: str) -> None:
+    if backend == "postgres" and not POSTGRES_AVAILABLE:
+        pytest.skip(_SKIP_REASON)
+
+
 @pytest.fixture
-def content_store():
-    return new_memory_stores()
+def content_store(backend):
+    """A matched (MaterialStore, QuestionStore) pair sharing one backing
+    store - the memory factory returns one directly; the two Postgres stores
+    already share a connection provider and schema, so constructing them
+    together here keeps both backends symmetric."""
+    _skip_if_postgres_unavailable(backend)
+    if backend == "memory":
+        return new_memory_stores()
+    _reset_postgres_schema()
+    return (
+        PostgresMaterialStore.from_dsn(POSTGRES_DSN, schema=POSTGRES_SCHEMA),
+        PostgresQuestionStore.from_dsn(POSTGRES_DSN, schema=POSTGRES_SCHEMA),
+    )
+
 
 @pytest.fixture
 def materials(content_store) -> MaterialStore:
     return content_store[0]
 
+
 @pytest.fixture
 def questions(content_store) -> QuestionStore:
     return content_store[1]
+
 
 def seed_material(materials: MaterialStore, material_id: str = "m1") -> Material:
     material = make_material(material_id)
     materials.add(material)
     return material
 
+
 def test_concrete_stores_satisfy_protocols(materials, questions):
     assert isinstance(materials, MaterialStore)
     assert isinstance(questions, QuestionStore)
+
+
+# ============================================================================ Material
+
 
 def test_material_store_appends_reads_and_rejects_duplicates(materials):
     m = seed_material(materials)
@@ -82,11 +177,13 @@ def test_material_store_appends_reads_and_rejects_duplicates(materials):
         materials.add(make_material("m1"))
     assert materials.get("m1") == m  # rejected duplicate left the original intact
 
+
 def test_get_unknown_raises(materials, questions):
     with pytest.raises(UnknownMaterialError):
         materials.get("nope")
     with pytest.raises(UnknownQuestionError):
         questions.get("nope")
+
 
 @pytest.mark.parametrize("field", ["material_id", "topic_id", "title", "source", "body"])
 def test_material_rejects_empty_fields(field):
@@ -95,17 +192,22 @@ def test_material_rejects_empty_fields(field):
     with pytest.raises(InvalidMaterialError):
         Material(**kwargs)
 
+
 def test_material_and_question_reject_naive_created_at():
     with pytest.raises(InvalidMaterialError):
         make_material("m1", at=datetime(2026, 1, 1))
     with pytest.raises(InvalidQuestionError):
         make_question("q1", "m1", at=datetime(2026, 1, 1))
 
+
 # ---- ordering: created_at first, id as tie-break, mixed case and punctuation
 # ids on purpose - lowercase-only ASCII is the one input class where a
 # locale-dependent database and Python's codepoint order happen to agree, so
-# it would hide a backend that gets this wrong (relevant once a postgres
-# backend lands, under COLLATE "C" as the engine's own tables do).
+# a suite using only those would green-light a backend that gets ordering
+# wrong. This is exactly why every identifier column carries COLLATE "C" in
+# migrations/0002_content.sql: that hole was found in this repository once
+# already.
+
 
 def test_list_for_topic_orders_by_created_at_then_id(materials):
     materials.add(make_material("b-mid", at=day(2)))
@@ -114,6 +216,10 @@ def test_list_for_topic_orders_by_created_at_then_id(materials):
     materials.add(make_material("apple", at=T0))
     ids = [m.material_id for m in materials.list_for_topic(TOPIC)]
     assert ids == ["Zebra!", "apple", "zebra", "b-mid"]
+
+
+# ============================================================================ Question store
+
 
 def test_add_many_persists_counts_and_rejects_duplicate_ids(materials, questions):
     seed_material(materials)
@@ -127,9 +233,12 @@ def test_add_many_persists_counts_and_rejects_duplicate_ids(materials, questions
         questions.add_many([make_question("q3", "m1"), make_question("q3", "m1")])  # within batch
     assert questions.count() == 2  # neither rejected batch wrote anything
 
+
 def test_list_for_objective_and_for_topic_scope_and_order_correctly(materials, questions):
     seed_material(materials)
     materials.add(make_material("m2", topic_id="az-900"))
+    # mixed-case, punctuation-bearing ids on purpose - see the comment above
+    # test_list_for_topic_orders_by_created_at_then_id.
     questions.add_many(
         [
             make_question("Q-zeta", "m1", topic_id=TOPIC, objective_id="D1.1"),
@@ -141,6 +250,7 @@ def test_list_for_objective_and_for_topic_scope_and_order_correctly(materials, q
     ids = [q.question_id for q in questions.list_for_topic(TOPIC)]
     assert ids == sorted(ids) == ["Q-zeta", "q_alpha!"]
 
+
 def test_question_requires_at_least_two_unique_options_with_correct_key_among_them():
     with pytest.raises(InvalidQuestionError):
         make_question("q1", "m1", options=(("a", "only"),))
@@ -148,6 +258,7 @@ def test_question_requires_at_least_two_unique_options_with_correct_key_among_th
         make_question("q1", "m1", options=(("a", "1"), ("a", "2")), correct_key="a")
     with pytest.raises(InvalidQuestionError):
         make_question("q1", "m1", options=(("a", "1"), ("b", "2")), correct_key="c")
+
 
 @pytest.mark.parametrize(
     "field", ["question_id", "topic_id", "objective_id", "stem", "explanation", "material_id"]
@@ -168,6 +279,20 @@ def test_question_rejects_empty_fields(field):
     with pytest.raises(InvalidQuestionError):
         Question(**kwargs)
 
+
+def test_question_options_round_trip_in_order(materials, questions):
+    """Options are stored/read verbatim, in order (SPEC-style contract, not an
+    incidental detail: a postgres backend serializing them as JSON has to
+    preserve array order, unlike JSON object key order)."""
+    seed_material(materials)
+    q = make_question("q1", "m1", options=(("c", "third"), ("a", "first"), ("b", "second")))
+    questions.add_many([q])
+    assert questions.get("q1").options == (("c", "third"), ("a", "first"), ("b", "second"))
+
+
+# ============================================================================ replace_for_material
+
+
 def test_replace_for_material_swaps_only_that_materials_questions(materials, questions):
     seed_material(materials, "m1")
     materials.add(make_material("m2"))
@@ -182,6 +307,7 @@ def test_replace_for_material_swaps_only_that_materials_questions(materials, que
     assert written == 1
     assert [q.question_id for q in questions.list_for_topic(TOPIC)] == ["other", "q3"]
     assert not questions.exists("q1") and not questions.exists("q2")
+
 
 @pytest.mark.parametrize(
     "bad_batch,error",
