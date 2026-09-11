@@ -21,7 +21,7 @@ from content.errors import (
     UnknownMaterialError,
     UnknownQuestionError,
 )
-from content.memory import InMemoryMaterialStore, InMemoryQuestionStore
+from content.memory import new_memory_stores
 from content.models import Material, Question
 from content.storage import MaterialStore, QuestionStore
 
@@ -52,12 +52,16 @@ def make_question(
     )
 
 @pytest.fixture
-def materials() -> MaterialStore:
-    return InMemoryMaterialStore()
+def content_store():
+    return new_memory_stores()
 
 @pytest.fixture
-def questions() -> QuestionStore:
-    return InMemoryQuestionStore()
+def materials(content_store) -> MaterialStore:
+    return content_store[0]
+
+@pytest.fixture
+def questions(content_store) -> QuestionStore:
+    return content_store[1]
 
 def seed_material(materials: MaterialStore, material_id: str = "m1") -> Material:
     material = make_material(material_id)
@@ -202,3 +206,38 @@ def test_replace_for_material_is_atomic_on_failure(materials, questions, bad_bat
     # the old set of "m1" (and everything under "m2") survives untouched.
     assert [q.question_id for q in questions.list_for_topic(TOPIC)] == ["q1", "shared"]
     assert questions.get("shared").material_id == "m2"
+
+
+# ============================================================================ integrity: ownership and topic
+
+
+def test_add_many_rejects_orphan_question_and_writes_nothing(materials, questions):
+    # "no-such-material" was never added: a question cannot be created for a
+    # material that does not exist - it would be unreachable by
+    # replace_for_material forever.
+    with pytest.raises(UnknownMaterialError):
+        questions.add_many([make_question("q1", "no-such-material")])
+    assert questions.count() == 0
+    assert not questions.exists("q1")
+
+
+def test_replace_for_material_rejects_unknown_material_and_writes_nothing(materials, questions):
+    with pytest.raises(UnknownMaterialError):
+        questions.replace_for_material("ghost", [make_question("q1", "ghost")])
+    assert questions.count() == 0
+
+
+def test_add_many_rejects_topic_mismatch_and_writes_nothing(materials, questions):
+    seed_material(materials, "m1")  # topic_id is TOPIC ("ai-103")
+    with pytest.raises(InvalidQuestionError):
+        questions.add_many([make_question("q1", "m1", topic_id="az-900")])
+    assert questions.count() == 0
+
+
+def test_replace_for_material_rejects_topic_mismatch_and_leaves_old_set_intact(materials, questions):
+    seed_material(materials, "m1")
+    questions.add_many([make_question("q1", "m1")])
+    with pytest.raises(InvalidQuestionError):
+        questions.replace_for_material("m1", [make_question("q2", "m1", topic_id="az-900")])
+    assert [q.question_id for q in questions.list_for_topic(TOPIC)] == ["q1"]
+    assert not questions.exists("q2")

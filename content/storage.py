@@ -62,6 +62,19 @@ class QuestionStore(Protocol):
     before anything is written. ``replace_for_material`` is atomic the same
     way: either the whole new set replaces the old one, or the old set is
     left completely untouched.
+
+    Two integrity rules apply to every ``material_id`` passed to
+    ``add_many`` and to ``replace_for_material``, checked before anything is
+    written so a rejected batch leaves no trace:
+
+    * **Ownership**: the material must already exist, or
+      :class:`~content.errors.UnknownMaterialError` is raised. A question
+      anchored to a material that does not exist could never be reached by
+      ``replace_for_material``, the one operation designed to manage it.
+    * **Topical consistency**: a question's ``topic_id`` must equal its
+      material's ``topic_id``, or :class:`~content.errors.InvalidQuestionError`
+      is raised. ``topic_id`` is derivable through the material; without this
+      rule it would be a second, driftable source of truth.
     """
 
     def add_many(self, questions: Iterable[Question]) -> int:
