@@ -22,7 +22,7 @@ web = [
 ]
 
 [tool.setuptools]
-packages = ["core", "store", "ui", "migrations", "web", "web.routers"]
+packages = ["core", "store", "ui", "migrations", "content", "web", "web.routers"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
