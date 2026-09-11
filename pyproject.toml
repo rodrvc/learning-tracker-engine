@@ -19,6 +19,10 @@ web = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
     "psycopg[binary,pool]>=3.1",
+    # Verifies a Clerk session against its JWKS (ACU-278). The `crypto`
+    # extra pulls in `cryptography` for RS256 - Clerk's signing algorithm -
+    # rather than this leaning on a hand-rolled verifier.
+    "PyJWT[crypto]>=2.9,<3",
     # The web application wires a generator at startup, so the generation
     # package is not optional for it. Leaving it out did not degrade
     # generation gracefully, it stopped the application from importing at

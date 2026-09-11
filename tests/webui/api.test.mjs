@@ -6,7 +6,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { request, detailFrom, ApiError, api } from "../../webui/js/api.js";
+import { request, detailFrom, ApiError, api, setTokenProvider } from "../../webui/js/api.js";
 
 function fakeFetch({ ok, status = 200, statusText = "", json, throwJson = false }) {
   const calls = [];
@@ -62,6 +62,35 @@ test("a caller's own headers are merged with, not dropped by, the default", asyn
   const sent = fetchImpl.calls[0].options.headers;
   assert.equal(sent["Content-Type"], "application/json");
   assert.equal(sent["X-Test"], "1");
+});
+
+test("no Authorization header is sent when no token provider was set", async () => {
+  setTokenProvider(null);
+  const fetchImpl = fakeFetch({ ok: true, json: {} });
+  await request("/topics", {}, fetchImpl);
+  assert.equal("Authorization" in fetchImpl.calls[0].options.headers, false);
+});
+
+test("the token provider's current token is sent as a bearer Authorization header", async () => {
+  setTokenProvider(async () => "session-token-1");
+  try {
+    const fetchImpl = fakeFetch({ ok: true, json: {} });
+    await request("/topics", {}, fetchImpl);
+    assert.equal(fetchImpl.calls[0].options.headers.Authorization, "Bearer session-token-1");
+  } finally {
+    setTokenProvider(null);
+  }
+});
+
+test("the token provider is read fresh on every request, never cached from the first call", async () => {
+  let calls = 0;
+  setTokenProvider(async () => `t${++calls}`);
+  const fetchImpl = fakeFetch({ ok: true, json: {} });
+  await request("/topics", {}, fetchImpl);
+  await request("/topics", {}, fetchImpl);
+  setTokenProvider(null);
+  assert.equal(fetchImpl.calls[0].options.headers.Authorization, "Bearer t1");
+  assert.equal(fetchImpl.calls[1].options.headers.Authorization, "Bearer t2");
 });
 
 // The `api` object's material methods go through the default `fetch`

@@ -25,6 +25,25 @@ HOST_VAR = "LEARNING_TRACKER_WEB_HOST"
 #: Port the HTTP server binds to.
 PORT_VAR = "LEARNING_TRACKER_WEB_PORT"
 
+#: Clerk's issuer / frontend API for this instance, e.g.
+#: ``https://example-app.clerk.accounts.example``. This is also how
+#: authentication is switched on: unset (the default everywhere the test
+#: suite runs), every route accepts every request, exactly as before this
+#: setting existed. Set it and every request to the API (except ``/health``
+#: and ``/auth/config``, see ``web/app.py``) must carry a Clerk session token
+#: that verifies against this issuer's JWKS. There is deliberately no
+#: separate on/off flag: two settings that can disagree (enabled with no
+#: issuer, or an issuer nobody asked to enforce) is a state this module does
+#: not want to have to explain.
+CLERK_ISSUER_VAR = "LEARNING_TRACKER_CLERK_ISSUER"
+
+#: Clerk's publishable key, handed to the browser so it can start a session.
+#: Not a secret - Clerk documents it as safe to ship to a client - but kept
+#: out of the repository like every other setting here, since it is specific
+#: to one Clerk instance. Read only to serve it from ``GET /auth/config``;
+#: the web layer never inspects it itself.
+CLERK_PUBLISHABLE_KEY_VAR = "LEARNING_TRACKER_CLERK_PUBLISHABLE_KEY"
+
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
 
@@ -52,12 +71,18 @@ class Settings:
         schema: Postgres schema the engine's tables live in.
         host: interface the HTTP server binds to.
         port: TCP port the HTTP server binds to.
+        clerk_issuer: Clerk issuer to validate sessions against, or ``None``
+            to run with authentication switched off.
+        clerk_publishable_key: Clerk publishable key served to the browser,
+            or ``None``.
     """
 
     database_url: str
     schema: str | None
     host: str
     port: int
+    clerk_issuer: str | None = None
+    clerk_publishable_key: str | None = None
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str]) -> "Settings":
@@ -89,7 +114,21 @@ class Settings:
                 ) from exc
         else:
             port = DEFAULT_PORT
-        return cls(database_url=database_url, schema=schema, host=host, port=port)
+        clerk_issuer = environ.get(CLERK_ISSUER_VAR) or None
+        if clerk_issuer:
+            # A trailing slash would build a JWKS URL with a doubled slash
+            # (``.dev//.well-known/...``); stripping it here is one place
+            # instead of every caller that appends a path to the issuer.
+            clerk_issuer = clerk_issuer.rstrip("/")
+        clerk_publishable_key = environ.get(CLERK_PUBLISHABLE_KEY_VAR) or None
+        return cls(
+            database_url=database_url,
+            schema=schema,
+            host=host,
+            port=port,
+            clerk_issuer=clerk_issuer,
+            clerk_publishable_key=clerk_publishable_key,
+        )
 
 
 __all__ = [
@@ -97,6 +136,8 @@ __all__ = [
     "SCHEMA_VAR",
     "HOST_VAR",
     "PORT_VAR",
+    "CLERK_ISSUER_VAR",
+    "CLERK_PUBLISHABLE_KEY_VAR",
     "DEFAULT_HOST",
     "DEFAULT_PORT",
     "MissingSettingError",
