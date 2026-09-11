@@ -6,7 +6,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { request, detailFrom, ApiError } from "../../webui/js/api.js";
+import { request, detailFrom, ApiError, api } from "../../webui/js/api.js";
 
 function fakeFetch({ ok, status = 200, statusText = "", json, throwJson = false }) {
   const calls = [];
@@ -62,4 +62,53 @@ test("a caller's own headers are merged with, not dropped by, the default", asyn
   const sent = fetchImpl.calls[0].options.headers;
   assert.equal(sent["Content-Type"], "application/json");
   assert.equal(sent["X-Test"], "1");
+});
+
+// The `api` object's material methods go through the default `fetch`
+// (globalThis.fetch), unlike request()'s other tests above which inject
+// their own - so these stub the global instead, and restore it after.
+async function withStubbedFetch(json, run) {
+  const original = globalThis.fetch;
+  const fetchImpl = fakeFetch({ ok: true, json });
+  globalThis.fetch = fetchImpl;
+  try {
+    await run(fetchImpl);
+  } finally {
+    globalThis.fetch = original;
+  }
+}
+
+test("api.listMaterial requests the topic's material collection", async () => {
+  await withStubbedFetch([], async (fetchImpl) => {
+    await api.listMaterial("t 1");
+    assert.equal(fetchImpl.calls[0].url, "/topics/t%201/material");
+  });
+});
+
+test("api.getMaterial requests one material by id, both segments encoded", async () => {
+  await withStubbedFetch({}, async (fetchImpl) => {
+    await api.getMaterial("t 1", "m 1");
+    assert.equal(fetchImpl.calls[0].url, "/topics/t%201/material/m%201");
+  });
+});
+
+test("api.uploadMaterial posts title, source and body to the topic's material collection", async () => {
+  await withStubbedFetch({}, async (fetchImpl) => {
+    await api.uploadMaterial("t1", { title: "T", source: "S", body: "B" });
+    assert.equal(fetchImpl.calls[0].url, "/topics/t1/material");
+    assert.equal(fetchImpl.calls[0].options.method, "POST");
+    assert.deepEqual(JSON.parse(fetchImpl.calls[0].options.body), {
+      title: "T",
+      source: "S",
+      body: "B",
+    });
+  });
+});
+
+test("api.generateMaterial posts to the material's generate endpoint", async () => {
+  await withStubbedFetch({}, async (fetchImpl) => {
+    await api.generateMaterial("t1", "m1");
+    assert.equal(fetchImpl.calls[0].url, "/topics/t1/material/m1/generate");
+    assert.equal(fetchImpl.calls[0].options.method, "POST");
+  });
 });
