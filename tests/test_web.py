@@ -1001,14 +1001,14 @@ def test_missing_credential_fails_only_generation(client: TestClient, material_t
 
     class NoCredentials:
         def generate(self, material, existing_objectives, *, now):
-            raise MissingCredentialsError("ANTHROPIC_API_KEY is not set")
+            raise MissingCredentialsError("OPENAI_API_KEY is not set")
 
     client.app.state.resources.generator = NoCredentials()
     material_id = _upload(client, material_topic).json()["material_id"]
 
     generated = client.post(f"/topics/{material_topic}/material/{material_id}/generate")
     assert generated.status_code == 503
-    assert "ANTHROPIC_API_KEY" in generated.json()["detail"]
+    assert "OPENAI_API_KEY" in generated.json()["detail"]
 
     # Uploading, listing and reading are unaffected.
     assert _upload(client, material_topic, title="Otra").status_code == 201
