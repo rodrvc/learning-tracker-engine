@@ -9,9 +9,13 @@ Conventions:
   (isolation between profiles), I8 (verifiable recording).
 * ``edge``: C4 (out-of-order insertion) and C9 (duplicate ``attempt_id``).
 
-The whole suite runs against both backends (memory and JSON) through the
-``attempts`` / ``profiles`` fixture: a backend that deviates from the other
-fails.
+The whole suite runs against three backends (memory, JSON and Postgres)
+through the ``attempts`` / ``profiles`` fixture: a backend that deviates from
+the others fails. Postgres tests skip, with an explicit reason, when no
+database is reachable (set ``LEARNING_TRACKER_TEST_DATABASE_URL`` or run
+``docker compose up -d postgres``); they never fail silently and never run
+against production data, since each test session gets its own throwaway
+schema, dropped at the end of the run.
 """
 
 from __future__ import annotations
@@ -23,6 +27,7 @@ import multiprocessing
 import os
 import pathlib
 import threading
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -50,12 +55,65 @@ from store import (
 )
 from store.json_store import lock_path_for
 
+try:
+    import psycopg
+
+    from migrations.runner import apply_migrations
+    from store.postgres import PostgresAttemptStore, PostgresProfileStore
+except ImportError:  # pragma: no cover - exercised when the postgres extra is absent
+    psycopg = None
+
 UTC = timezone.utc
 T0 = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 P1, P2 = "ai-103", "az-900"
 O1, O2 = "D1.1-foo", "D1.2-bar"
 
-BACKENDS = ["memory", "json"]
+BACKENDS = ["memory", "json", "postgres"]
+
+POSTGRES_DSN = os.environ.get(
+    "LEARNING_TRACKER_TEST_DATABASE_URL",
+    "postgresql://learning_tracker:learning_tracker@localhost:5432/learning_tracker",
+)
+POSTGRES_SCHEMA = f"learning_test_{uuid.uuid4().hex[:8]}"
+
+
+def _postgres_reachable() -> bool:
+    if psycopg is None:
+        return False
+    try:
+        with psycopg.connect(POSTGRES_DSN, connect_timeout=1):
+            return True
+    except psycopg.Error:
+        return False
+
+
+POSTGRES_AVAILABLE = _postgres_reachable()
+_SKIP_REASON = (
+    "postgres no disponible: instala el extra 'postgres', exporta "
+    "LEARNING_TRACKER_TEST_DATABASE_URL o levanta `docker compose up -d postgres`"
+)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _postgres_test_schema():
+    """Builds a throwaway schema for the whole session and drops it after."""
+    if POSTGRES_AVAILABLE:
+        apply_migrations(POSTGRES_DSN, schema=POSTGRES_SCHEMA)
+    yield
+    if POSTGRES_AVAILABLE:
+        with psycopg.connect(POSTGRES_DSN) as conn:
+            conn.execute(f"DROP SCHEMA IF EXISTS {POSTGRES_SCHEMA} CASCADE")
+            conn.commit()
+
+
+def _reset_postgres_schema() -> None:
+    """Empties the throwaway schema so tests do not leak state into each other."""
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        conn.execute(
+            f"TRUNCATE {POSTGRES_SCHEMA}.attempts, {POSTGRES_SCHEMA}.objectives, "
+            f"{POSTGRES_SCHEMA}.profiles CASCADE"
+        )
+        conn.commit()
 
 
 def day(n: int) -> datetime:
@@ -79,17 +137,30 @@ def backend(request) -> str:
     return request.param
 
 
+def _skip_if_postgres_unavailable(backend: str) -> None:
+    if backend == "postgres" and not POSTGRES_AVAILABLE:
+        pytest.skip(_SKIP_REASON)
+
+
 @pytest.fixture
 def attempts(backend, tmp_path) -> AttemptStore:
+    _skip_if_postgres_unavailable(backend)
     if backend == "memory":
         return InMemoryAttemptStore()
+    if backend == "postgres":
+        _reset_postgres_schema()
+        return PostgresAttemptStore(POSTGRES_DSN, schema=POSTGRES_SCHEMA)
     return JsonAttemptStore(tmp_path / "attempts.json")
 
 
 @pytest.fixture
 def profiles(backend, tmp_path) -> ProfileStore:
+    _skip_if_postgres_unavailable(backend)
     if backend == "memory":
         return InMemoryProfileStore()
+    if backend == "postgres":
+        _reset_postgres_schema()
+        return PostgresProfileStore(POSTGRES_DSN, schema=POSTGRES_SCHEMA)
     return JsonProfileStore(tmp_path / "profiles.json")
 
 
@@ -142,8 +213,24 @@ def test_append_preserves_every_field_across_read(attempts):
     )
     attempts.append(P1, a)
     (read,) = attempts.list_all(P1)
+    # `==` on ``Attempt`` (and on the aware ``datetime`` inside it) compares
+    # instants, not offsets: the shared contract across backends is "the same
+    # instant comes back" (Postgres normalizes to UTC, JSON keeps the literal
+    # offset - see the dedicated test right below, which exercises exactly
+    # that distinction without branching per backend).
     assert read == a
-    assert read.at == a.at and read.at.utcoffset() == a.at.utcoffset()
+    assert read.at == a.at
+
+
+@pytest.mark.spec
+def test_append_preserves_the_instant_across_a_non_utc_offset(attempts):
+    """The contract is the same INSTANT, not the same offset (ACU-247)."""
+    tz = timezone(timedelta(hours=-5))
+    at = datetime(2026, 3, 1, 10, 0, tzinfo=tz)
+    attempts.append(P1, make_attempt("a1", at=at))
+    (read,) = attempts.list_all(P1)
+    assert read.at == at
+    assert read.at.tzinfo is not None
 
 
 @pytest.mark.spec

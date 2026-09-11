@@ -13,6 +13,12 @@ Concrete implementations, against the ``Protocol`` types of
 
 Both backends share the contract rules in :mod:`store._common`, so they behave
 the same: the test suite runs against both.
+
+A third backend, :class:`~store.postgres.PostgresAttemptStore` /
+:class:`~store.postgres.PostgresProfileStore`, lives in :mod:`store.postgres`.
+It requires the ``psycopg`` driver (the ``postgres`` extra in
+``pyproject.toml``), so importing it is best-effort here: environments that
+did not install that extra can still use the memory and JSON backends.
 """
 
 from __future__ import annotations
@@ -21,6 +27,11 @@ from datetime import datetime, timezone, tzinfo
 
 from .json_store import JsonAttemptStore, JsonProfileStore
 from .memory import InMemoryAttemptStore, InMemoryProfileStore
+
+try:
+    from .postgres import PostgresAttemptStore, PostgresProfileStore
+except ImportError:  # pragma: no cover - exercised when psycopg is absent
+    PostgresAttemptStore = PostgresProfileStore = None  # type: ignore[assignment]
 
 
 class SystemClock:
@@ -57,4 +68,6 @@ __all__ = [
     "InMemoryProfileStore",
     "JsonAttemptStore",
     "JsonProfileStore",
+    "PostgresAttemptStore",
+    "PostgresProfileStore",
 ]
