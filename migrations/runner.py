@@ -19,6 +19,7 @@ import re
 import sys
 
 import psycopg
+from psycopg import sql
 
 MIGRATIONS_DIR = pathlib.Path(__file__).parent
 DEFAULT_SCHEMA = "learning"
@@ -30,14 +31,28 @@ def apply_migrations(
 ) -> int:
     """Applies every pending migration against ``schema``. Returns how many ran."""
     applied = 0
+    # The schema name is composed into the statement as an identifier rather
+    # than interpolated as text. These statements take no parameters, which
+    # puts them on the simple protocol, where a name carrying a semicolon
+    # would be accepted as a second statement. It also stops Postgres from
+    # silently lowercasing a name that has capitals in it.
+    name = sql.Identifier(schema)
     with psycopg.connect(dsn) as conn:
-        conn.execute(f"CREATE SCHEMA IF NOT EXISTS {schema}")
+        conn.execute(sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(name))
         conn.execute(
-            f"CREATE TABLE IF NOT EXISTS {schema}.schema_migrations ("
-            "version integer PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())"
+            sql.SQL(
+                "CREATE TABLE IF NOT EXISTS {}.schema_migrations ("
+                "version integer PRIMARY KEY, "
+                "applied_at timestamptz NOT NULL DEFAULT now())"
+            ).format(name)
         )
         conn.commit()
-        done = {row[0] for row in conn.execute(f"SELECT version FROM {schema}.schema_migrations")}
+        done = {
+            row[0]
+            for row in conn.execute(
+                sql.SQL("SELECT version FROM {}.schema_migrations").format(name)
+            )
+        }
         for path in sorted(directory.glob("*.sql")):
             match = _FILENAME_RE.match(path.name)
             if not match:
@@ -45,10 +60,13 @@ def apply_migrations(
             version = int(match.group(1))
             if version in done:
                 continue
-            sql = path.read_text(encoding="utf-8").replace("__SCHEMA__", schema)
-            conn.execute(sql)
+            statements = path.read_text(encoding="utf-8").replace("__SCHEMA__", schema)
+            conn.execute(statements)
             conn.execute(
-                f"INSERT INTO {schema}.schema_migrations (version) VALUES (%s)", (version,)
+                sql.SQL(
+                    "INSERT INTO {}.schema_migrations (version) VALUES (%s)"
+                ).format(name),
+                (version,),
             )
             conn.commit()
             applied += 1
@@ -58,12 +76,12 @@ def apply_migrations(
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if not argv:
-        print("uso: python -m migrations.runner <dsn> [schema]")
+        print("usage: python -m migrations.runner <dsn> [schema]")
         return 1
     dsn = argv[0]
     schema = argv[1] if len(argv) > 1 else DEFAULT_SCHEMA
     applied = apply_migrations(dsn, schema=schema)
-    print(f"{applied} migracion(es) aplicada(s) sobre el esquema {schema!r}")
+    print(f"{applied} migration(s) applied to schema {schema!r}")
     return 0
 
 

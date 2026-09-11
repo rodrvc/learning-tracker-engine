@@ -70,9 +70,14 @@ O1, O2 = "D1.1-foo", "D1.2-bar"
 
 BACKENDS = ["memory", "json", "postgres"]
 
+# The compose file lets the host port move (5432 is usually taken by another
+# project), so the default DSN has to follow it. Otherwise the normal case
+# becomes "forgot the second variable, tests skipped, suite green".
+POSTGRES_PORT = os.environ.get("POSTGRES_PORT", "5432")
 POSTGRES_DSN = os.environ.get(
     "LEARNING_TRACKER_TEST_DATABASE_URL",
-    "postgresql://learning_tracker:learning_tracker@localhost:5432/learning_tracker",
+    f"postgresql://learning_tracker:learning_tracker@localhost:{POSTGRES_PORT}"
+    "/learning_tracker",
 )
 POSTGRES_SCHEMA = f"learning_test_{uuid.uuid4().hex[:8]}"
 
@@ -222,38 +227,42 @@ def test_append_preserves_every_field_across_read(attempts):
     assert read.at == a.at
 
 
-@pytest.mark.spec
-def test_append_preserves_the_instant_across_a_non_utc_offset(attempts):
-    """The contract is the same INSTANT, not the same offset (ACU-247)."""
-    tz = timezone(timedelta(hours=-5))
-    at = datetime(2026, 3, 1, 10, 0, tzinfo=tz)
-    attempts.append(P1, make_attempt("a1", at=at))
-    (read,) = attempts.list_all(P1)
-    assert read.at == at
-    assert read.at.tzinfo is not None
+#: What each backend does with the offset it was given, declared rather than
+#: defaulted: a new backend has to add its row here, which is the point. Memory
+#: and JSON hand back the literal offset; Postgres stores an instant in a
+#: ``timestamptz`` and returns it in UTC.
+OFFSET_BEHAVIOUR = {
+    "memory": "preserved",
+    "json": "preserved",
+    "postgres": "normalized-to-utc",
+}
 
 
 @pytest.mark.spec
-def test_each_backend_keeps_its_documented_offset_behaviour(attempts, backend):
-    """What each backend does with the offset, pinned down.
+def test_offset_handling_is_the_documented_one_per_backend(attempts, backend):
+    """The shared contract is the instant; the offset is each backend's own.
 
-    The shared contract is only the instant, so this is the one place the
-    suite branches per backend on purpose: it pins the documented behaviour of
-    each one. Without it, memory and JSON could silently start normalizing to
-    UTC and nothing would notice - the assertion that used to catch that lived
-    in ``test_append_preserves_every_field_across_read`` until Postgres, which
-    cannot honour it, forced it out of the shared contract.
+    This is the one test in the suite that branches per backend on purpose. It
+    is not a contract test: it characterizes a documented divergence, so that
+    memory or JSON silently starting to normalize to UTC would fail. That check
+    lived inside ``test_append_preserves_every_field_across_read`` until
+    Postgres, which cannot honour it, forced it out of the shared contract
+    (ACU-247).
     """
     tz = timezone(timedelta(hours=-5))
     at = datetime(2026, 3, 1, 10, 0, tzinfo=tz)
     attempts.append(P1, make_attempt("a1", at=at))
     (read,) = attempts.list_all(P1)
-    if backend == "postgres":
-        # timestamptz stores an instant, so the offset it was given is gone.
-        assert read.at.utcoffset() == timedelta(0)
-    else:
-        # Memory and JSON hand back the literal offset they were given.
+
+    # The shared part: every backend owes the same instant, aware.
+    assert read.at == at
+    assert read.at.tzinfo is not None
+
+    expected = OFFSET_BEHAVIOUR[backend]
+    if expected == "preserved":
         assert read.at.utcoffset() == tz.utcoffset(None)
+    else:
+        assert read.at.utcoffset() == timedelta(0)
 
 
 @pytest.mark.spec
@@ -297,6 +306,24 @@ def test_list_for_objective_orders_by_at_then_attempt_id(attempts):
     attempts.append(P1, make_attempt("c", at=day(0)))
     ids = [a.attempt_id for a in attempts.list_for_objective(P1, O1)]
     assert ids == ["c", "a", "z", "b"]
+
+
+@pytest.mark.edge
+def test_ties_order_by_codepoint_not_by_locale(attempts):
+    """The tie-break is codepoint order, and every backend owes the same one.
+
+    All-lowercase ASCII ids hide the failure this guards: a SQL backend orders
+    text under the database collation, which typically ignores case and
+    punctuation, while Python compares codepoints. Mixed case and punctuation
+    are where the two disagree. It matters because ties at the same ``at`` are
+    ordinary and ``recent_window`` is a positional sequence: a different order
+    is a different score, and can be a different level (SPEC C3, C4, I3).
+    """
+    ids = ["a1", "A1", "B-2", "b_2", "Z9", "z9", "a-1"]
+    for attempt_id in ids:
+        attempts.append(P1, make_attempt(attempt_id, at=day(1)))
+    assert [a.attempt_id for a in attempts.list_for_objective(P1, O1)] == sorted(ids)
+    assert [a.attempt_id for a in attempts.list_all(P1)] == sorted(ids)
 
 
 @pytest.mark.spec
@@ -410,6 +437,19 @@ def test_list_profiles_sorted_by_id(profiles, profile):
     profiles.save_profile(profile)
     assert [p.profile_id for p in profiles.list_profiles()] == sorted([P1, P2])
     assert profiles.list_profiles()[0] == profile
+
+
+@pytest.mark.edge
+def test_list_profiles_orders_by_codepoint_not_by_locale(profiles):
+    """Same collation trap as the attempts, and here it needs no odd input.
+
+    Profile ids are written by hand and mixed case is their normal shape, so
+    this is the ordering a locale-dependent backend gets wrong first.
+    """
+    ids = ["a1", "ai-103", "Az-900", "B1"]
+    for profile_id in ids:
+        profiles.save_profile(Profile(profile_id=profile_id, name=profile_id))
+    assert [p.profile_id for p in profiles.list_profiles()] == sorted(ids)
 
 
 @pytest.mark.spec
