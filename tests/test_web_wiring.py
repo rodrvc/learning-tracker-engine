@@ -81,7 +81,13 @@ def test_storage_failure_is_503_and_never_echoes_the_connection_string(
     # so patching it here reaches the pool without a parameter nobody asked for.
     monkeypatch.setattr(deps, "POOL_CHECKOUT_TIMEOUT_SECONDS", 0.05)
     with TestClient(create_app(dead_settings), raise_server_exceptions=False) as client:
-        for method, path in (("get", "/topics"), ("get", "/topics/whatever")):
+        for method, path in (
+            ("get", "/topics"),
+            ("get", "/topics/whatever"),
+            ("get", "/topics/whatever/objectives/states"),
+            ("get", "/topics/whatever/due"),
+            ("get", "/topics/whatever/summary"),
+        ):
             response = getattr(client, method)(path)
             assert response.status_code == 503, (method, path, response.status_code)
             assert response.json() == {"detail": STORAGE_UNAVAILABLE_DETAIL}

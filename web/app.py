@@ -27,7 +27,7 @@ from core.errors import StorageError
 
 from .config import MissingSettingError, Settings
 from .deps import build_resources, close_resources
-from .routers import topics
+from .routers import progress, topics
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +90,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return JSONResponse({"detail": STORAGE_UNAVAILABLE_DETAIL}, status_code=503)
 
     app.include_router(topics.router)
+    app.include_router(progress.router)
     return app
 
 

@@ -135,3 +135,168 @@ def test_get_unknown_topic_fails_instead_of_empty_success(client: TestClient) ->
     assert "does-not-exist" in response.json()["detail"]
 
 
+def _seed_objective(topic_id: str, objective_id: str) -> None:
+    """Creates a topic (if absent) with one objective, no attempts yet."""
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        conn.execute(
+            f"INSERT INTO {POSTGRES_SCHEMA}.profiles (profile_id, name) "
+            "VALUES (%s, %s) ON CONFLICT DO NOTHING",
+            (topic_id, topic_id),
+        )
+        conn.execute(
+            f"""INSERT INTO {POSTGRES_SCHEMA}.objectives
+                (profile_id, objective_id, title, domain, weight, tags)
+                VALUES (%s, %s, 'Foo', NULL, 1.0, ARRAY[]::text[])""",
+            (topic_id, objective_id),
+        )
+        conn.commit()
+
+
+def _seed_attempt(
+    topic_id: str, objective_id: str, attempt_id: str, at: str, correct: bool
+) -> None:
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        conn.execute(
+            f"""INSERT INTO {POSTGRES_SCHEMA}.attempts
+                (attempt_id, profile_id, objective_id, at, correct, kind)
+                VALUES (%s, %s, %s, %s, %s, 'quiz')""",
+            (attempt_id, topic_id, objective_id, at, correct),
+        )
+        conn.commit()
+
+
+@pytest.mark.spec
+def test_objective_states_shape(client: TestClient) -> None:
+    _seed_objective("ai-103", "D1.1-foo")
+    _seed_attempt("ai-103", "D1.1-foo", "a1", "2020-01-01T00:00:00Z", False)
+
+    response = client.get("/topics/ai-103/objectives/states?as_of=2020-06-01T00:00:00Z")
+    assert response.status_code == 200
+    states = response.json()
+    assert len(states) == 1
+    state = states[0]
+    assert state["objective_id"] == "D1.1-foo"
+    assert state["total_attempts"] == 1
+    assert state["correct_attempts"] == 0
+    assert state["level"] == "UNASSESSED"
+    assert state["recent_window"] == [False]
+    assert "next_review_at" in state
+    assert "is_due" in state
+    assert "streak" not in state
+    assert "run" not in state
+
+
+@pytest.mark.spec
+def test_cut_date_changes_the_answer(client: TestClient) -> None:
+    _seed_objective("ai-103", "D1.1-foo")
+    _seed_attempt("ai-103", "D1.1-foo", "a1", "2020-01-01T00:00:00Z", False)
+    _seed_attempt("ai-103", "D1.1-foo", "a2", "2020-01-10T00:00:00Z", True)
+
+    before = client.get(
+        "/topics/ai-103/objectives/states?as_of=2020-01-05T00:00:00Z"
+    ).json()[0]
+    after = client.get(
+        "/topics/ai-103/objectives/states?as_of=2020-01-15T00:00:00Z"
+    ).json()[0]
+
+    assert before["total_attempts"] == 1
+    assert after["total_attempts"] == 2
+    assert before != after
+
+
+@pytest.mark.spec
+def test_due_sorted_most_overdue_first(client: TestClient) -> None:
+    _seed_objective("ai-103", "D1.1-foo")
+    _seed_objective("ai-103", "D1.2-bar")
+    # Both miss their last attempt: next review is one day after `at`. The
+    # older attempt is more overdue at the same `as_of`.
+    _seed_attempt("ai-103", "D1.1-foo", "a1", "2020-01-01T00:00:00Z", False)
+    _seed_attempt("ai-103", "D1.2-bar", "a2", "2020-01-05T00:00:00Z", False)
+
+    response = client.get("/topics/ai-103/due?as_of=2020-06-01T00:00:00Z")
+    assert response.status_code == 200
+    due = response.json()
+    assert [item["objective_id"] for item in due] == ["D1.1-foo", "D1.2-bar"]
+    assert all(item["is_due"] for item in due)
+
+
+@pytest.mark.spec
+def test_summary_shape(client: TestClient) -> None:
+    _seed_objective("ai-103", "D1.1-foo")
+    _seed_attempt("ai-103", "D1.1-foo", "a1", "2020-01-01T00:00:00Z", True)
+
+    response = client.get("/topics/ai-103/summary?as_of=2020-06-01T00:00:00Z")
+    assert response.status_code == 200
+    summary = response.json()
+    assert summary["topic_id"] == "ai-103"
+    assert summary["total_objectives"] == 1
+    assert summary["total_attempts"] == 1
+    assert set(summary["by_level"]) == {
+        "UNASSESSED",
+        "WEAK",
+        "LEARNING",
+        "COMPETENT",
+        "MASTERED",
+    }
+    assert "mean_score" in summary
+    assert "coverage" in summary
+
+
+@pytest.mark.spec
+def test_compare_states_answers_was_i_better(client: TestClient) -> None:
+    # SPEC section 3's canonical walkthrough: wrong, wrong, wrong, right,
+    # wrong, right, right, right, one attempt per day starting 2020-01-01.
+    # At day 3 the score is still 0.0 (WEAK); by day 7 it has crossed 0.60
+    # (LEARNING) — an unambiguous, spec-verified improvement.
+    _seed_objective("ai-103", "D1.1-foo")
+    results = [False, False, False, True, False, True, True, True]
+    for index, correct in enumerate(results):
+        _seed_attempt(
+            "ai-103",
+            "D1.1-foo",
+            f"a{index}",
+            f"2020-01-{index + 1:02d}T00:00:00Z",
+            correct,
+        )
+
+    response = client.get(
+        "/topics/ai-103/objectives/D1.1-foo/compare"
+        "?earlier=2020-01-03T00:00:00Z&later=2020-01-07T00:00:00Z"
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["objective_id"] == "D1.1-foo"
+    assert body["earlier"]["as_of"] == "2020-01-03T00:00:00Z"
+    assert body["later"]["as_of"] == "2020-01-07T00:00:00Z"
+    assert body["earlier"]["score"] == 0.0
+    assert body["later"]["score"] == pytest.approx(0.607, abs=1e-3)
+    assert body["improved"] is True
+    assert body["regressed"] is False
+    assert body["score_delta"] > 0
+
+
+@pytest.mark.edge
+def test_progress_endpoints_fail_on_unknown_topic(client: TestClient) -> None:
+    for path in (
+        "/topics/nope/objectives/states",
+        "/topics/nope/due",
+        "/topics/nope/summary",
+        "/topics/nope/objectives/whatever/compare"
+        "?earlier=2020-01-01T00:00:00Z&later=2020-01-02T00:00:00Z",
+    ):
+        response = client.get(path)
+        assert response.status_code == 404, path
+        assert "nope" in response.json()["detail"]
+
+
+@pytest.mark.edge
+def test_compare_fails_on_unknown_objective(client: TestClient) -> None:
+    _seed_objective("ai-103", "D1.1-foo")
+    response = client.get(
+        "/topics/ai-103/objectives/does-not-exist/compare"
+        "?earlier=2020-01-01T00:00:00Z&later=2020-01-02T00:00:00Z"
+    )
+    assert response.status_code == 404
+    assert "does-not-exist" in response.json()["detail"]
+
+
