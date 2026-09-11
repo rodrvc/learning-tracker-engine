@@ -6,3 +6,8 @@ data/*.json
 *.egg-info/
 build/
 dist/
+
+# Environment files. They hold credentials and never belong in a public repo.
+.env
+.env.*
+!.env.example
