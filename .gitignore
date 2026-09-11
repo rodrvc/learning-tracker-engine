@@ -7,6 +7,10 @@ data/*.json
 build/
 dist/
 
+# Agent tooling. It holds local settings and checks out whole worktrees in
+# here, so a repository would end up nested inside the repository.
+.claude/
+
 # Environment files. They hold credentials and never belong in a public repo.
 .env
 .env.*
