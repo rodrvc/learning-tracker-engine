@@ -31,6 +31,10 @@ cp .env.example .env    # the defaults already match docker-compose.yml
 scripts/dev-up.sh       # brings up Postgres, applies migrations, starts the API
 ```
 
+If that last step dies on `port is already allocated`, something else on the
+machine already owns 5432. Set `POSTGRES_PORT` in `.env` to a free port and
+change the port in `LEARNING_TRACKER_DATABASE_URL` to match, then run it again.
+
 Leave that running and open <http://127.0.0.1:8000> in a browser. That is the
 whole application: a page with four views (Tópicos, Material, Practicar,
 Progreso) served by the same process that answers the API.

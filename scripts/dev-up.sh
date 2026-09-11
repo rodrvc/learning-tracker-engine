@@ -5,7 +5,7 @@
 #
 #     scripts/dev-up.sh
 #
-# Assumes dependencies are already installed (`pip install -e ".[web,postgres]"`
+# Assumes dependencies are already installed (`pip install -e ".[web]"`
 # in an active virtualenv - see README.md) and Docker is running. Everything
 # here fails loudly and stops: a half-applied migration or a server that
 # never started is not something this script papers over with a green exit
