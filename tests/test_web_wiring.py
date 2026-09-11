@@ -108,6 +108,27 @@ def test_storage_failure_is_503_and_never_echoes_the_connection_string(
 
 
 @pytest.mark.spec
+def test_practice_storage_failure_is_503(dead_settings, monkeypatch):
+    """ACU-250: the practice endpoints inherit the same 503 mapping.
+
+    Both a failed question lookup (``content.errors.StorageError``, its own
+    class, unrelated to the engine's) and a failed attempt recording
+    (``core.errors.StorageError``) must surface as the same honest 503, never
+    as a silent success or an opaque 500.
+    """
+    monkeypatch.setattr(deps, "POOL_CHECKOUT_TIMEOUT_SECONDS", 0.05)
+    with TestClient(create_app(dead_settings), raise_server_exceptions=False) as client:
+        get_response = client.get("/topics/whatever/practice/next")
+        post_response = client.post(
+            "/topics/whatever/practice/answer",
+            json={"question_id": "q1", "attempt_id": "a1", "selected_key": "a"},
+        )
+    for response in (get_response, post_response):
+        assert response.status_code == 503
+        assert response.json() == {"detail": STORAGE_UNAVAILABLE_DETAIL}
+
+
+@pytest.mark.spec
 def test_health_reports_unhealthy_when_storage_is_unreachable(dead_settings):
     """The half of the health endpoint that says something is wrong.
 

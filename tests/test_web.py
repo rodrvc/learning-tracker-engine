@@ -13,6 +13,7 @@ always reachable, so nothing here is expected to actually skip there.
 
 from __future__ import annotations
 
+import json
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -521,3 +522,219 @@ def test_compare_earlier_after_later_is_400(client: TestClient) -> None:
     assert response.status_code == 400
 
 
+# --------------------------------------------------------------- ACU-250: practice
+
+def _insert_objective(conn, objective_id: str, topic_id: str = "ai-103") -> None:
+    conn.execute(
+        f"""INSERT INTO {POSTGRES_SCHEMA}.objectives
+            (profile_id, objective_id, title, domain, weight, tags)
+            VALUES (%s, %s, 'Title', NULL, 1.0, ARRAY[]::text[])""",
+        (topic_id, objective_id),
+    )
+
+
+def _insert_attempt(
+    conn, objective_id: str, at: datetime, correct: bool, topic_id: str = "ai-103"
+) -> None:
+    conn.execute(
+        f"""INSERT INTO {POSTGRES_SCHEMA}.attempts
+            (attempt_id, profile_id, objective_id, at, correct, kind, recorded_at)
+            VALUES (%s, %s, %s, %s, %s, 'quiz', %s)""",
+        (uuid.uuid4().hex, topic_id, objective_id, at, correct, at),
+    )
+
+
+def _insert_question(
+    conn,
+    question_id: str,
+    objective_id: str,
+    topic_id: str = "ai-103",
+    correct_key: str = "a",
+) -> None:
+    material_id = f"mat-{uuid.uuid4().hex[:8]}"
+    now = datetime.now(timezone.utc)
+    conn.execute(
+        f"""INSERT INTO {POSTGRES_SCHEMA}.materials
+            (material_id, topic_id, title, source, body, created_at)
+            VALUES (%s, %s, 'Material', 'src', 'body', %s)""",
+        (material_id, topic_id, now),
+    )
+    options = json.dumps([["a", "Yes"], ["b", "No"]])
+    conn.execute(
+        f"""INSERT INTO {POSTGRES_SCHEMA}.questions
+            (question_id, topic_id, objective_id, stem, options, correct_key,
+             explanation, material_id, created_at)
+            VALUES (%s, %s, %s, 'What is the answer?', %s::jsonb, %s,
+                    'Because the spec says so.', %s, %s)""",
+        (question_id, topic_id, objective_id, options, correct_key, material_id, now),
+    )
+
+
+@pytest.fixture
+def practice_topic(client: TestClient) -> str:
+    client.post("/topics", json={"topic_id": "ai-103", "name": "AI-103"})
+    return "ai-103"
+
+
+@pytest.mark.spec
+def test_next_question_prefers_due_over_unstarted(client: TestClient, practice_topic: str) -> None:
+    """The engine's ordering decides, not this layer: due beats unstarted."""
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        _insert_objective(conn, "obj-due")
+        _insert_objective(conn, "obj-new")
+        # A miss five days ago sets next_review_at = at + 1 day, well in the
+        # past: is_due is True. obj-new never had an attempt: get_unstarted.
+        _insert_attempt(
+            conn, "obj-due", datetime.now(timezone.utc) - timedelta(days=5), correct=False
+        )
+        _insert_question(conn, "q-due", "obj-due")
+        _insert_question(conn, "q-new", "obj-new")
+        conn.commit()
+
+    response = client.get(f"/topics/{practice_topic}/practice/next")
+    assert response.status_code == 200
+    assert response.json()["objective_id"] == "obj-due"
+
+
+@pytest.mark.spec
+def test_next_question_falls_back_to_unstarted_when_nothing_is_due(
+    client: TestClient, practice_topic: str
+) -> None:
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        _insert_objective(conn, "obj-fresh")
+        _insert_question(conn, "q-fresh", "obj-fresh")
+        conn.commit()
+
+    response = client.get(f"/topics/{practice_topic}/practice/next")
+    assert response.status_code == 200
+    assert response.json()["objective_id"] == "obj-fresh"
+
+
+@pytest.mark.edge
+def test_next_question_hides_the_solution(client: TestClient, practice_topic: str) -> None:
+    """The prototype this replaces shipped the answer with the question.
+
+    The correct key and the explanation must not appear anywhere in the
+    response body, before the question has been answered.
+    """
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        _insert_objective(conn, "obj-secret")
+        _insert_question(conn, "q-secret", "obj-secret", correct_key="b")
+        conn.commit()
+
+    response = client.get(f"/topics/{practice_topic}/practice/next")
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body.keys()) == {"topic_id", "objective_id", "question_id", "stem", "options"}
+    assert "correct_key" not in response.text
+    assert "Because the spec says so." not in response.text
+
+
+@pytest.mark.edge
+def test_due_objective_without_questions_fails_clearly(
+    client: TestClient, practice_topic: str
+) -> None:
+    """The engine says an objective is due, but the topic has no question for
+    it: this must say so, not answer an empty success."""
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        _insert_objective(conn, "obj-mute")
+        _insert_attempt(
+            conn, "obj-mute", datetime.now(timezone.utc) - timedelta(days=5), correct=False
+        )
+        conn.commit()
+
+    response = client.get(f"/topics/{practice_topic}/practice/next")
+    assert response.status_code == 404
+    assert "obj-mute" in response.json()["detail"]
+
+
+@pytest.mark.edge
+def test_next_unknown_topic_fails(client: TestClient) -> None:
+    response = client.get("/topics/does-not-exist/practice/next")
+    assert response.status_code == 404
+
+
+@pytest.mark.spec
+def test_answering_correctly_records_one_attempt_and_new_state(
+    client: TestClient, practice_topic: str
+) -> None:
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        _insert_objective(conn, "obj-answer")
+        _insert_question(conn, "q-answer", "obj-answer", correct_key="a")
+        conn.commit()
+
+    response = client.post(
+        f"/topics/{practice_topic}/practice/answer",
+        json={"question_id": "q-answer", "attempt_id": "att-1", "selected_key": "a"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["correct"] is True
+    assert body["explanation"] == "Because the spec says so."
+    assert body["objective_id"] == "obj-answer"
+    assert body["state"]["total_attempts"] == 1
+    assert body["state"]["correct_attempts"] == 1
+
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        (count,) = conn.execute(
+            f"SELECT count(*) FROM {POSTGRES_SCHEMA}.attempts WHERE objective_id = 'obj-answer'"
+        ).fetchone()
+    assert count == 1
+
+
+@pytest.mark.spec
+def test_answering_wrong_is_recorded_as_wrong(client: TestClient, practice_topic: str) -> None:
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        _insert_objective(conn, "obj-wrong")
+        _insert_question(conn, "q-wrong", "obj-wrong", correct_key="a")
+        conn.commit()
+
+    response = client.post(
+        f"/topics/{practice_topic}/practice/answer",
+        json={"question_id": "q-wrong", "attempt_id": "att-2", "selected_key": "b"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["correct"] is False
+    assert body["state"]["correct_attempts"] == 0
+
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        (correct,) = conn.execute(
+            f"SELECT correct FROM {POSTGRES_SCHEMA}.attempts WHERE objective_id = 'obj-wrong'"
+        ).fetchone()
+    assert correct is False
+
+
+@pytest.mark.edge
+def test_duplicate_attempt_id_is_rejected_not_duplicated(
+    client: TestClient, practice_topic: str
+) -> None:
+    """One question, one recorded attempt: a retried request must not double it."""
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        _insert_objective(conn, "obj-dup")
+        _insert_question(conn, "q-dup", "obj-dup", correct_key="a")
+        conn.commit()
+
+    body = {"question_id": "q-dup", "attempt_id": "att-dup", "selected_key": "a"}
+    first = client.post(f"/topics/{practice_topic}/practice/answer", json=body)
+    second = client.post(f"/topics/{practice_topic}/practice/answer", json=body)
+    assert first.status_code == 200
+    assert second.status_code == 409
+
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        (count,) = conn.execute(
+            f"SELECT count(*) FROM {POSTGRES_SCHEMA}.attempts WHERE objective_id = 'obj-dup'"
+        ).fetchone()
+    assert count == 1
+
+
+@pytest.mark.edge
+def test_answer_unknown_question_fails_instead_of_empty_success(
+    client: TestClient, practice_topic: str
+) -> None:
+    response = client.post(
+        f"/topics/{practice_topic}/practice/answer",
+        json={"question_id": "does-not-exist", "attempt_id": "att-3", "selected_key": "a"},
+    )
+    assert response.status_code == 404
+    assert "does-not-exist" in response.json()["detail"]

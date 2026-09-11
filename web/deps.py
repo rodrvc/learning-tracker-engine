@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from fastapi import Request
 from psycopg_pool import ConnectionPool
 
+from content.postgres import PostgresQuestionStore
 from core.clock import Clock
 from core.tracker import LearningTracker
 from store import SystemClock
@@ -35,6 +36,7 @@ class Resources:
     pool: ConnectionPool
     profiles: PostgresProfileStore
     attempts: PostgresAttemptStore
+    questions: PostgresQuestionStore
     clock: Clock
 
     def tracker_for(self, profile_id: str) -> LearningTracker:
@@ -92,7 +94,10 @@ def build_resources(settings: Settings) -> Resources:
     kwargs = {"schema": settings.schema} if settings.schema else {}
     profiles = PostgresProfileStore(pool.connection, **kwargs)
     attempts = PostgresAttemptStore(pool.connection, **kwargs)
-    return Resources(pool=pool, profiles=profiles, attempts=attempts, clock=SystemClock())
+    questions = PostgresQuestionStore(pool.connection, **kwargs)
+    return Resources(
+        pool=pool, profiles=profiles, attempts=attempts, questions=questions, clock=SystemClock()
+    )
 
 
 def close_resources(resources: Resources) -> None:
