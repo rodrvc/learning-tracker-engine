@@ -1,8 +1,21 @@
 "use strict";
 
+import { authHeaders } from "./auth.js";
+
 // Single place the API's base URL lives, so moving the front end to its own
 // repository later is a one-line change here, not a hunt through every view.
 const API_BASE_URL = "";
+
+// Set once, by `app.js`'s call to `mountAuth` (see `auth.js`), to either
+// `null` (auth switched off, or signed out) or a function returning a
+// Promise for the current Clerk session token. `request()` reads it fresh
+// on every call rather than once, because a token that was valid a minute
+// ago need not be valid now.
+let tokenProvider = null;
+
+export function setTokenProvider(fn) {
+  tokenProvider = fn;
+}
 
 /** Raised for a network failure and a non-2xx response alike, so a caller can
  * always show `err.message` - a silent failure is worse than a visible one. */
@@ -32,12 +45,13 @@ export function detailFrom(body, fallback) {
 
 export async function request(path, options = {}, fetchImpl = globalThis.fetch) {
   let response;
+  const token = tokenProvider ? await tokenProvider() : null;
   try {
     response = await fetchImpl(`${API_BASE_URL}${path}`, {
       ...options,
       // After `...options`, not before: spreading it last is what makes a
       // caller's own `headers` merge with this default instead of erasing it.
-      headers: { "Content-Type": "application/json", ...options.headers },
+      headers: { "Content-Type": "application/json", ...authHeaders(token), ...options.headers },
     });
   } catch {
     throw new ApiError("No se pudo conectar con el servidor.", 0);
@@ -55,6 +69,9 @@ export async function request(path, options = {}, fetchImpl = globalThis.fetch) 
 }
 
 export const api = {
+  // Unauthenticated on purpose (web/app.py): a page cannot sign in to learn
+  // how to sign in.
+  getAuthConfig: () => request("/auth/config"),
   listTopics: () => request("/topics"),
   createTopic: (topicId, name) =>
     request("/topics", {

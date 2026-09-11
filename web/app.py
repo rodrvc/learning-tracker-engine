@@ -21,13 +21,14 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from content.errors import StorageError as ContentStorageError
 from core.errors import StorageError
 
+from .auth import require_session
 from .config import MissingSettingError, Settings
 from .deps import build_resources, close_resources
 from .routers import material, practice, progress, topics
@@ -74,11 +75,34 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/health")
     def health() -> JSONResponse:
-        """Reports whether storage actually answers, not merely that the process is up."""
+        """Reports whether storage actually answers, not merely that the process is up.
+
+        Deliberately outside ``require_session``: whatever probes this (a
+        deploy platform, an uptime check) has no Clerk session and no way to
+        get one, so gating it on authentication would not make it more
+        secure, only useless for the one thing it exists to answer.
+        """
         healthy = app.state.resources.is_healthy()
         return JSONResponse(
             {"status": "ok" if healthy else "unhealthy"},
             status_code=200 if healthy else 503,
+        )
+
+    @app.get("/auth/config")
+    def auth_config() -> JSONResponse:
+        """What the browser needs to start a Clerk session, and nothing it
+        does not need: no secret ever lives on this path. Also outside
+        ``require_session`` on purpose - a page cannot sign in to learn how
+        to sign in."""
+        return JSONResponse(
+            {
+                "enabled": resolved.clerk_issuer is not None,
+                "publishableKey": resolved.clerk_publishable_key,
+                # Not a secret: it is the same public URL a browser would
+                # otherwise have to be told out of band, and it is where the
+                # front end fetches Clerk's own script from (webui/js/auth.js).
+                "issuer": resolved.clerk_issuer,
+            }
         )
 
     @app.exception_handler(StorageError)
@@ -101,10 +125,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         logger.exception("storage failure serving %s %s", request.method, request.url.path)
         return JSONResponse({"detail": STORAGE_UNAVAILABLE_DETAIL}, status_code=503)
 
-    app.include_router(topics.router)
-    app.include_router(material.router)
-    app.include_router(practice.router)
-    app.include_router(progress.router)
+    # Every data route requires a session (a no-op check while
+    # `clerk_issuer` is unset, see `web/auth.py`); `/health` and
+    # `/auth/config` above are registered directly on `app` and so never
+    # pick this up.
+    session_required = [Depends(require_session)]
+    app.include_router(topics.router, dependencies=session_required)
+    app.include_router(material.router, dependencies=session_required)
+    app.include_router(practice.router, dependencies=session_required)
+    app.include_router(progress.router, dependencies=session_required)
     # Registered last: a Mount only ever answers a request no router above
     # already matched, so the API keeps owning its paths and this is purely
     # the fallback that serves the page and its assets.

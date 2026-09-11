@@ -216,6 +216,28 @@ and reads ordered by date.
 
 ---
 
+## Integrating over HTTP
+
+The engine also ships a small HTTP API (`web/`, mounted alongside the front end) with the
+same topics/material/practice/progress surface the endpoints in `web/routers/` expose —
+useful for a source that is itself a web app rather than a CLI or a Python process.
+
+**ACU-278, breaking change for any caller of this API:** when the deployment sets
+`LEARNING_TRACKER_CLERK_ISSUER`, every route under that API except `GET /health` and
+`GET /auth/config` requires an `Authorization: Bearer <token>` header carrying a session
+Clerk issued, and answers `401` without one, with an expired one or with one for a
+different issuer. `GET /auth/config` reports whether this is switched on
+(`{"enabled": ...}`, plus the public `publishableKey`/`issuer` a browser needs to start a
+session) so a caller can tell which mode it is talking to instead of guessing from a 401.
+
+When `LEARNING_TRACKER_CLERK_ISSUER` is unset — the default everywhere the test suite
+runs — the API takes every request exactly as before this existed: no header, no session,
+nothing to change in an existing integration. This does not partition data by caller: a
+valid session is only proof that *someone* signed in, still against the one shared set of
+topics (see `SPEC.md`, and the note on `profile_id` in the ACU-278 ticket).
+
+---
+
 ## What to expect the first few days
 
 The engine starts with no evidence, and it shows:

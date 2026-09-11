@@ -9,6 +9,10 @@
   <body>
     <header>
       <h1>Learning Tracker</h1>
+      <!-- Empty when auth is switched off (web/app.py's `/auth/config`);
+           holds Clerk's own sign-in form or user button otherwise
+           (webui/js/auth.js). -->
+      <div id="auth"></div>
       <nav>
         <a href="#/topics" data-view="topics">Tópicos</a>
         <a href="#/material" data-view="material">Material</a>
