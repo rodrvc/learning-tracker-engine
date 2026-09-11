@@ -68,6 +68,7 @@ async function renderDetail(container, api, topicId) {
       <h2>${escapeHtml(topic.name)}</h2>
       <a href="#/material/${encodeURIComponent(topicId)}">Ver material</a>
       <a href="#/practice/${encodeURIComponent(topicId)}">Practicar</a>
+      <a href="#/progress/${encodeURIComponent(topicId)}">Ver progreso</a>
       <ul class="objectives-list">
         ${
           topic.objectives.length
