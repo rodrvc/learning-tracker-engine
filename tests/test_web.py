@@ -1,5 +1,10 @@
 """Tests of ``web/`` against ACU-246: health, topics, config and error mapping.
 
+The tests that need no database at all live in ``tests/test_web_wiring.py``:
+this module's autouse fixture skips the whole file when Postgres is
+unreachable, which was skipping them for a reason that had nothing to do
+with them.
+
 Runs against a throwaway Postgres schema, the same convention as
 ``tests/test_store.py``: reachability is decided once, and every Postgres test
 skips with an explicit reason when it is not reachable. In CI, Postgres is
@@ -80,21 +85,6 @@ def test_health_reports_real_storage_state(client: TestClient) -> None:
 
 
 @pytest.mark.spec
-def test_health_is_unhealthy_when_storage_is_unreachable(settings: Settings) -> None:
-    broken = Settings(
-        database_url="postgresql://learning_tracker:wrong-password@localhost:1/nope",
-        schema=settings.schema,
-        host=settings.host,
-        port=settings.port,
-    )
-    app = create_app(broken)
-    with TestClient(app) as test_client:
-        response = test_client.get("/health")
-    assert response.status_code == 503
-    assert response.json() == {"status": "unhealthy"}
-
-
-@pytest.mark.spec
 def test_create_and_list_topics(client: TestClient) -> None:
     created = client.post("/topics", json={"topic_id": "ai-103", "name": "AI-103"})
     assert created.status_code == 201
@@ -145,8 +135,3 @@ def test_get_unknown_topic_fails_instead_of_empty_success(client: TestClient) ->
     assert "does-not-exist" in response.json()["detail"]
 
 
-@pytest.mark.spec
-def test_missing_database_url_fails_at_startup_naming_it() -> None:
-    with pytest.raises(MissingSettingError) as excinfo:
-        Settings.from_env({})
-    assert DATABASE_URL_VAR in str(excinfo.value)

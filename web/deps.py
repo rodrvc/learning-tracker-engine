@@ -57,6 +57,18 @@ class Resources:
         return True
 
 
+#: Pool sizing, stated rather than inherited. The defaults are four
+#: connections and a thirty second wait for one, and thirty seconds is longer
+#: than anyone waits for a web page. Worse, the request blocks a threadpool
+#: worker for all of it, so a database outage eventually stalls the health
+#: endpoint too, which is the one thing an operator needs answering at that
+#: moment. Failing fast is the more useful behaviour: the caller gets a 503 and
+#: retries.
+POOL_MIN_SIZE = 2
+POOL_MAX_SIZE = 10
+POOL_CHECKOUT_TIMEOUT_SECONDS = 5.0
+
+
 def build_resources(settings: Settings) -> Resources:
     """Opens the connection pool and wires the stores over it.
 
@@ -66,7 +78,17 @@ def build_resources(settings: Settings) -> Resources:
     introduced for exactly this caller — see the module docstring of
     ``store.postgres``.
     """
-    pool = ConnectionPool(conninfo=settings.database_url, open=True)
+    pool = ConnectionPool(
+        conninfo=settings.database_url,
+        open=True,
+        min_size=POOL_MIN_SIZE,
+        max_size=POOL_MAX_SIZE,
+        timeout=POOL_CHECKOUT_TIMEOUT_SECONDS,
+        # Hands out a connection only after confirming it still works. A
+        # managed database restarts, and after one the pool otherwise serves
+        # connections that look fine and fail on first use.
+        check=ConnectionPool.check_connection,
+    )
     kwargs = {"schema": settings.schema} if settings.schema else {}
     profiles = PostgresProfileStore(pool.connection, **kwargs)
     attempts = PostgresAttemptStore(pool.connection, **kwargs)
