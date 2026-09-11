@@ -1,6 +1,7 @@
 "use strict";
 
 import { ApiError } from "../api.js";
+import { escapeHtml, topicItem, objectiveItem } from "../format.js";
 
 /** Renders the topics view: the list-and-create screen with no parameter,
  * or one topic's detail when `topicId` is given. */
@@ -19,7 +20,7 @@ async function renderList(container, api) {
       <input id="topic-name-input" placeholder="nombre" required />
       <button type="submit">Crear tópico</button>
     </form>
-    <ul id="topics-list" class="topics-list"></ul>
+    <ul id="topics-list" class="topics-list"><li class="empty">Cargando...</li></ul>
     <div id="topics-feedback" role="alert"></div>
   `;
   const list = container.querySelector("#topics-list");
@@ -27,12 +28,15 @@ async function renderList(container, api) {
   const form = container.querySelector("#create-topic-form");
 
   async function load() {
+    feedback.textContent = "";
+    list.innerHTML = '<li class="empty">Cargando...</li>';
     try {
       const topics = await api.listTopics();
       list.innerHTML = topics.length
         ? topics.map(topicItem).join("")
         : '<li class="empty">Todavía no hay tópicos.</li>';
     } catch (err) {
+      list.innerHTML = "";
       showError(feedback, err);
     }
   }
@@ -54,13 +58,6 @@ async function renderList(container, api) {
   await load();
 }
 
-function topicItem(topic) {
-  return `<li><a href="#/topics/${encodeURIComponent(topic.topic_id)}">
-      <span>${escapeHtml(topic.name)}</span>
-      <span>${topic.objective_count} objetivos</span>
-    </a></li>`;
-}
-
 async function renderDetail(container, api, topicId) {
   container.innerHTML = '<p id="topic-detail-body">Cargando...</p>';
   const body = container.querySelector("#topic-detail-body");
@@ -72,7 +69,7 @@ async function renderDetail(container, api, topicId) {
       <ul class="objectives-list">
         ${
           topic.objectives.length
-            ? topic.objectives.map((o) => `<li>${escapeHtml(o.title)}</li>`).join("")
+            ? topic.objectives.map(objectiveItem).join("")
             : '<li class="empty">Todavía no tiene objetivos.</li>'
         }
       </ul>
@@ -89,10 +86,4 @@ function showError(container, err) {
   el.className = "error";
   el.textContent = message;
   container.appendChild(el);
-}
-
-function escapeHtml(value) {
-  const div = document.createElement("div");
-  div.textContent = value;
-  return div.innerHTML;
 }

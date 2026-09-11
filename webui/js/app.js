@@ -37,8 +37,13 @@ async function render() {
 
 window.addEventListener("hashchange", render);
 window.addEventListener("DOMContentLoaded", () => {
-  if (!location.hash) {
+  // Setting `location.hash` itself fires "hashchange", so rendering
+  // unconditionally here too used to render twice per load - two concurrent
+  // fetches, the first one's DOM nodes pulled out from under it. Only the
+  // branch that does not already trigger the event renders directly.
+  if (location.hash) {
+    render();
+  } else {
     location.hash = buildHash("topics");
   }
-  render();
 });

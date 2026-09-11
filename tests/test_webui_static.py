@@ -56,3 +56,22 @@ def test_missing_file_is_a_plain_404_not_a_crash(settings):
     with TestClient(create_app(settings)) as client:
         response = client.get("/does-not-exist.js")
     assert response.status_code == 404
+
+
+@pytest.mark.spec
+def test_trailing_slash_on_an_api_route_is_404_not_redirected(settings):
+    """A real trade-off, pinned rather than left as an accident.
+
+    Starlette's ``redirect_slashes`` (``/topics/`` -> 307 to ``/topics``)
+    only fires when *no* route matches at all; ``Mount("/", ...)`` always
+    matches, so it wins before that fallback runs and ``/topics/`` now gets
+    ``StaticFiles``' own 404 instead of a redirect into the topics router.
+    Accepted because no documented URL here (``INTEGRATION.md``, ``README.md``,
+    the routers' own docstrings) is written with a trailing slash, and the
+    front end itself never produces one - a caller who does type it gets a
+    plain 404, not a silent failure, and it is not worth a route in front of
+    the mount to preserve a convenience nothing relies on.
+    """
+    with TestClient(create_app(settings), raise_server_exceptions=False) as client:
+        response = client.get("/topics/", follow_redirects=False)
+    assert response.status_code == 404
