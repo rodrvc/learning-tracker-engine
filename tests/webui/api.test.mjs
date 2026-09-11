@@ -118,3 +118,28 @@ test("api.generateMaterial posts to the material's generate endpoint, both segme
     assert.equal(fetchImpl.calls[0].options.method, "POST");
   });
 });
+
+test("api.nextQuestion requests the topic's next practice question with GET, encoded", async () => {
+  await withStubbedFetch({}, async (fetchImpl) => {
+    await api.nextQuestion("t 1");
+    assert.equal(fetchImpl.calls[0].url, "/topics/t%201/practice/next");
+    assert.equal(fetchImpl.calls[0].options.method, undefined);
+  });
+});
+
+test("api.answerQuestion posts question_id, attempt_id and selected_key, the topic id encoded", async () => {
+  await withStubbedFetch({}, async (fetchImpl) => {
+    await api.answerQuestion("t 1", {
+      question_id: "q1",
+      attempt_id: "a1",
+      selected_key: "b",
+    });
+    assert.equal(fetchImpl.calls[0].url, "/topics/t%201/practice/answer");
+    assert.equal(fetchImpl.calls[0].options.method, "POST");
+    assert.deepEqual(JSON.parse(fetchImpl.calls[0].options.body), {
+      question_id: "q1",
+      attempt_id: "a1",
+      selected_key: "b",
+    });
+  });
+});

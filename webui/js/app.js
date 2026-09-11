@@ -4,12 +4,12 @@ import { api } from "./api.js";
 import { parseHash, buildHash } from "./router.js";
 import { renderTopics } from "./views/topics.js";
 import { renderMaterial } from "./views/material.js";
+import { renderPractice } from "./views/practice.js";
 
-// The two views ACU-252 still owes. Declared here, by name, so a visit
-// shows an honest "not built yet" instead of nothing - see router.js for why
-// they are recognised routes rather than absent ones.
+// The one view ACU-252 still owes. Declared here, by name, so a visit shows
+// an honest "not built yet" instead of nothing - see router.js for why it
+// is a recognised route rather than an absent one.
 const STUB_LABELS = {
-  practice: "Practicar",
   progress: "Progreso",
 };
 
@@ -32,6 +32,8 @@ async function render() {
     await renderTopics(content, api, param);
   } else if (view === "material") {
     await renderMaterial(content, api, param);
+  } else if (view === "practice") {
+    await renderPractice(content, api, param);
   } else {
     renderStub(view);
   }

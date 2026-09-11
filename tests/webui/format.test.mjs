@@ -15,6 +15,11 @@ import {
   titleFromFilename,
   generationSummary,
   describeGenerationError,
+  practiceOptionsView,
+  practiceQuestionView,
+  practiceResultView,
+  practiceAlreadyRecordedView,
+  describePracticeUnavailable,
 } from "../../webui/js/format.js";
 
 test("escapeHtml neutralises every HTML-significant character", () => {
@@ -154,4 +159,107 @@ test("describeGenerationError frames a 503 as a configuration problem, keeping t
 
 test("describeGenerationError shows a non-503 failure's message unchanged", () => {
   assert.equal(describeGenerationError({ status: 502, message: "generation failed: timeout" }), "generation failed: timeout");
+});
+
+test("practiceOptionsView numbers every option and escapes an attacker-controlled key and text", () => {
+  const html = practiceOptionsView(
+    [
+      { key: '"><script>k</script>', text: "<b>opt a</b>" },
+      { key: "b", text: "opt b" },
+    ],
+    null,
+  );
+  assert.equal(html.includes("<script>k</script>"), false);
+  assert.equal(html.includes("&lt;script&gt;k&lt;/script&gt;"), true);
+  assert.equal(html.includes("<b>opt a</b>"), false);
+  assert.equal(html.includes("&lt;b&gt;opt a&lt;/b&gt;"), true);
+  assert.equal((html.match(/option-number">1</) || []).length, 1);
+  assert.equal((html.match(/option-number">2</) || []).length, 1);
+});
+
+test("practiceOptionsView marks only the selected option, by key", () => {
+  const html = practiceOptionsView(
+    [
+      { key: "a", text: "A" },
+      { key: "b", text: "B" },
+    ],
+    "b",
+  );
+  assert.equal(html.includes('class="practice-option" data-key="a"'), true);
+  assert.equal(html.includes('class="practice-option selected" data-key="b"'), true);
+});
+
+test("practiceQuestionView disables the submit button until an option is selected", () => {
+  const question = {
+    question_id: "q1",
+    stem: "2+2?",
+    options: [{ key: "a", text: "4" }],
+  };
+  const withoutSelection = practiceQuestionView(question, { selectedKey: null, submitting: false });
+  assert.equal(withoutSelection.includes('id="submit-answer" disabled'), true);
+  const withSelection = practiceQuestionView(question, { selectedKey: "a", submitting: false });
+  assert.equal(withSelection.includes('id="submit-answer" disabled'), false);
+});
+
+test("practiceQuestionView disables the submit button while submitting, even with a selection", () => {
+  const question = { question_id: "q1", stem: "2+2?", options: [{ key: "a", text: "4" }] };
+  const html = practiceQuestionView(question, { selectedKey: "a", submitting: true });
+  assert.equal(html.includes('id="submit-answer" disabled'), true);
+});
+
+test("practiceQuestionView escapes the stem", () => {
+  const question = { question_id: "q1", stem: "<script>s</script>", options: [] };
+  const html = practiceQuestionView(question, { selectedKey: null, submitting: false });
+  assert.equal(html.includes("<script>s</script>"), false);
+  assert.equal(html.includes("&lt;script&gt;s&lt;/script&gt;"), true);
+});
+
+test("practiceResultView marks a correct answer and escapes the explanation", () => {
+  const html = practiceResultView({ correct: true, explanation: "<script>e</script>" });
+  assert.equal(html.includes("Correcto"), true);
+  assert.equal(html.includes('class="practice-verdict correct"'), true);
+  assert.equal(html.includes("<script>e</script>"), false);
+  assert.equal(html.includes("&lt;script&gt;e&lt;/script&gt;"), true);
+});
+
+test("practiceResultView marks an incorrect answer as an error, not correct", () => {
+  const html = practiceResultView({ correct: false, explanation: "nope" });
+  assert.equal(html.includes("Incorrecto"), true);
+  assert.equal(html.includes('class="practice-verdict error"'), true);
+  assert.equal(html.includes("Correcto<"), false);
+});
+
+test("practiceAlreadyRecordedView names no correctness, since the 409 response never carried one", () => {
+  const html = practiceAlreadyRecordedView();
+  assert.equal(html.includes("ya había quedado registrada"), true);
+  assert.equal(html.includes("Correcto"), false);
+  assert.equal(html.includes("Incorrecto"), false);
+});
+
+test("describePracticeUnavailable: an empty topic reads as no questions yet, regardless of which 404 fired", () => {
+  const err = { status: 404, message: "nothing to study in topic t1: no objective is due or unstarted" };
+  assert.equal(
+    describePracticeUnavailable(err, 0),
+    "Todavía no hay preguntas para este tema: subí material y generá preguntas.",
+  );
+});
+
+test("describePracticeUnavailable: objectives exist but none has a question", () => {
+  const err = { status: 404, message: "topic t1 has no question for any due or unstarted objective: o1" };
+  assert.equal(describePracticeUnavailable(err, 3), "Todavía no hay preguntas para los objetivos pendientes.");
+});
+
+test("describePracticeUnavailable: objectives exist, have questions, but nothing is due", () => {
+  const err = { status: 404, message: "nothing to study in topic t1: no objective is due or unstarted" };
+  assert.equal(describePracticeUnavailable(err, 3), "No hay nada vencido por ahora.");
+});
+
+test("describePracticeUnavailable passes an unknown-topic 404 through unchanged", () => {
+  const err = { status: 404, message: "unknown topic: t1" };
+  assert.equal(describePracticeUnavailable(err, undefined), "unknown topic: t1");
+});
+
+test("describePracticeUnavailable shows a non-404 failure's message unchanged", () => {
+  const err = { status: 0, message: "No se pudo conectar con el servidor." };
+  assert.equal(describePracticeUnavailable(err, 3), "No se pudo conectar con el servidor.");
 });
