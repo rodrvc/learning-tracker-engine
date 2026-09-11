@@ -78,6 +78,13 @@ async function withStubbedFetch(json, run) {
   }
 }
 
+test("api.getTopic requests one topic by id, encoded", async () => {
+  await withStubbedFetch({}, async (fetchImpl) => {
+    await api.getTopic("t 1");
+    assert.equal(fetchImpl.calls[0].url, "/topics/t%201");
+  });
+});
+
 test("api.listMaterial requests the topic's material collection with GET", async () => {
   await withStubbedFetch([], async (fetchImpl) => {
     await api.listMaterial("t 1");
@@ -100,11 +107,7 @@ test("api.uploadMaterial posts title, source and body, the topic id encoded", as
     await api.uploadMaterial("t 1", { title: "T", source: "S", body: "B" });
     assert.equal(fetchImpl.calls[0].url, "/topics/t%201/material");
     assert.equal(fetchImpl.calls[0].options.method, "POST");
-    assert.deepEqual(JSON.parse(fetchImpl.calls[0].options.body), {
-      title: "T",
-      source: "S",
-      body: "B",
-    });
+    assert.deepEqual(JSON.parse(fetchImpl.calls[0].options.body), { title: "T", source: "S", body: "B" });
   });
 });
 

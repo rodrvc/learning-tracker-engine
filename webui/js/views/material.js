@@ -8,14 +8,15 @@ import {
   generationSummary,
   describeGenerationError,
 } from "../format.js";
+import { generationTracker, uploadTracker } from "../material-state.js";
 
-/**
- * Renders the material view for one topic: upload a page of notes, list the
- * pages already there, open one and generate questions from it.
- *
- * There is no route without a topic - material always lives inside one - so
- * a missing `topicId` points back at the topics list instead of guessing.
- */
+// Renders the material view for one topic: upload a page of notes, list the
+// pages already there, open one and generate questions from it. There is no
+// route without a topic, so a missing `topicId` points back at the topics
+// list. `generationTracker`/`uploadTracker` (material-state.js) are
+// imported, not built here: this function reruns on every visit, including
+// the back-link to the topic and the only way back in, so state it owned
+// itself would be discarded on exactly those two links.
 export async function renderMaterial(container, api, topicId) {
   if (!topicId) {
     container.innerHTML =
@@ -50,33 +51,26 @@ export async function renderMaterial(container, api, topicId) {
   const bodyInput = container.querySelector("#material-body-input");
   const fileInput = container.querySelector("#material-file-input");
 
-  // Generation's running/succeeded/failed state, keyed by material id and
-  // held here rather than on the DOM. A re-render (reopening a material,
-  // possibly a different one and back) throws the previous detail subtree
-  // away; without this map that discarded the in-flight flag along with it,
-  // which both hid whether a call was still running and let a second click
-  // start a second paid one. `openMaterialId` is which material's panel is
-  // on screen right now, so a call that resolves after the user has moved on
-  // updates the map (nothing is lost - reopening shows the final state) but
-  // does not repaint a panel that is no longer showing it.
-  const generationState = new Map();
+  // Guards openMaterial()'s own race (clicking a second item before the
+  // first one's fetch resolves) - scoped to this render on purpose, since a
+  // newer render replaces these list buttons entirely.
   let openMaterialId = null;
 
+  // An upload already in flight from before this render (started, then the
+  // user came back via the back-link) has to look that way immediately.
+  paintUpload();
+
   fileInput.addEventListener("change", async () => {
+    uploadFeedback.textContent = "";
     const file = fileInput.files[0];
     if (!file) return;
     try {
       const text = await file.text();
-      // Only fills fields that are still empty - the same rule title and
-      // source already follow. The body is the one field a paste could
-      // already be sitting in, so overwriting it unconditionally would
-      // silently throw away typed work; this makes "pick a file" as safe as
-      // the other two autofills instead of the odd one out.
+      // Only fills empty fields, so picking a file never discards a typed body.
       if (!bodyInput.value.trim()) bodyInput.value = text;
       if (!titleInput.value.trim()) titleInput.value = titleFromFilename(file.name);
       if (!sourceInput.value.trim()) sourceInput.value = file.name;
     } catch {
-      uploadFeedback.textContent = "";
       const el = document.createElement("p");
       el.className = "error";
       el.textContent = "No se pudo leer el archivo.";
@@ -117,78 +111,70 @@ export async function renderMaterial(container, api, topicId) {
   }
 
   function renderDetail(material) {
-    detail.innerHTML = materialDetailView(material, generationState.get(material.material_id));
+    detail.innerHTML = materialDetailView(material, generationTracker.get(material.material_id));
     detail
       .querySelector("#generate-button")
       .addEventListener("click", () => generate(material.material_id));
   }
 
   async function generate(materialId) {
-    const current = generationState.get(materialId);
+    const current = generationTracker.get(materialId);
     if (current && current.running) return; // already running; nothing to start twice
-    // Generation is slow and costs money: it has to be visible while it
-    // runs, not just once it finishes or fails (ACU-266).
-    generationState.set(materialId, {
-      running: true,
-      message: "Generando preguntas… puede tardar y tiene costo.",
-      error: false,
-    });
-    paint(materialId);
+    // Generation is slow and costs money: it must be visible while it runs.
+    generationTracker.start(materialId, "Generando preguntas… puede tardar y tiene costo.");
+    paintGeneration(materialId);
     try {
       const result = await api.generateMaterial(topicId, materialId);
-      generationState.set(materialId, {
-        running: false,
-        message: generationSummary(result),
-        error: false,
-      });
+      generationTracker.succeed(materialId, generationSummary(result));
     } catch (err) {
-      generationState.set(materialId, {
-        running: false,
-        message: describeGenerationError(err),
-        error: true,
-      });
+      generationTracker.fail(materialId, describeGenerationError(err));
     } finally {
-      paint(materialId);
+      paintGeneration(materialId);
     }
   }
 
-  /** Reflects `generationState` for `materialId` on screen, but only if its
-   * panel is still the one open - see the note by `generationState` above. */
-  function paint(materialId) {
-    if (openMaterialId !== materialId) return;
-    const state = generationState.get(materialId);
-    const button = detail.querySelector("#generate-button");
-    const feedback = detail.querySelector("#generate-feedback");
-    if (!button || !feedback) return;
-    button.disabled = Boolean(state && state.running);
+  // Looked up fresh via `container` (app.js's one stable #view element,
+  // shared by every render), not the closure's `detail`: a generate() call
+  // started before a back-link/forward round trip must resolve against
+  // whichever render is current, not the detached one it began in.
+  function paintGeneration(materialId) {
+    const article = container.querySelector("#material-detail article");
+    if (!article || article.dataset.materialId !== materialId) return;
+    const state = generationTracker.get(materialId);
+    article.querySelector("#generate-button").disabled = Boolean(state && state.running);
+    const feedback = article.querySelector("#generate-feedback");
     feedback.className = state && state.error ? "error" : "";
     feedback.textContent = (state && state.message) || "";
   }
 
+  /** Reflects `uploadTracker` on the (freshly rendered) upload button. */
+  function paintUpload() {
+    const state = uploadTracker.get();
+    uploadButton.disabled = state.running;
+    uploadFeedback.textContent = state.running ? state.message : "";
+  }
+
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    // Disabled for the whole request, not just while `await` is pending on
-    // the next line: a material's id is minted server-side, so (unlike
-    // creating a topic) a duplicate click's second POST cannot 409 on a
-    // caller-supplied id - it just succeeds, and material has no delete to
-    // undo it with.
-    uploadButton.disabled = true;
-    uploadFeedback.textContent = "Subiendo...";
+    if (uploadTracker.get().running) return; // already running; nothing to start twice
+    // A material's id is minted server-side, so a duplicate POST cannot 409
+    // like a topic's would - it just succeeds, with no delete to undo it.
+    uploadTracker.start("Subiendo...");
+    paintUpload();
     const title = titleInput.value.trim();
     const source = sourceInput.value.trim();
     const body = bodyInput.value;
     try {
       await api.uploadMaterial(topicId, { title, source, body });
-      form.reset();
       uploadFeedback.textContent = "";
+      form.reset();
       await loadList();
     } catch (err) {
-      // The backend decides what is valid (including the body size limit,
-      // reported with the size in its own message) - shown as-is, never
-      // replaced by a generic one here.
+      // Shown as-is (e.g. the backend's 413 with its own size), not replaced.
       uploadFeedback.textContent = "";
       showError(uploadFeedback, err);
     } finally {
+      uploadTracker.finish();
       uploadButton.disabled = false;
     }
   });
