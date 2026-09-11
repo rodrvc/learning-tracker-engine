@@ -75,6 +75,14 @@ export const api = {
       `/topics/${encodeURIComponent(topicId)}/material/${encodeURIComponent(materialId)}/generate`,
       { method: "POST" },
     ),
+  // No `correct_key`, no `explanation` in the response - the practice
+  // endpoint withholds the solution on purpose (see web/routers/practice.py).
+  nextQuestion: (topicId) => request(`/topics/${encodeURIComponent(topicId)}/practice/next`),
+  answerQuestion: (topicId, { question_id, attempt_id, selected_key }) =>
+    request(`/topics/${encodeURIComponent(topicId)}/practice/answer`, {
+      method: "POST",
+      body: JSON.stringify({ question_id, attempt_id, selected_key }),
+    }),
 };
 
 export { ApiError };

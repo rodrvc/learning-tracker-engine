@@ -67,6 +67,7 @@ async function renderDetail(container, api, topicId) {
       <a href="#/topics" class="back-link">&larr; Tópicos</a>
       <h2>${escapeHtml(topic.name)}</h2>
       <a href="#/material/${encodeURIComponent(topicId)}">Ver material</a>
+      <a href="#/practice/${encodeURIComponent(topicId)}">Practicar</a>
       <ul class="objectives-list">
         ${
           topic.objectives.length
