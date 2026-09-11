@@ -78,6 +78,12 @@ class StubGenerator:
             others = [s for s in sentences if s != correct]
             distractors = (others + list(_FALLBACK_DISTRACTORS))[:3]
             texts = [correct] + distractors
+            # Rotate so the correct answer's position varies deterministically
+            # by question index, rather than always sitting at the first slot
+            # - the exact position bias this package exists to avoid handing
+            # an incurious quiz-taker (see the module docstring).
+            pos = index % len(texts)
+            texts = texts[-pos:] + texts[:-pos] if pos else texts
             options = tuple(zip(_OPTION_KEYS[: len(texts)], texts))
             questions.append(
                 Question(
@@ -86,7 +92,7 @@ class StubGenerator:
                     objective_id=objective_id,
                     stem=f'According to "{material.title}", which statement is accurate?',
                     options=options,
-                    correct_key=_OPTION_KEYS[0],
+                    correct_key=_OPTION_KEYS[pos],
                     explanation=(
                         f'"{correct}" is drawn directly from the material. The other '
                         "options are plausible only if the material is misread or "
