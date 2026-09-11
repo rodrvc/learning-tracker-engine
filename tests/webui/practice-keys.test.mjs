@@ -6,7 +6,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resolveKeyAction } from "../../webui/js/practice-keys.js";
+import { resolveKeyAction, isAlreadyRecorded, makeAttemptId } from "../../webui/js/practice-keys.js";
 
 test("a digit within range selects that option while answering", () => {
   assert.deepEqual(resolveKeyAction("1", { phase: "answering", optionCount: 3 }), {
@@ -51,4 +51,29 @@ test("Enter is ignored while a request is in flight, so mashing it cannot double
 
 test("a digit is ignored while a request is in flight", () => {
   assert.equal(resolveKeyAction("1", { phase: "submitting", optionCount: 3 }), null);
+});
+
+test("a modifier combination is refused even where the bare key would act (review round 1)", () => {
+  const base = { optionCount: 3, hasModifier: true };
+  assert.equal(resolveKeyAction("1", { ...base, phase: "answering" }), null);
+  assert.equal(resolveKeyAction("Enter", { ...base, phase: "answering" }), null);
+  assert.equal(resolveKeyAction("Enter", { ...base, phase: "feedback" }), null);
+});
+
+test("isAlreadyRecorded is true only for a 409, not neighbouring statuses", () => {
+  assert.equal(isAlreadyRecorded({ status: 409 }), true);
+  assert.equal(isAlreadyRecorded({ status: 410 }), false);
+  assert.equal(isAlreadyRecorded({ status: 408 }), false);
+  assert.equal(isAlreadyRecorded(null), false);
+});
+
+test("makeAttemptId uses the injected randomUUID when available", () => {
+  assert.equal(makeAttemptId(() => "fixed-id"), "fixed-id");
+});
+
+test("makeAttemptId falls back to a unique-enough id when randomUUID is unavailable", () => {
+  const first = makeAttemptId(undefined);
+  const second = makeAttemptId(undefined);
+  assert.equal(typeof first, "string");
+  assert.notEqual(first, second);
 });

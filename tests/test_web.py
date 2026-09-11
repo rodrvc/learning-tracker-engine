@@ -755,6 +755,35 @@ def test_next_unknown_topic_fails(client: TestClient) -> None:
     assert "does-not-exist" in response.json()["detail"]
 
 
+@pytest.mark.edge
+def test_next_question_404_details_are_pinned_for_the_webui(
+    client: TestClient, practice_topic: str
+) -> None:
+    """``webui/js/format.js``'s ``describePracticeUnavailable`` tells the
+    practice view's empty states apart by parsing these three details'
+    exact wording (ACU-267 review). Nothing else enforces that coupling, so
+    an ordinarily blameless reword here would silently degrade that view
+    while both suites stayed green. Pinned verbatim on purpose."""
+    unknown = client.get("/topics/does-not-exist/practice/next")
+    assert unknown.json()["detail"] == "unknown topic: does-not-exist"
+
+    caught_up = client.get(f"/topics/{practice_topic}/practice/next")
+    assert caught_up.json()["detail"] == (
+        f"nothing to study in topic {practice_topic}: no objective is due or unstarted"
+    )
+
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        _insert_objective(conn, "obj-mute")
+        _insert_attempt(
+            conn, "obj-mute", datetime.now(timezone.utc) - timedelta(days=5), correct=False
+        )
+        conn.commit()
+    no_question = client.get(f"/topics/{practice_topic}/practice/next")
+    assert no_question.json()["detail"] == (
+        f"topic {practice_topic} has no question for any due or unstarted objective: obj-mute"
+    )
+
+
 @pytest.mark.spec
 def test_answering_correctly_records_one_attempt_and_new_state(
     client: TestClient, practice_topic: str

@@ -156,23 +156,27 @@ export function practiceAlreadyRecordedView() {
 }
 
 /**
- * Turns "nothing to practise" into the specific reason, per ACU-267: say
- * which nothing. The practice endpoint's two 404s are told apart by their
- * own wording (see web/routers/practice.py's `next_question`); an empty
- * topic (no objectives at all, `objectiveCount` falsy) is a third case
- * that endpoint cannot name by itself, since it 404s the same way a fully
- * caught-up topic does - the caller resolves it by also checking the
- * topic's objective count.
+ * Turns "nothing to practise" into the specific reason (ACU-267). The two
+ * 404s are told apart by wording pinned verbatim in `tests/test_web.py`
+ * (see `web/routers/practice.py`'s `next_question`). "Has no question for
+ * any due or unstarted objective" is conclusive on its own - it only fires
+ * when objectives exist - so it is checked first. "No objective is due or
+ * unstarted" is ambiguous between an empty topic and a caught-up one; only
+ * a confirmed `objectiveCount === 0` may read as empty. An unfetched count
+ * (`undefined`) reads as caught-up, never as a prompt to upload material
+ * the person may already have.
  */
-export function describePracticeUnavailable(err, objectiveCount) {
+export function describePracticeUnavailable(err, { objectiveCount, topicId } = {}) {
   const message = (err && err.message) || "Error inesperado.";
   if (err && err.status === 404) {
-    if (message.startsWith("unknown topic:")) return message;
-    if (!objectiveCount) {
-      return "Todavía no hay preguntas para este tema: subí material y generá preguntas.";
+    if (message.startsWith("unknown topic:")) {
+      return `No existe el tema "${topicId ?? ""}".`;
     }
     if (message.includes("no question for any due or unstarted")) {
       return "Todavía no hay preguntas para los objetivos pendientes.";
+    }
+    if (objectiveCount === 0) {
+      return "Todavía no hay preguntas para este tema: subí material y generá preguntas.";
     }
     return "No hay nada vencido por ahora.";
   }

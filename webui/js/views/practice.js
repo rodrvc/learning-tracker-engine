@@ -7,7 +7,7 @@ import {
   practiceAlreadyRecordedView,
   describePracticeUnavailable,
 } from "../format.js";
-import { resolveKeyAction } from "../practice-keys.js";
+import { resolveKeyAction, isAlreadyRecorded, makeAttemptId } from "../practice-keys.js";
 
 // Renders the practice view for one topic: one question at a time, answer
 // it, see immediately whether it was right with the explanation, carry on
@@ -15,14 +15,11 @@ import { resolveKeyAction } from "../practice-keys.js";
 //
 // State here (the current question, the selection, `phase`) is deliberately
 // local to this call, not a module like material-state.js's generation
-// tracker: losing it costs nothing. A next-question fetch is free to redo;
-// an in-flight answer is protected by its own `attempt_id`, so even a
-// duplicate fire from a stale render lands as the engine's own 409, not a
-// double-counted attempt (see the "already recorded" branch below). That is
-// a different cost than the material view's paid, slow generation call,
-// which is why that state had to survive a re-render and this does not -
-// per the review note on ACU-266: the same treatment does not apply here by
-// analogy.
+// tracker: losing it costs nothing. A next-question fetch is free to redo,
+// and an in-flight answer is protected by its own `attempt_id` - a
+// duplicate fire lands as the engine's own 409 ("already recorded" below),
+// not a double-counted attempt. Unlike the material view's paid, slow
+// generation call, so the same cross-render treatment does not apply here.
 export async function renderPractice(container, api, topicId) {
   if (!topicId) {
     container.innerHTML =
@@ -46,17 +43,23 @@ export async function renderPractice(container, api, topicId) {
   let selectedKey = null;
   let attemptId = null;
 
-  // On `document`, not `container`: a keydown event bubbles up through
-  // whatever has focus, and right after a render nothing does (the person
-  // studying has not clicked anything yet - this view exists precisely so
-  // they never have to). A listener on `container` would only ever see
-  // keys typed into one of its own descendants, missing exactly the first
-  // keypress of every question. Removed on the next hash change, so
-  // navigating elsewhere - including to a different topic's practice view -
-  // does not leave a stale listener acting on a question nobody sees.
+  // On `document`, not `container`: right after a render nothing has focus
+  // yet, and a listener on `container` only sees keys bubbling from one of
+  // its own descendants - it would miss every question's first keypress.
+  // Removed on the next hash change so it never outlives this render.
+  //
+  // A document-wide listener also sees keys meant elsewhere (review round
+  // 1): Enter on a focused nav or back-link, or a Cmd/Ctrl/Alt shortcut.
+  // Bailing when the target already owns Enter costs nothing - the option
+  // and submit buttons produce the same action via their click handlers -
+  // and `resolveKeyAction` itself refuses every modifier combination.
   function onKeydown(event) {
+    if (event.target instanceof Element && event.target.closest("a, button, input, textarea, select")) {
+      return;
+    }
     const optionCount = question ? question.options.length : 0;
-    const action = resolveKeyAction(event.key, { phase, optionCount });
+    const hasModifier = event.ctrlKey || event.metaKey || event.altKey;
+    const action = resolveKeyAction(event.key, { phase, optionCount, hasModifier });
     if (!action) return;
     event.preventDefault();
     if (action.type === "select") select(question.options[action.index].key);
@@ -89,7 +92,13 @@ export async function renderPractice(container, api, topicId) {
   }
 
   async function submit() {
-    if (phase !== "answering" || !selectedKey) return;
+    if (phase !== "answering") return;
+    if (!selectedKey) {
+      // A likely first keystroke here (review round 1): say why, not silence.
+      paintQuestion();
+      appendMessage("Elegí una opción antes de responder.");
+      return;
+    }
     phase = "submitting";
     paintQuestion();
     try {
@@ -101,30 +110,27 @@ export async function renderPractice(container, api, topicId) {
       phase = "feedback";
       area.innerHTML = practiceResultView(answer);
     } catch (err) {
-      if (err instanceof ApiError && err.status === 409) {
+      if (isAlreadyRecorded(err)) {
         // Already recorded, not broken (SPEC C9): treated as success.
         phase = "feedback";
         area.innerHTML = practiceAlreadyRecordedView();
       } else {
-        // A silent failure here is the worst outcome this screen can
-        // produce (someone answering on, believing it is being recorded),
-        // so this stays visible and answerable again with the same
-        // `attemptId` - a retry that actually succeeded server-side just
-        // meets the 409 branch above instead.
+        // Visible and retryable with the same `attemptId`: a retry that did
+        // land server-side just meets the "already recorded" branch above.
         phase = "answering";
         paintQuestion();
-        showSubmitError(err);
+        const message = err instanceof ApiError ? err.message : "Error inesperado.";
+        appendMessage(`No se guardó la respuesta: ${message}`);
         return;
       }
     }
     area.querySelector("#next-question").addEventListener("click", loadNext);
   }
 
-  function showSubmitError(err) {
-    const message = err instanceof ApiError ? err.message : "Error inesperado.";
+  function appendMessage(text) {
     const p = document.createElement("p");
     p.className = "error";
-    p.textContent = `No se guardó la respuesta: ${message}`;
+    p.textContent = text;
     area.appendChild(p);
   }
 
@@ -135,7 +141,8 @@ export async function renderPractice(container, api, topicId) {
     try {
       question = await api.nextQuestion(topicId);
       selectedKey = null;
-      attemptId = crypto.randomUUID();
+      const crypto = globalThis.crypto;
+      attemptId = makeAttemptId(crypto && crypto.randomUUID && crypto.randomUUID.bind(crypto));
       phase = "answering";
       paintQuestion();
     } catch (err) {
@@ -145,19 +152,22 @@ export async function renderPractice(container, api, topicId) {
   }
 
   async function paintUnavailable(err) {
+    // The extra lookup only resolves the ambiguous 404 (see format.js);
+    // skip it on an unknown topic (would just 404 again) and on a network
+    // outage (status 0) - pointless in both, per review.
     let objectiveCount;
-    try {
-      objectiveCount = (await api.getTopic(topicId)).objectives.length;
-    } catch {
-      objectiveCount = undefined; // best-effort refinement only; see format.js
+    const isUnknownTopic = err instanceof ApiError && err.message.startsWith("unknown topic:");
+    if (err instanceof ApiError && err.status === 404 && !isUnknownTopic) {
+      try {
+        objectiveCount = (await api.getTopic(topicId)).objectives.length;
+      } catch {
+        objectiveCount = undefined; // best-effort refinement only; see format.js
+      }
     }
-    // Built via textContent, not innerHTML: the "unknown topic: X" branch
-    // of describePracticeUnavailable echoes the topic id verbatim, which is
-    // attacker-controllable through the URL hash.
     area.innerHTML = "";
     const p = document.createElement("p");
     p.className = "empty-view";
-    p.textContent = describePracticeUnavailable(err, objectiveCount);
+    p.textContent = describePracticeUnavailable(err, { objectiveCount, topicId });
     area.appendChild(p);
   }
 

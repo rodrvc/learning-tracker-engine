@@ -236,30 +236,40 @@ test("practiceAlreadyRecordedView names no correctness, since the 409 response n
   assert.equal(html.includes("Incorrecto"), false);
 });
 
-test("describePracticeUnavailable: an empty topic reads as no questions yet, regardless of which 404 fired", () => {
-  const err = { status: 404, message: "nothing to study in topic t1: no objective is due or unstarted" };
+const AMBIGUOUS_404 = { status: 404, message: "nothing to study in topic t1: no objective is due or unstarted" };
+const CONCLUSIVE_404 = { status: 404, message: "topic t1 has no question for any due or unstarted objective: o1" };
+
+test("describePracticeUnavailable: an empty topic (objectiveCount 0) reads as no questions yet", () => {
   assert.equal(
-    describePracticeUnavailable(err, 0),
+    describePracticeUnavailable(AMBIGUOUS_404, { objectiveCount: 0 }),
     "Todavía no hay preguntas para este tema: subí material y generá preguntas.",
   );
 });
 
-test("describePracticeUnavailable: objectives exist but none has a question", () => {
-  const err = { status: 404, message: "topic t1 has no question for any due or unstarted objective: o1" };
-  assert.equal(describePracticeUnavailable(err, 3), "Todavía no hay preguntas para los objetivos pendientes.");
+// The conclusive 404 wins regardless of objectiveCount - checked first.
+test("describePracticeUnavailable: conclusive 404 wins even with objectiveCount 0", () => {
+  assert.equal(
+    describePracticeUnavailable(CONCLUSIVE_404, { objectiveCount: 0 }),
+    "Todavía no hay preguntas para los objetivos pendientes.",
+  );
 });
 
-test("describePracticeUnavailable: objectives exist, have questions, but nothing is due", () => {
-  const err = { status: 404, message: "nothing to study in topic t1: no objective is due or unstarted" };
-  assert.equal(describePracticeUnavailable(err, 3), "No hay nada vencido por ahora.");
+test("describePracticeUnavailable: objectives exist and have questions, but nothing is due", () => {
+  assert.equal(describePracticeUnavailable(AMBIGUOUS_404, { objectiveCount: 3 }), "No hay nada vencido por ahora.");
 });
 
-test("describePracticeUnavailable passes an unknown-topic 404 through unchanged", () => {
+// review round 1, B2: an unfetched objectiveCount must read as caught-up,
+// never as "empty topic" - only a confirmed 0 may say that.
+test("describePracticeUnavailable: an unknown objectiveCount reads as caught-up", () => {
+  assert.equal(describePracticeUnavailable(AMBIGUOUS_404, {}), "No hay nada vencido por ahora.");
+});
+
+test("describePracticeUnavailable shows an unknown-topic 404 in Spanish, naming the topic", () => {
   const err = { status: 404, message: "unknown topic: t1" };
-  assert.equal(describePracticeUnavailable(err, undefined), "unknown topic: t1");
+  assert.equal(describePracticeUnavailable(err, { topicId: "t1" }), 'No existe el tema "t1".');
 });
 
 test("describePracticeUnavailable shows a non-404 failure's message unchanged", () => {
   const err = { status: 0, message: "No se pudo conectar con el servidor." };
-  assert.equal(describePracticeUnavailable(err, 3), "No se pudo conectar con el servidor.");
+  assert.equal(describePracticeUnavailable(err, { objectiveCount: 3 }), "No se pudo conectar con el servidor.");
 });
