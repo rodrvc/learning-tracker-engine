@@ -40,6 +40,13 @@ jobs:
         with:
           python-version: "3.12"
 
+      # webui/js/'s unit tests (tests/test_webui_router.py) shell out to
+      # `node --test`. Declared here rather than relied on implicitly - it
+      # passed before only because ubuntu-latest happens to ship Node.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
       # The 'postgres' extra pulls in psycopg. Without it, tests/test_store.py
       # cannot even import migrations.runner, and the whole Postgres side of
       # the suite is skipped rather than run. The 'web' extra pulls in

@@ -28,7 +28,16 @@ web = [
 generate = ["openai>=2.0", "pydantic>=2.0"]
 
 [tool.setuptools]
-packages = ["core", "store", "ui", "migrations", "content", "web", "web.routers", "generate"]
+# `webui` has no `.py` files, so it needs its own package-data entry below or
+# a wheel install leaves `WEBUI_DIR` (web/app.py) pointing at nothing and
+# `create_app` dies at `StaticFiles` construction instead of serving a page.
+packages = ["core", "store", "ui", "migrations", "content", "web", "web.routers", "generate", "webui"]
+
+[tool.setuptools.package-data]
+# A glob, not an enumeration: a hand-kept list silently stops shipping the
+# first file that lands in a new directory, and `StaticFiles` still
+# constructs, so the failure is a 404 in production with a green suite.
+webui = ["**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
