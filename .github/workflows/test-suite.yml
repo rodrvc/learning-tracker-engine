@@ -1,0 +1,72 @@
+name: test-suite
+
+on:
+  # Every pull request, and every push to the default branch: the two events
+  # where a broken backend would otherwise reach main unnoticed.
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      # The tests reach this over TCP through POSTGRES_PORT / the DSN below,
+      # exactly like a developer's local `docker compose up -d postgres`
+      # (see docker-compose.yml). Health-checked so the job waits for it to
+      # accept connections instead of racing it.
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: learning_tracker
+          POSTGRES_PASSWORD: learning_tracker
+          POSTGRES_DB: learning_tracker
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U learning_tracker"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 15
+    env:
+      LEARNING_TRACKER_TEST_DATABASE_URL: postgresql://learning_tracker:learning_tracker@localhost:5432/learning_tracker
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The 'postgres' extra pulls in psycopg. Without it, tests/test_store.py
+      # cannot even import migrations.runner, and the whole Postgres side of
+      # the suite is skipped rather than run.
+      - name: Install the package with the dev and postgres extras
+        run: pip install -e ".[dev,postgres]"
+
+      - name: Apply migrations to the real schema
+        run: python -m migrations.runner "$LEARNING_TRACKER_TEST_DATABASE_URL"
+
+      # -ra prints one summary line per non-passed test, prefixed with a
+      # letter code ("SKIPPED ...", "FAILED ..."). Captured to a file so the
+      # next step can inspect it without re-running the suite.
+      - name: Run the full test suite
+        run: |
+          set -o pipefail
+          pytest -ra | tee pytest-output.txt
+
+      # A skip here is not a result, it is a configuration failure: this job
+      # brought up Postgres itself, so tests/test_store.py's Postgres backend
+      # must run, never fall back to its local "no database reachable" skip.
+      # The previous step already fails the job on a genuine test failure;
+      # this one exists solely to catch the failure mode that goes green,
+      # which is the reason this workflow exists in the first place.
+      - name: Fail the job if any test skipped
+        run: |
+          if grep -q "^SKIPPED" pytest-output.txt; then
+            echo "::error::One or more tests skipped in CI. A skip here means the Postgres service, migrations, or the 'postgres' extra are misconfigured, not that the suite passed. See the SKIPPED line(s) above for the reason."
+            grep "^SKIPPED" pytest-output.txt
+            exit 1
+          fi
