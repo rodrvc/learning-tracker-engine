@@ -154,7 +154,7 @@ def attempts(backend, tmp_path) -> AttemptStore:
         return InMemoryAttemptStore()
     if backend == "postgres":
         _reset_postgres_schema()
-        return PostgresAttemptStore(POSTGRES_DSN, schema=POSTGRES_SCHEMA)
+        return PostgresAttemptStore.from_dsn(POSTGRES_DSN, schema=POSTGRES_SCHEMA)
     return JsonAttemptStore(tmp_path / "attempts.json")
 
 
@@ -165,7 +165,7 @@ def profiles(backend, tmp_path) -> ProfileStore:
         return InMemoryProfileStore()
     if backend == "postgres":
         _reset_postgres_schema()
-        return PostgresProfileStore(POSTGRES_DSN, schema=POSTGRES_SCHEMA)
+        return PostgresProfileStore.from_dsn(POSTGRES_DSN, schema=POSTGRES_SCHEMA)
     return JsonProfileStore(tmp_path / "profiles.json")
 
 
@@ -455,6 +455,39 @@ def test_list_profiles_orders_by_codepoint_not_by_locale(profiles):
 @pytest.mark.spec
 def test_list_profiles_empty(profiles):
     assert profiles.list_profiles() == []
+
+
+@pytest.mark.spec
+def test_list_profiles_matches_get_profile_for_every_profile(profiles):
+    """Guards ``_row_to_objective``-style mapping against diverging per method.
+
+    Every field that isn't a default (``weight``, ``domain``, ``tags``) is
+    exercised here so a sixth column added to one row-mapping and not the
+    other would show up as a mismatch instead of passing silently.
+    """
+    profiles.save_profile(
+        Profile(
+            profile_id=P1,
+            name="AI-103",
+            objectives={
+                O1: Objective(
+                    objective_id=O1, title="Foo", domain="D1", weight=2.5,
+                    tags=("a", "b"),
+                ),
+            },
+        )
+    )
+    profiles.save_profile(
+        Profile(
+            profile_id=P2,
+            name="AZ-900",
+            objectives={
+                O2: Objective(objective_id=O2, title="Bar", domain=None, weight=0.5),
+            },
+        )
+    )
+    listed = profiles.list_profiles()
+    assert listed == [profiles.get_profile(p.profile_id) for p in listed]
 
 
 @pytest.mark.spec
@@ -975,3 +1008,172 @@ def test_c9_duplicate_error_is_a_tracker_error(attempts):
     attempts.append(P1, make_attempt("dup"))
     with pytest.raises(TrackerError):
         attempts.append(P1, make_attempt("dup"))
+
+
+# ================================================= postgres connection provider (ACU-255)
+
+
+@pytest.mark.spec
+@pytest.mark.skipif(psycopg is None, reason="requires the psycopg driver")
+def test_failing_connection_provider_raises_storage_error_not_driver_exception():
+    def broken():
+        raise RuntimeError("no network")
+
+    with pytest.raises(StorageError):
+        PostgresAttemptStore(broken).append(P1, make_attempt("a1"))
+    with pytest.raises(StorageError):
+        PostgresAttemptStore(broken).count(P1)
+    with pytest.raises(StorageError):
+        PostgresProfileStore(broken).get_profile(P1)
+
+
+@pytest.mark.spec
+@pytest.mark.skipif(psycopg is None, reason="requires the psycopg driver")
+def test_provider_that_fails_on_checkout_also_raises_storage_error():
+    """Acquisition is two steps and the second one is how a pool really fails.
+
+    The test above covers a provider that raises when it is called. A pool does
+    not fail there: describing a checkout always succeeds, and the failure -
+    exhaustion, a dead connection - arrives when the connection is actually
+    checked out, which is ``__enter__``. Guarding only the call let the failure
+    mode that happens in production leak the raw exception straight through
+    every method, which is precisely what I8 forbids.
+    """
+
+    class ExhaustedPool:
+        def __enter__(self):
+            raise RuntimeError("pool exhausted")
+
+        def __exit__(self, *exc_info):
+            return False
+
+    def checkout_fails():
+        return ExhaustedPool()
+
+    attempts = PostgresAttemptStore(checkout_fails)
+    profiles = PostgresProfileStore(checkout_fails)
+    for call in (
+        lambda: attempts.append(P1, make_attempt("a1")),
+        lambda: attempts.list_all(P1),
+        lambda: attempts.list_for_objective(P1, O1),
+        lambda: attempts.count(P1),
+        lambda: attempts.exists("a1"),
+        lambda: profiles.get_profile(P1),
+        lambda: profiles.list_profiles(),
+        lambda: profiles.save_profile(Profile(profile_id=P1, name="x")),
+    ):
+        with pytest.raises(StorageError):
+            call()
+
+
+@pytest.mark.spec
+@pytest.mark.skipif(psycopg is None, reason="requires the psycopg driver")
+def test_connection_provider_is_invoked_once_per_operation_never_reused():
+    if not POSTGRES_AVAILABLE:
+        pytest.skip(_SKIP_REASON)
+    _reset_postgres_schema()
+    calls: list[object] = []
+
+    def counting_connect():
+        conn = psycopg.connect(POSTGRES_DSN)
+        calls.append(conn)
+        return conn
+
+    store = PostgresAttemptStore(counting_connect, schema=POSTGRES_SCHEMA)
+    store.append(P1, make_attempt("a1"))
+    store.append(P1, make_attempt("a2", at=day(1)))
+    store.count(P1)
+    # One connection per operation: the provider ran three times. This
+    # provider hands back a plain ``psycopg.Connection`` (its own context
+    # manager), so releasing it means closing it — see the pool-style test
+    # below for a provider where "released" does not mean "closed".
+    assert len(calls) == 3
+    assert all(conn.closed for conn in calls)
+
+
+@pytest.mark.spec
+@pytest.mark.skipif(psycopg is None, reason="requires the psycopg driver")
+def test_connection_provider_context_manager_is_released_without_closing():
+    """Binds Blocking 1: the seam must actually support pooling.
+
+    A pool-style provider returns a context manager whose ``__exit__``
+    commits-or-rolls-back and *returns the connection to the pool* — it never
+    closes it. If the store called ``.close()`` itself, or only worked with a
+    bare ``psycopg.Connection``, this would fail or the connection would come
+    back closed. Reusing the same connection across three operations without
+    ever closing it, and reading back what was written, is precisely how a
+    real pool checkout has to behave.
+    """
+    if not POSTGRES_AVAILABLE:
+        pytest.skip(_SKIP_REASON)
+    _reset_postgres_schema()
+    conn = psycopg.connect(POSTGRES_DSN)
+    releases: list[bool] = []
+
+    class PoolStyleContext:
+        def __enter__(self):
+            return conn
+
+        def __exit__(self, exc_type, exc, tb):
+            if exc_type is None:
+                conn.commit()
+            else:
+                conn.rollback()
+            releases.append(conn.closed)  # released, not closed
+            return False
+
+    try:
+        store = PostgresAttemptStore(lambda: PoolStyleContext(), schema=POSTGRES_SCHEMA)
+        store.append(P1, make_attempt("a1"))
+        store.append(P1, make_attempt("a2", at=day(1)))
+        assert store.count(P1) == 2
+        # Every operation released the connection at the end (the context
+        # manager was exited), but never by closing it — a real pool would
+        # keep it alive for reuse.
+        assert len(releases) == 3
+        assert releases == [False, False, False]
+        assert not conn.closed
+    finally:
+        conn.close()
+
+
+@pytest.mark.spec
+@pytest.mark.skipif(psycopg is None, reason="requires the psycopg driver")
+def test_list_profiles_invokes_the_connection_provider_once_not_per_profile():
+    """Binds Blocking 2: the N+1 fix in ``list_profiles`` itself.
+
+    Reverting ``list_profiles`` to ``[self.get_profile(pid) for pid in ids]``
+    makes this provider run once per profile instead of once total, which is
+    exactly the connection-per-request cost this ticket exists to remove.
+    """
+    if not POSTGRES_AVAILABLE:
+        pytest.skip(_SKIP_REASON)
+    _reset_postgres_schema()
+    calls: list[object] = []
+
+    def counting_connect():
+        conn = psycopg.connect(POSTGRES_DSN)
+        calls.append(conn)
+        return conn
+
+    seeding_store = PostgresProfileStore.from_dsn(POSTGRES_DSN, schema=POSTGRES_SCHEMA)
+    for profile_id in (P1, P2, "az-900-2"):
+        seeding_store.save_profile(Profile(profile_id=profile_id, name=profile_id))
+
+    store = PostgresProfileStore(counting_connect, schema=POSTGRES_SCHEMA)
+    profiles_listed = store.list_profiles()
+
+    assert len(profiles_listed) == 3
+    assert len(calls) == 1
+
+
+@pytest.mark.spec
+@pytest.mark.skipif(psycopg is None, reason="requires the psycopg driver")
+def test_from_dsn_is_equivalent_to_an_injected_provider():
+    if not POSTGRES_AVAILABLE:
+        pytest.skip(_SKIP_REASON)
+    _reset_postgres_schema()
+    injected = PostgresAttemptStore(lambda: psycopg.connect(POSTGRES_DSN), schema=POSTGRES_SCHEMA)
+    from_dsn = PostgresAttemptStore.from_dsn(POSTGRES_DSN, schema=POSTGRES_SCHEMA)
+    injected.append(P1, make_attempt("a1"))
+    assert from_dsn.list_all(P1) == injected.list_all(P1)

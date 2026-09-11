@@ -10,11 +10,28 @@ engine is for; the pure validation helpers of ``store._common`` that do not
 depend on the storage medium (``validate_attempt``, ``validate_objective``,
 ``validate_profile``) are reused as-is.
 
-Every operation opens its own connection and relies on ``psycopg.Connection``
-used as a context manager: it commits on a clean exit, rolls back on any
-exception, and always closes the connection. That gives each method its own
-transaction, which is what makes ``append`` atomic (SPEC I8): either the whole
-statement lands, or nothing does and a ``StorageError`` is raised.
+Every operation asks the injected ``connect`` callable (``ConnectionProvider``)
+for a **context manager** and uses it with ``with ... as conn:`` around exactly
+that one operation. The context manager, not this module, decides what
+entering and leaving it means: a plain ``psycopg.connect(dsn)`` call returns a
+``psycopg.Connection``, which is its own context manager and commits-or-rolls-
+back *and closes* on exit; ``pool.connection`` (from ``psycopg_pool``) returns
+a context manager that also commits-or-rolls-back on exit, but *returns the
+connection to the pool* instead of closing it. This module never calls
+``.close()`` itself and never holds a connection between operations, so
+whichever shape the provider hands back, each method still gets its own
+transaction — which is what makes ``append`` atomic (SPEC I8): either the
+whole statement lands, or nothing does and a ``StorageError`` is raised — and
+the resource is released, one way or the other, before the method returns.
+
+That is the point of the seam: the web layer that will sit on top of this
+backend cannot afford one connection per request against a hosted Postgres, so
+it can inject a real pool and get pooling, instead of a factory that opens and
+closes a fresh connection under the hood regardless of what the caller passed
+in. Constructing a store straight from a DSN — the common case for the CLI and
+for tests — stays a one-liner through :meth:`PostgresAttemptStore.from_dsn` /
+:meth:`PostgresProfileStore.from_dsn`, which wrap ``psycopg.connect`` as the
+provider.
 
 The datetime trap
 ------------------
@@ -35,8 +52,9 @@ observe the difference through ``==``; only code that inspects ``.tzinfo`` or
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import datetime, timezone
-from typing import Iterable
+from typing import Callable, ContextManager, Iterable, Iterator
 
 import psycopg
 from psycopg import errors as pg_errors
@@ -52,6 +70,54 @@ from core.models import Attempt, AttemptKind, Objective, Profile
 from ._common import validate_attempt, validate_objective, validate_profile
 
 DEFAULT_SCHEMA = "learning"
+
+#: A zero-argument callable that returns a **context manager** yielding an
+#: open ``psycopg.Connection``. The stores below call it once per operation,
+#: use the result with ``with ... as conn:``, and never hold on to it between
+#: calls; what entering and leaving that context manager does internally (a
+#: plain ``psycopg.connect`` that closes on exit, a ``pool.connection`` that
+#: returns the connection to the pool, a proxy) is the caller's concern, not
+#: this module's — see the module docstring.
+ConnectionProvider = Callable[[], ContextManager[psycopg.Connection]]
+
+
+@contextmanager
+def _open_connection(connect: ConnectionProvider) -> Iterator[psycopg.Connection]:
+    """Acquires a connection, turning any acquisition failure into ``StorageError``.
+
+    The provider is arbitrary caller code, not necessarily ``psycopg.connect``,
+    so this catches broadly rather than only ``psycopg.Error``: a failing
+    provider must surface as ``StorageError``, never as a leaked driver or
+    other exception (SPEC I8 - no silent half success, and no leaking
+    concretions either). ``KeyboardInterrupt`` still propagates: it is a
+    ``BaseException``, not an ``Exception``.
+
+    **Acquisition is two steps, and both can fail.** Calling the provider is
+    one; entering the context manager it returns is the other, and that is
+    where a real pool fails - an exhausted pool raises when a connection is
+    checked out, not when the checkout is described. Guarding only the call
+    would let the failure mode that actually happens in production go straight
+    through. The context manager protocol is therefore driven by hand, so that
+    a failure while acquiring is wrapped while an exception from the body is
+    not: the body's errors belong to the caller, which turns a unique violation
+    into ``DuplicateAttemptError`` and cannot do that through a wrapper.
+
+    ``__exit__`` still runs for both outcomes, which is what preserves the
+    transaction boundary: commit on a clean exit, rollback on an exception, and
+    for a pool provider, the connection returned rather than closed.
+    """
+    try:
+        manager = connect()
+        conn = manager.__enter__()
+    except Exception as exc:
+        raise StorageError("no se pudo conectar a postgres") from exc
+    try:
+        yield conn
+    except BaseException as exc:
+        if not manager.__exit__(type(exc), exc, exc.__traceback__):
+            raise
+    else:
+        manager.__exit__(None, None, None)
 
 
 def _to_utc(moment: datetime | None) -> datetime | None:
@@ -73,24 +139,42 @@ def _row_to_attempt(row: tuple) -> Attempt:
     )
 
 
+def _row_to_objective(row: tuple) -> Objective:
+    objective_id, title, domain, weight, tags = row
+    return Objective(
+        objective_id=objective_id,
+        title=title,
+        domain=domain,
+        weight=weight,
+        tags=tuple(tags or ()),
+    )
+
+
 class PostgresAttemptStore:
     """``AttemptStore`` over PostgreSQL. It only appends and reads (SPEC I1).
 
     Args:
-        dsn: ``psycopg`` connection string.
+        connect: zero-argument callable returning a context manager that
+            yields an open ``psycopg.Connection`` (see
+            :data:`ConnectionProvider`). Use :meth:`from_dsn` when a plain
+            DSN is all that is needed.
         schema: schema the tables live in. Defaults to ``"learning"``, the
             production schema; tests point it at a throwaway one.
     """
 
-    def __init__(self, dsn: str, schema: str = DEFAULT_SCHEMA) -> None:
-        self._dsn = dsn
+    def __init__(
+        self, connect: ConnectionProvider, schema: str = DEFAULT_SCHEMA
+    ) -> None:
+        self._connect_fn = connect
         self._schema = schema
 
-    def _connect(self) -> psycopg.Connection:
-        try:
-            return psycopg.connect(self._dsn)
-        except psycopg.Error as exc:
-            raise StorageError(f"no se pudo conectar a postgres: {exc}") from exc
+    @classmethod
+    def from_dsn(cls, dsn: str, schema: str = DEFAULT_SCHEMA) -> "PostgresAttemptStore":
+        """Convenience constructor: opens a plain ``psycopg.connect(dsn)`` per operation."""
+        return cls(lambda: psycopg.connect(dsn), schema=schema)
+
+    def _connect(self) -> ContextManager[psycopg.Connection]:
+        return _open_connection(self._connect_fn)
 
     def append(self, profile_id: str, attempt: Attempt) -> Attempt:
         """Persists an attempt. See :meth:`core.storage.AttemptStore.append`."""
@@ -194,19 +278,26 @@ class PostgresProfileStore:
     """``ProfileStore`` over PostgreSQL.
 
     Args:
-        dsn: ``psycopg`` connection string.
+        connect: zero-argument callable returning a context manager that
+            yields an open ``psycopg.Connection`` (see
+            :data:`ConnectionProvider`). Use :meth:`from_dsn` when a plain
+            DSN is all that is needed.
         schema: schema the tables live in. Defaults to ``"learning"``.
     """
 
-    def __init__(self, dsn: str, schema: str = DEFAULT_SCHEMA) -> None:
-        self._dsn = dsn
+    def __init__(
+        self, connect: ConnectionProvider, schema: str = DEFAULT_SCHEMA
+    ) -> None:
+        self._connect_fn = connect
         self._schema = schema
 
-    def _connect(self) -> psycopg.Connection:
-        try:
-            return psycopg.connect(self._dsn)
-        except psycopg.Error as exc:
-            raise StorageError(f"no se pudo conectar a postgres: {exc}") from exc
+    @classmethod
+    def from_dsn(cls, dsn: str, schema: str = DEFAULT_SCHEMA) -> "PostgresProfileStore":
+        """Convenience constructor: opens a plain ``psycopg.connect(dsn)`` per operation."""
+        return cls(lambda: psycopg.connect(dsn), schema=schema)
+
+    def _connect(self) -> ContextManager[psycopg.Connection]:
+        return _open_connection(self._connect_fn)
 
     def get_profile(self, profile_id: str) -> Profile:
         """Returns the profile or raises ``UnknownProfileError``."""
@@ -227,10 +318,7 @@ class PostgresProfileStore:
             raise
         except psycopg.Error as exc:
             raise StorageError(f"no se pudo leer el perfil: {exc}") from exc
-        objectives = {
-            r[0]: Objective(objective_id=r[0], title=r[1], domain=r[2], weight=r[3], tags=tuple(r[4] or ()))
-            for r in rows
-        }
+        objectives = {r[0]: _row_to_objective(r) for r in rows}
         return Profile(profile_id=profile_id, name=row[0], objectives=objectives)
 
     def save_profile(self, profile: Profile) -> Profile:
@@ -271,18 +359,35 @@ class PostgresProfileStore:
         return profile
 
     def list_profiles(self) -> list[Profile]:
-        """Every profile, sorted by ``profile_id``."""
+        """Every profile, sorted by ``profile_id``.
+
+        One connection, two statements: the profiles and every objective of
+        every profile, joined in Python. Looping ``get_profile`` per row would
+        mean N+1 *connections* (not just round trips) now that a connection is
+        no longer assumed to be free, so it is deliberately avoided here.
+        """
         try:
             with self._connect() as conn:
-                ids = [
-                    r[0]
-                    for r in conn.execute(
-                        f"SELECT profile_id FROM {self._schema}.profiles ORDER BY profile_id"
-                    ).fetchall()
-                ]
+                profile_rows = conn.execute(
+                    f"SELECT profile_id, name FROM {self._schema}.profiles ORDER BY profile_id"
+                ).fetchall()
+                objective_rows = conn.execute(
+                    f"""SELECT profile_id, objective_id, title, domain, weight, tags
+                        FROM {self._schema}.objectives"""
+                ).fetchall()
         except psycopg.Error as exc:
             raise StorageError(f"no se pudo listar los perfiles: {exc}") from exc
-        return [self.get_profile(profile_id) for profile_id in ids]
+        objectives_by_profile: dict[str, dict[str, Objective]] = {}
+        for pid, *objective_row in objective_rows:
+            objective = _row_to_objective(objective_row)
+            by_id = objectives_by_profile.setdefault(pid, {})
+            by_id[objective.objective_id] = objective
+        return [
+            Profile(
+                profile_id=pid, name=name, objectives=objectives_by_profile.get(pid, {})
+            )
+            for pid, name in profile_rows
+        ]
 
     def get_objective(self, profile_id: str, objective_id: str) -> Objective:
         """One objective of the profile. It fails loudly when missing (SPEC C8)."""
@@ -338,4 +443,9 @@ class PostgresProfileStore:
         return len(incoming)
 
 
-__all__ = ["PostgresAttemptStore", "PostgresProfileStore", "DEFAULT_SCHEMA"]
+__all__ = [
+    "PostgresAttemptStore",
+    "PostgresProfileStore",
+    "ConnectionProvider",
+    "DEFAULT_SCHEMA",
+]
