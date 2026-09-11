@@ -28,7 +28,7 @@ from web.config import Settings
 import web.auth as auth_module
 
 DEAD_DSN = "postgresql://nobody:nobody@127.0.0.1:1/nowhere"
-ISSUER = "https://select-kangaroo-9304.clerk.accounts.dev"
+ISSUER = "https://example-app.clerk.accounts.example"
 
 
 def _settings(**overrides) -> Settings:
@@ -86,6 +86,21 @@ def test_auth_disabled_by_default_every_route_answers_with_no_token():
     # No 401: the dead DSN is reached and answers 503, proving the request
     # was never stopped for lack of a session.
     assert response.status_code == 503
+
+
+@pytest.mark.spec
+def test_from_env_issuer_actually_enables_auth_and_reaches_the_config_endpoint():
+    """The one link every test above skips by building `Settings` by hand."""
+    env = {
+        "LEARNING_TRACKER_DATABASE_URL": DEAD_DSN,
+        "LEARNING_TRACKER_CLERK_ISSUER": ISSUER + "/",
+        "LEARNING_TRACKER_CLERK_PUBLISHABLE_KEY": "pk_test_x",
+    }
+    settings = Settings.from_env(env)
+    assert settings.clerk_issuer == ISSUER  # trailing slash stripped
+    with TestClient(create_app(settings), raise_server_exceptions=False) as client:
+        assert client.get("/topics").status_code == 401
+        assert client.get("/auth/config").json()["publishableKey"] == "pk_test_x"
 
 
 @pytest.mark.spec

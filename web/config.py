@@ -26,7 +26,7 @@ HOST_VAR = "LEARNING_TRACKER_WEB_HOST"
 PORT_VAR = "LEARNING_TRACKER_WEB_PORT"
 
 #: Clerk's issuer / frontend API for this instance, e.g.
-#: ``https://select-kangaroo-9304.clerk.accounts.dev``. This is also how
+#: ``https://example-app.clerk.accounts.example``. This is also how
 #: authentication is switched on: unset (the default everywhere the test
 #: suite runs), every route accepts every request, exactly as before this
 #: setting existed. Set it and every request to the API (except ``/health``

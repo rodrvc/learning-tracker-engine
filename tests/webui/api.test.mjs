@@ -82,6 +82,17 @@ test("the token provider's current token is sent as a bearer Authorization heade
   }
 });
 
+test("the token provider is read fresh on every request, never cached from the first call", async () => {
+  let calls = 0;
+  setTokenProvider(async () => `t${++calls}`);
+  const fetchImpl = fakeFetch({ ok: true, json: {} });
+  await request("/topics", {}, fetchImpl);
+  await request("/topics", {}, fetchImpl);
+  setTokenProvider(null);
+  assert.equal(fetchImpl.calls[0].options.headers.Authorization, "Bearer t1");
+  assert.equal(fetchImpl.calls[1].options.headers.Authorization, "Bearer t2");
+});
+
 // The `api` object's material methods go through the default `fetch`
 // (globalThis.fetch), unlike request()'s other tests above which inject
 // their own - so these stub the global instead, and restore it after.

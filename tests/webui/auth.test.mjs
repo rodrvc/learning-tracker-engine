@@ -11,8 +11,8 @@ import { clerkScriptUrl, authHeaders, mountAuth } from "../../webui/js/auth.js";
 
 test("clerkScriptUrl builds Clerk's vanilla-JS bundle URL under the instance's frontend API", () => {
   assert.equal(
-    clerkScriptUrl("https://select-kangaroo-9304.clerk.accounts.dev"),
-    "https://select-kangaroo-9304.clerk.accounts.dev/npm/@clerk/clerk-js@5/dist/clerk.browser.js",
+    clerkScriptUrl("https://example-app.clerk.accounts.example"),
+    "https://example-app.clerk.accounts.example/npm/@clerk/clerk-js@5/dist/clerk.browser.js",
   );
 });
 
