@@ -44,8 +44,8 @@ def __getattr__(name: str):
             from . import postgres
         except ImportError as exc:  # pragma: no cover - needs psycopg absent
             raise ImportError(
-                f"{name} necesita el driver psycopg: instala el extra "
-                "'postgres' (pip install -e '.[postgres]')"
+                f"{name} requires the psycopg driver: install the "
+                "'postgres' extra (pip install -e '.[postgres]')"
             ) from exc
         return getattr(postgres, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

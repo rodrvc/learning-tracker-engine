@@ -24,12 +24,20 @@ from psycopg import sql
 MIGRATIONS_DIR = pathlib.Path(__file__).parent
 DEFAULT_SCHEMA = "learning"
 _FILENAME_RE = re.compile(r"^(\d+)_.*\.sql$")
+_SCHEMA_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
 
 
 def apply_migrations(
     dsn: str, schema: str = DEFAULT_SCHEMA, directory: pathlib.Path = MIGRATIONS_DIR
 ) -> int:
     """Applies every pending migration against ``schema``. Returns how many ran."""
+    # psycopg.sql.Identifier safely quotes ``schema`` wherever it is composed
+    # into a statement, but the migration file body is not composed that way:
+    # it goes through a plain string ``.replace("__SCHEMA__", schema)``, which
+    # identifier quoting cannot reach. Rejecting anything but a bare lowercase
+    # identifier here closes that path before it opens.
+    if not _SCHEMA_RE.match(schema):
+        raise ValueError(f"invalid schema name: {schema!r}")
     applied = 0
     # The schema name is composed into the statement as an identifier rather
     # than interpolated as text. These statements take no parameters, which
