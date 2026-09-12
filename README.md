@@ -50,7 +50,7 @@ require a Clerk session instead; nothing else in this quickstart changes.
 Optional, and independent of the steps above:
 
 ```sh
-python -m scripts.seed_sample_data
+.venv/bin/python -m scripts.seed_sample_data   # or just `python` with the venv activated
 ```
 
 Creates one topic ("Redes de computadoras") with a page of synthetic notes,

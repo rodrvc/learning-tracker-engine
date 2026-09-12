@@ -5,8 +5,9 @@
 #
 #     scripts/dev-up.sh
 #
-# Assumes dependencies are already installed (`pip install -e ".[web]"`
-# in an active virtualenv - see README.md) and Docker is running. Everything
+# Assumes dependencies are already installed (`pip install -e ".[web]"` - see
+# README.md) and Docker is running. Activating the virtualenv is not required:
+# a `.venv` beside this repo is found on its own. Everything
 # here fails loudly and stops: a half-applied migration or a server that
 # never started is not something this script papers over with a green exit
 # code.
@@ -34,8 +35,9 @@ if [ -x .venv/bin/python ]; then
 elif command -v python >/dev/null 2>&1; then
   python=python
 else
-  echo "No python on PATH and no .venv in the repo. Create one and install the" >&2
-  echo "dependencies first:  python3 -m venv .venv && . .venv/bin/activate && pip install -e '.[web]'" >&2
+  echo "No usable python: none on PATH, and no working .venv in the repo." >&2
+  echo "Create one and install the dependencies first:" >&2
+  echo "  python3 -m venv .venv && . .venv/bin/activate && pip install -e '.[web]'" >&2
   exit 1
 fi
 
