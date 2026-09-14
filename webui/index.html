@@ -4,23 +4,43 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Learning Tracker</title>
+    <link rel="icon" type="image/png" href="img/favicon.png" />
+    <link rel="apple-touch-icon" href="img/favicon.png" />
+    <!-- Inter is the brand face (acuaria-labs-page's `cl-ui` system). Fetched
+         the same way the site fetches it, with `display=swap` so the first
+         question renders in the fallback rather than waiting on the font. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
     <link rel="stylesheet" href="css/style.css" />
   </head>
   <body>
+    <a class="skip" href="#view">Saltar al contenido</a>
     <header>
-      <h1>Learning Tracker</h1>
-      <!-- Empty when auth is switched off (web/app.py's `/auth/config`);
-           holds Clerk's own sign-in form or user button otherwise
-           (webui/js/auth.js). -->
-      <div id="auth"></div>
-      <nav>
-        <a href="#/topics" data-view="topics">Tópicos</a>
-        <a href="#/material" data-view="material">Material</a>
-        <a href="#/practice" data-view="practice">Practicar</a>
-        <a href="#/progress" data-view="progress">Progreso</a>
-      </nav>
+      <div class="shell">
+        <!-- The brand lockup of the `cl-ui` system: mark, two-tone wordmark,
+             and the tracked line under it - here naming the product, with
+             Acuaria Labs as the house it belongs to. -->
+        <a class="brand" href="#/topics" aria-label="Learning Tracker, inicio">
+          <img src="img/acuaria-labs.png" width="40" height="40" alt="" />
+          <span>learning<span class="brand-light">tracker</span><small>ACUARIA LABS</small></span>
+        </a>
+        <!-- Empty when auth is switched off (web/app.py's `/auth/config`);
+             holds Clerk's own sign-in form or user button otherwise
+             (webui/js/auth.js). -->
+        <div id="auth"></div>
+        <nav aria-label="Navegación principal">
+          <a href="#/topics" data-view="topics">Tópicos</a>
+          <a href="#/material" data-view="material">Material</a>
+          <a href="#/practice" data-view="practice">Practicar</a>
+          <a href="#/progress" data-view="progress">Progreso</a>
+        </nav>
+      </div>
     </header>
-    <main id="view"></main>
+    <main id="view" tabindex="-1"></main>
     <script type="module" src="js/app.js"></script>
   </body>
 </html>
