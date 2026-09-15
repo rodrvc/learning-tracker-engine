@@ -39,6 +39,14 @@
   /* Headings: a grotesque at 400. Arial first, exactly as the system has it. */
   --display: Arial, Helvetica, sans-serif;
 
+  /* The filled button. On paper it is the system's ink, as the landing has
+     it; on the dark theme `--ink` is the *light* tone, so filling with it
+     produced a near-white slab. The accent carries it there instead: still
+     the brand, and it stops shouting over everything else on the screen. */
+  --btn-bg: light-dark(#153c51, #64a1ce);
+  --btn-fg: light-dark(#fcfdfd, #0e1f2b);
+  --btn-bg-hover: light-dark(#296f98, #8cbde0);
+
   --danger: light-dark(#a3271b, #ff9d95);
   --success: light-dark(#0f6249, #5fd3ab);
 
@@ -116,9 +124,9 @@ header .shell {
 
 .brand img {
   object-fit: contain;
-  /* Multiply drops the mark's white plate onto paper. On the dark theme
-     there is no white plate to drop, so it is turned off. */
-  mix-blend-mode: light-dark(multiply, normal);
+  /* The drop is solid brand navy on transparent, which all but disappears
+     against the dark ground; brightening lifts it without shifting the hue. */
+  filter: light-dark(none, brightness(1.5));
 }
 
 .brand > span {
@@ -258,15 +266,15 @@ button {
   font-size: 13px;
   font-weight: 500;
   letter-spacing: 0.02em;
-  color: var(--paper);
-  background: var(--ink);
-  border: 1px solid var(--ink);
+  color: var(--btn-fg);
+  background: var(--btn-bg);
+  border: 1px solid var(--btn-bg);
   border-radius: var(--radius);
   cursor: pointer;
   transition: background 180ms var(--ease), transform 120ms var(--ease);
 }
 
-button:hover:not(:disabled) { background: var(--accent); border-color: var(--accent); }
+button:hover:not(:disabled) { background: var(--btn-bg-hover); border-color: var(--btn-bg-hover); }
 button:active:not(:disabled) { transform: scale(0.98); }
 button:disabled { opacity: 0.4; cursor: not-allowed; }
 
