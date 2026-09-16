@@ -716,32 +716,46 @@ header nav { margin-left: 0; }
    strength, so the text above it keeps its own contrast and the colour
    reads as a state rather than as a block of paint. */
 .progress-item-level {
-  padding: 4px 11px 4px 9px;
+  padding: 2px 9px 2px 7px;
+  font-size: 9px;
   border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--rung) 16%, var(--paper));
+  /* 16% of the rung vanished on the dark ground, where the rung is already
+     close to the surface. 26% plus a hairline of the rung itself holds on
+     both, and the border is what keeps the chip an object rather than a
+     smudge. */
+  background: color-mix(in srgb, var(--rung) 26%, var(--paper));
+  border: 1px solid color-mix(in srgb, var(--rung) 45%, transparent);
   color: var(--ink);
 }
 
-.progress-item-level::before { width: 7px; height: 7px; }
+.progress-item-level::before { width: 5px; height: 5px; }
 
 /* The badge column is fixed so the badges line up down the page - a column
    of rungs is scannable in a way that badges floating after each title is
    not - but the title is capped so a short one does not leave a stretch of
    empty row between it and its badge. */
+/* These two lists are the long ones - 8 due and 52 unstarted here - so the
+   row is set tight: a 72px row for one line of text turned eight objectives
+   into a page of scrolling. The rule, the chip and the measure do the work
+   that height was doing. */
 .progress-item {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 9.5rem;
-  align-items: start;
-  gap: 8px 20px;
-  padding: 16px 4px;
+  grid-template-columns: minmax(0, 1fr) 8.5rem;
+  align-items: baseline;
+  gap: 4px 16px;
+  padding: 9px 4px;
 }
 
-.progress-item-title { max-width: 34rem; line-height: 1.45; }
-.progress-item-level { justify-self: end; margin-top: 1px; }
+.progress-item-title { max-width: 34rem; font-size: 14px; line-height: 1.4; }
+.progress-item-level { justify-self: end; }
 
 /* The two lists sit closer together than a full section gap: they are two
    halves of one answer ("what now?"), not two unrelated blocks. */
-.progress-list { margin-bottom: 8px; }
+.progress-list { margin-bottom: 0; }
+
+/* A section heading of its own is enough separation between the two lists;
+   the full 56px section gap left a hole under the last row. */
+.progress-list + *, section:has(.progress-list) { margin-bottom: 32px; }
 
 @media (max-width: 34rem) {
   /* The badge drops under the title rather than squeezing the title into a
