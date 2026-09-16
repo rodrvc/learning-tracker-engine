@@ -17,14 +17,19 @@
  *     everything else.
  *   - No arrow glyphs anywhere (an explicit decision on that branch).
  *
- * The brand system is light-only by decision. This application already
- * supported a dark theme and is opened at night, so every token below
- * resolves through `light-dark()`: the light side is the system's own value,
- * the dark side re-anchors the same inks rather than introducing a second
- * palette. */
+ * The brand system is light-only by decision, and so is this application's
+ * default - the OS preference never picks it. Dark stays available because
+ * this is opened at night, but as a choice made in the header and remembered
+ * (js/theme.js). Every token below resolves through `light-dark()`: the light
+ * side is the system's own value, the dark side re-anchors the same inks
+ * rather than introducing a second palette. */
 
+/* Light is what this application *is*: the brand system is the light one by
+   decision, so the OS preference does not get to decide it. `color-scheme`
+   here is what every `light-dark()` below resolves against, and it only says
+   `dark` once someone picks dark in the header - see js/theme.js. */
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
 
   /* --- cl-ui inks (light side verbatim from that branch's styles.css) --- */
   --ink: light-dark(#153c51, #e7eff4);
@@ -54,6 +59,8 @@
   --shell: 46rem;      /* reading measure; the page may use less, never more */
   --gutter: clamp(16px, 4vw, 32px);
 }
+
+:root[data-theme="dark"] { color-scheme: dark; }
 
 * { box-sizing: border-box; }
 
@@ -671,4 +678,74 @@ main > a:not([class]) { margin: 0 24px 40px 0; }
 @media (max-width: 30rem) {
   .level-name { min-width: 7rem; }
   .tile { padding: 14px; }
+}
+
+/* --- The theme toggle --------------------------------------------------- */
+
+.theme-toggle {
+  min-height: 0;
+  padding: 7px 14px;
+  font: 10px/1.6 var(--mono);
+  font-weight: 400;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-full);
+  margin-left: auto;
+}
+
+.theme-toggle:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--sky);
+  border-color: var(--border-strong, var(--accent));
+}
+
+/* The toggle takes the `margin-left: auto`, so the nav must give it up or
+   both push right and collide. */
+header nav { margin-left: 0; }
+
+/* --- Progress rows: the rung is a badge, not a whisper ------------------ */
+
+/* Every level badge used to be the same muted blue, which made a screen of
+   rows read as one flat block: the thing the screen is *about* - which rung
+   each objective sits on - was the least visible thing on it. The badge now
+   carries its rung as a tint, with the dot and the label on top of it.
+   The tint is a 16% mix into the surface rather than the rung at full
+   strength, so the text above it keeps its own contrast and the colour
+   reads as a state rather than as a block of paint. */
+.progress-item-level {
+  padding: 4px 11px 4px 9px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--rung) 16%, var(--paper));
+  color: var(--ink);
+}
+
+.progress-item-level::before { width: 7px; height: 7px; }
+
+/* The badge column is fixed so the badges line up down the page - a column
+   of rungs is scannable in a way that badges floating after each title is
+   not - but the title is capped so a short one does not leave a stretch of
+   empty row between it and its badge. */
+.progress-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 9.5rem;
+  align-items: start;
+  gap: 8px 20px;
+  padding: 16px 4px;
+}
+
+.progress-item-title { max-width: 34rem; line-height: 1.45; }
+.progress-item-level { justify-self: end; margin-top: 1px; }
+
+/* The two lists sit closer together than a full section gap: they are two
+   halves of one answer ("what now?"), not two unrelated blocks. */
+.progress-list { margin-bottom: 8px; }
+
+@media (max-width: 34rem) {
+  /* The badge drops under the title rather than squeezing the title into a
+     column two words wide. */
+  .progress-item { grid-template-columns: minmax(0, 1fr); }
+  .progress-item-level { justify-self: start; }
 }

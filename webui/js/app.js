@@ -7,9 +7,14 @@ import { renderTopics } from "./views/topics.js";
 import { renderMaterial } from "./views/material.js";
 import { renderPractice } from "./views/practice.js";
 import { renderProgress } from "./views/progress.js";
+import { initTheme } from "./theme.js";
 
 const content = document.getElementById("view");
 const authSlot = document.getElementById("auth");
+
+// Before the first render: the stored theme decides what `light-dark()`
+// resolves to, so applying it late would show a flash of the other one.
+initTheme(document.getElementById("theme-toggle"));
 
 function highlightNav(view) {
   document.querySelectorAll("nav a").forEach((link) => {
