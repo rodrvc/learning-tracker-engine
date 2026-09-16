@@ -3,6 +3,9 @@
 import { ApiError } from "../api.js";
 import {
   levelBreakdownView,
+  levelMixView,
+  coverageHeroView,
+  summaryTilesView,
   dueListView,
   unstartedListView,
   progressActionView,
@@ -59,6 +62,11 @@ export async function renderProgress(container, api, topicId) {
     const titleFor = (objectiveId) => titles.get(objectiveId);
 
     body.innerHTML = `
+      <section class="headline">
+        ${coverageHeroView(summary)}
+        ${levelMixView(summary.by_level, summary.total_objectives)}
+        ${summaryTilesView(summary)}
+      </section>
       <section>
         <h3>Reparto por nivel</h3>
         <ul class="level-breakdown">${levelBreakdownView(summary.by_level)}</ul>

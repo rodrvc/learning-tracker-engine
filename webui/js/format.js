@@ -209,6 +209,81 @@ export function levelLabel(level) {
   return LEVEL_LABELS[level] || String(level);
 }
 
+// --- The ordinal ladder -------------------------------------------------
+//
+// The five levels are an **ordinal** scale, not categories: reordering them
+// changes the meaning. The correct encoding for that is one hue in monotone
+// lightness steps, which happens to be the brand's own single-blue ramp -
+// the ladder reads as a ladder even before the labels are read.
+// `UNASSESSED` sits outside the ramp and takes a neutral: it is the absence
+// of evidence, not the weakest rung of it.
+//
+// Colour never carries the meaning alone. Every level shows its Spanish name
+// beside the swatch, the breakdown below the bar is the bar's table view, and
+// the bar itself is labelled for a screen reader. The four ramp steps are
+// pinned in `css/style.css` and were validated there, not eyeballed.
+
+/** The share of each level as one stacked bar - the shape of the topic at a
+ * glance, above the numbers that spell it out.
+ *
+ * Zero-count levels are dropped rather than rendered as a zero-width segment:
+ * a segment that cannot be seen or hovered is not information, and the
+ * breakdown underneath already reports every level including the zeros.
+ *
+ * `total` comes from the response (`total_objectives`) rather than being
+ * assumed equal to the sum, so a level this front end has not been taught yet
+ * still leaves its share of the bar unpainted instead of silently inflating
+ * the others.
+ */
+export function levelMixView(byLevel, total) {
+  const source = byLevel || {};
+  const levels = [...LEVEL_ORDER, ...Object.keys(source).filter((l) => !LEVEL_ORDER.includes(l))];
+  const whole = total || levels.reduce((sum, level) => sum + (source[level] || 0), 0);
+  if (!whole) return "";
+  const segments = levels
+    .filter((level) => (source[level] || 0) > 0)
+    .map((level) => {
+      const share = ((source[level] / whole) * 100).toFixed(2);
+      return `<span class="mix-segment" data-level="${escapeHtml(level)}" style="width:${share}%"></span>`;
+    })
+    .join("");
+  const reading = levels
+    .filter((level) => (source[level] || 0) > 0)
+    .map((level) => `${levelLabel(level)}: ${source[level]}`)
+    .join(", ");
+  return `<div class="level-mix" role="img" aria-label="Reparto por nivel. ${escapeHtml(reading)}">${segments}</div>`;
+}
+
+/** The one number the screen leads with: how much of the topic has any
+ * evidence at all. `coverage` is the engine's own field (SPEC section 9.4),
+ * not a ratio recomputed here. */
+export function coverageHeroView(summary) {
+  const coverage = Math.round((summary.coverage || 0) * 100);
+  return `<p class="hero-figure">${escapeHtml(coverage)}<span class="hero-unit">%</span></p>
+    <p class="hero-label">del tema con evidencia — ${escapeHtml(
+      summary.assessed_objectives,
+    )} de ${escapeHtml(summary.total_objectives)} objetivos</p>`;
+}
+
+/** The headline counts, each copied from the response rather than derived:
+ * nothing here recomputes what the engine already decided. */
+export function summaryTilesView(summary) {
+  const tiles = [
+    ["Intentos", summary.total_attempts],
+    ["Vencidos", summary.due_objectives],
+    ["Nunca practicados", summary.unstarted_objectives],
+  ];
+  const cells = tiles
+    .map(
+      ([label, value]) => `<div class="tile">
+        <span class="tile-value">${escapeHtml(value ?? 0)}</span>
+        <span class="tile-label">${escapeHtml(label)}</span>
+      </div>`,
+    )
+    .join("");
+  return `<div class="tiles">${cells}</div>`;
+}
+
 /** The level breakdown (SPEC section 9.4's `by_level`), one row per level in
  * ladder order, zero counts included: "0 dominados" is information too.
  *
@@ -217,16 +292,24 @@ export function levelLabel(level) {
  * taught yet still gets a row (through `levelLabel`'s own fallback) instead
  * of silently vanishing - the engine always sends exactly the five SPEC 1.4
  * levels today, but nothing here should assume it always will. */
-export function levelBreakdownView(byLevel) {
+export function levelBreakdownView(byLevel, total) {
   const source = byLevel || {};
   const extraLevels = Object.keys(source).filter((level) => !LEVEL_ORDER.includes(level));
-  return [...LEVEL_ORDER, ...extraLevels]
-    .map(
-      (level) =>
-        `<li class="level-row"><span class="level-name">${escapeHtml(
-          levelLabel(level),
-        )}</span><span class="level-count">${escapeHtml(source[level] ?? 0)}</span></li>`,
-    )
+  const levels = [...LEVEL_ORDER, ...extraLevels];
+  // The bar next to each count is scaled against the largest level, not
+  // against the total: with 52 of 64 unassessed, scaling by the total leaves
+  // every other bar too short to compare.
+  const peak = Math.max(1, ...levels.map((level) => source[level] || 0));
+  return levels
+    .map((level) => {
+      const count = source[level] ?? 0;
+      const share = ((count / peak) * 100).toFixed(2);
+      return `<li class="level-row" data-level="${escapeHtml(level)}"><span class="level-name">${escapeHtml(
+        levelLabel(level),
+      )}</span><span class="level-bar"><span style="width:${share}%"></span></span><span class="level-count">${escapeHtml(
+        count,
+      )}</span></li>`;
+    })
     .join("");
 }
 
@@ -236,7 +319,7 @@ export function levelBreakdownView(byLevel) {
 // direct path into practising this screen owes lives once per list, not
 // once per row.
 export function objectiveRowView(state, title) {
-  return `<li class="progress-item">
+  return `<li class="progress-item" data-level="${escapeHtml(state.level)}">
       <span class="progress-item-title">${escapeHtml(title || state.objective_id)}</span>
       <span class="progress-item-level">${escapeHtml(levelLabel(state.level))}</span>
     </li>`;

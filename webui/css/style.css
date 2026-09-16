@@ -51,7 +51,8 @@
   --success: light-dark(#0f6249, #5fd3ab);
 
   --radius: 3px;
-  --shell: 46rem;
+  --shell: 46rem;      /* reading measure; the page may use less, never more */
+  --gutter: clamp(16px, 4vw, 32px);
 }
 
 * { box-sizing: border-box; }
@@ -97,12 +98,12 @@ a { color: inherit; }
 
 /* --- Header ------------------------------------------------------------ */
 
-.shell { max-width: var(--shell); margin-inline: auto; }
+.shell { max-width: var(--shell); margin-inline: auto; width: 100%; }
 
 header {
   background: var(--paper);
   border-bottom: 1px solid var(--line);
-  padding: 20px clamp(20px, 5vw, 32px);
+  padding: 20px var(--gutter);
 }
 
 header .shell {
@@ -174,9 +175,11 @@ nav a.active { color: var(--ink); border-bottom-color: var(--accent); }
 /* --- Page -------------------------------------------------------------- */
 
 main {
-  max-width: var(--shell);
+  /* The measure caps the text, the gutters sit outside it: with border-box the
+     padding would eat into the 46rem and leave the column narrower than asked. */
+  max-width: calc(var(--shell) + var(--gutter) * 2);
   margin-inline: auto;
-  padding: clamp(40px, 7vw, 72px) clamp(20px, 5vw, 32px) 96px;
+  padding: clamp(40px, 7vw, 72px) var(--gutter) 96px;
 }
 
 h2 {
@@ -528,4 +531,144 @@ main > a:not([class]) { margin: 0 24px 40px 0; }
   header .shell { gap: 14px 20px; }
   nav { margin-left: 0; width: 100%; justify-content: space-between; gap: 12px; }
   .topic-form, .material-form { padding: 20px; }
+}
+
+/* --- Progress: the ordinal ladder -------------------------------------- */
+
+/* The five levels are an ordinal scale, so they take ONE hue in monotone
+   lightness steps - the reader sees the order in the colour before reading a
+   label. That is also the brand's own single-blue ramp, so being correct here
+   and being on-brand are the same choice.
+   `UNASSESSED` is deliberately outside the ramp: it is the absence of
+   evidence, not its weakest rung, so it takes a neutral and never competes
+   with a real level for attention.
+   These four steps are not eyeballed. Each mode was checked for monotone
+   lightness, an adjacent lightness gap of at least 0.06, a light end clearing
+   2:1 against its own surface, and a single hue. The light ramp's first pick
+   (#b8d5ea) failed at 1.50:1 on paper and was re-stepped to #7fb4dc (2.18:1).
+   The dark ramp runs the other way: on a dark ground the light end is the
+   near-surface one, so mastery is the brightest step, not the darkest. */
+:root {
+  --rung-unassessed: light-dark(#d5e2ea, #24404f);
+  --rung-weak: light-dark(#7fb4dc, #2a6692);
+  --rung-learning: light-dark(#3c80b4, #4a8cc0);
+  --rung-competent: light-dark(#255f8a, #7fb4dc);
+  --rung-mastered: light-dark(#11324a, #b8d5ea);
+}
+
+[data-level="UNASSESSED"] { --rung: var(--rung-unassessed); }
+[data-level="WEAK"] { --rung: var(--rung-weak); }
+[data-level="LEARNING"] { --rung: var(--rung-learning); }
+[data-level="COMPETENT"] { --rung: var(--rung-competent); }
+[data-level="MASTERED"] { --rung: var(--rung-mastered); }
+
+.headline { margin-bottom: 48px; }
+
+/* The hero figure goes in the body sans, not the display face the headings
+   use: at this size a display face reads as a logo rather than as a number. */
+.hero-figure {
+  font-family: "Inter", system-ui, sans-serif;
+  font-size: clamp(3.25rem, 13vw, 4.5rem);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.04em;
+  margin: 0 0 8px;
+  color: var(--ink);
+}
+
+.hero-unit { font-size: 0.4em; font-weight: 500; color: var(--muted); margin-left: 4px; }
+
+.hero-label {
+  margin: 0 0 24px;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+/* The stacked bar. The 2px surface gap between segments is what separates
+   them - neighbouring rungs are one step apart, so a gap reads where a
+   stroke would only add noise. */
+.level-mix {
+  display: flex;
+  gap: 2px;
+  height: 10px;
+  margin-bottom: 28px;
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.mix-segment { background: var(--rung); min-width: 2px; }
+
+.tiles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.tile {
+  flex: 1 1 7rem;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 16px 18px;
+  background: var(--sky);
+  border-radius: var(--radius);
+}
+
+.tile-value {
+  font-size: 1.75rem;
+  font-weight: 600;
+  line-height: 1.1;
+  letter-spacing: -0.03em;
+}
+
+.tile-label {
+  font: 10px/1.6 var(--mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* The breakdown is the bar's table view: every level, zeros included, with
+   the name always beside the swatch so nothing is carried by colour alone. */
+.level-row { gap: 16px; }
+
+.level-name { display: flex; align-items: center; gap: 10px; flex: none; min-width: 8.5rem; }
+
+.level-name::before {
+  content: "";
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: var(--rung);
+}
+
+.level-bar {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--sky);
+  overflow: hidden;
+}
+
+.level-bar > span { display: block; height: 100%; background: var(--rung); border-radius: 3px; }
+
+.level-count { color: var(--ink); font-size: 12px; }
+
+/* A due or unstarted row carries its rung as a dot beside the level name, so
+   the two lists read on the same scale as the breakdown above them. */
+.progress-item-level { display: inline-flex; align-items: center; gap: 8px; }
+
+.progress-item-level::before {
+  content: "";
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--rung);
+}
+
+@media (max-width: 30rem) {
+  .level-name { min-width: 7rem; }
+  .tile { padding: 14px; }
 }
