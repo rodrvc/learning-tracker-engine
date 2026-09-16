@@ -540,27 +540,39 @@ main > a:not([class]) { margin: 0 24px 40px 0; }
   .topic-form, .material-form { padding: 20px; }
 }
 
-/* --- Progress: the ordinal ladder -------------------------------------- */
+/* --- Progress: the level ladder -------------------------------------- */
 
-/* The five levels are an ordinal scale, so they take ONE hue in monotone
-   lightness steps - the reader sees the order in the colour before reading a
-   label. That is also the brand's own single-blue ramp, so being correct here
-   and being on-brand are the same choice.
-   `UNASSESSED` is deliberately outside the ramp: it is the absence of
-   evidence, not its weakest rung, so it takes a neutral and never competes
-   with a real level for attention.
-   These four steps are not eyeballed. Each mode was checked for monotone
-   lightness, an adjacent lightness gap of at least 0.06, a light end clearing
-   2:1 against its own surface, and a single hue. The light ramp's first pick
-   (#b8d5ea) failed at 1.50:1 on paper and was re-stepped to #7fb4dc (2.18:1).
-   The dark ramp runs the other way: on a dark ground the light end is the
-   near-surface one, so mastery is the brightest step, not the darkest. */
+/* A level is a **state with valence**, not merely a position: weak is bad
+   news and mastered is good news, and a single-hue ramp says "further along"
+   without ever saying which direction is good. So the ladder runs red ->
+   amber -> blue -> green. That is a deliberate departure from the brand's
+   one-blue rule, taken on Rodrigo's call, and it is confined to this ladder:
+   nothing else on any screen leaves the ramp.
+
+   The hues are computed, not picked. Each mode was run through the five
+   checks - lightness band, chroma floor, colourblind separation under
+   simulated protanopia and deuteranopia, a normal-vision floor on the same
+   pairs, and contrast against its own surface - and both modes pass all five.
+
+   Getting there took real re-stepping, which is the point of measuring:
+   - the first blue tried was the brand's own #2a6692, and it FAILED the
+     chroma floor at 0.094 - beside these saturated neighbours it read as grey;
+   - red and amber are adjacent on the ladder and kept colliding (worst pair
+     13.1, floor is 15) until the red moved toward rose;
+   - on the dark ground blue and green then collided in turn, and separated
+     only once the blue moved toward indigo and the green toward yellow-green.
+   These are a set, not a list: change one and re-run the checks.
+
+   `UNASSESSED` stays outside the ladder on a neutral - it is the absence of
+   evidence, not a verdict on it. Colour never carries this alone: every chip
+   prints its name, which is also what makes the 6-8 colourblind band legal
+   here. */
 :root {
-  --rung-unassessed: light-dark(#d5e2ea, #24404f);
-  --rung-weak: light-dark(#7fb4dc, #2a6692);
-  --rung-learning: light-dark(#3c80b4, #4a8cc0);
-  --rung-competent: light-dark(#255f8a, #7fb4dc);
-  --rung-mastered: light-dark(#11324a, #b8d5ea);
+  --rung-unassessed: light-dark(#98aebb, #55707f);
+  --rung-weak: light-dark(#c2352c, #d8607c);
+  --rung-learning: light-dark(#bd7d0a, #ad9328);
+  --rung-competent: light-dark(#1668b8, #5b96d8);
+  --rung-mastered: light-dark(#14855a, #3fae62);
 }
 
 [data-level="UNASSESSED"] { --rung: var(--rung-unassessed); }
