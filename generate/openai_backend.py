@@ -39,6 +39,7 @@ from .prompting import (
     DEFAULT_MAX_TOKENS,
     _GenerationSchema,
     _SYSTEM_PROMPT,
+    _existing_domains_digest,
     _existing_objectives_digest,
     _target_question_count,
     build_result,
@@ -78,6 +79,7 @@ class OpenAIGenerator:
         self,
         material: Material,
         existing_objectives: Sequence[Objective],
+        existing_domains: Sequence[str] = (),
         *,
         now: Clock,
     ) -> GenerationResult:
@@ -101,6 +103,8 @@ class OpenAIGenerator:
                 max_output_tokens=self._max_output_tokens,
                 instructions=_SYSTEM_PROMPT,
                 input=(
+                    "Existing units for this goal:\n"
+                    f"{_existing_domains_digest(existing_domains)}\n\n"
                     "Existing objectives for this topic:\n"
                     f"{_existing_objectives_digest(existing_objectives)}\n\n"
                     f"Produce {_target_question_count(material)} questions.\n\n"
@@ -131,7 +135,12 @@ class OpenAIGenerator:
                 )
 
             return build_result(
-                self._random, material, existing_objectives, parsed, now.now()
+                self._random,
+                material,
+                existing_objectives,
+                existing_domains,
+                parsed,
+                now.now(),
             )
         except openai.AuthenticationError as exc:
             raise MissingCredentialsError(

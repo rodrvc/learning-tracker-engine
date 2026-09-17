@@ -46,6 +46,14 @@ the topic already has. Prefer attaching new questions to an existing \
 objective over inventing a near-duplicate of one; propose a new objective \
 only for material that no existing objective covers.
 
+Every objective belongs to a unit: a coarse division of the goal, a handful \
+of them for the whole syllabus, not one per page of notes. You will also be \
+given the units the goal already has. Put every objective you propose into \
+one of those units, spelled exactly as given. Propose a new unit only for \
+material that no existing unit covers, and never one that is a rewording of \
+an existing unit. Leave an objective's unit empty only when the goal has no \
+units at all.
+
 For every question, produce exactly 4 options. Exactly one is correct, \
 drawn from the material. The other three must be plausible distractors: \
 real confusions someone could have from THIS material - a similar term, a \
@@ -122,7 +130,25 @@ def _target_question_count(material: Material) -> int:
 def _existing_objectives_digest(objectives: Sequence[Objective]) -> str:
     if not objectives:
         return "(none yet - this is the first material for this topic)"
-    return "\n".join(f"- {obj.objective_id}: {obj.title}" for obj in objectives)
+    return "\n".join(
+        f"- {obj.objective_id}: {obj.title}"
+        + (f" [unit: {obj.domain}]" if obj.domain else "")
+        for obj in objectives
+    )
+
+
+def _existing_domains_digest(domains: Sequence[str]) -> str:
+    """The goal's units, for the prompt.
+
+    Listed separately from the objectives above even though each objective
+    already carries its own, because the rule is about the list: a model
+    reading twenty objective lines has to infer how many distinct units
+    there are, and inferring "these are all the units there are" from a
+    sample is exactly the step that produced twenty-seven of them.
+    """
+    if not domains:
+        return "(none yet - this goal has no units, so propose the ones this material needs)"
+    return "\n".join(f"- {domain}" for domain in domains)
 
 
 def _shuffle_options(
@@ -146,17 +172,45 @@ def _shuffle_options(
     return shuffled, new_correct_key
 
 
+def _reconciled_domain(domain: str | None, existing_domains: Sequence[str]) -> str | None:
+    """``domain`` snapped onto an existing unit it only differs from in case
+    or surrounding space.
+
+    The prompt asks for the unit spelled exactly as given, and a model that
+    answers "cuotas" for the unit "Cuotas" has obeyed the rule it was given
+    while still founding a second unit holding one objective - which is the
+    failure this whole change is about. Whether an existing unit was meant
+    is a judgement call in general; where the two strings match once cased
+    and stripped it is not, so that much is settled here rather than asked
+    for. Anything further apart is left alone: it is a new unit, and the
+    prompt is what has to keep those rare.
+    """
+    stripped = (domain or "").strip()
+    if not stripped:
+        return None
+    folded = stripped.casefold()
+    for existing in existing_domains:
+        if existing.strip().casefold() == folded:
+            return existing
+    return stripped
+
+
 def build_result(
     random_source: random.Random,
     material: Material,
     existing_objectives: Sequence[Objective],
+    existing_domains: Sequence[str],
     parsed: _GenerationSchema,
     created_at: datetime,
 ) -> GenerationResult:
     known_ids = {obj.objective_id for obj in existing_objectives}
     try:
         objectives = tuple(
-            Objective(objective_id=obj.objective_id, title=obj.title, domain=obj.domain)
+            Objective(
+                objective_id=obj.objective_id,
+                title=obj.title,
+                domain=_reconciled_domain(obj.domain, existing_domains),
+            )
             for obj in parsed.objectives
         )
         known_ids |= {obj.objective_id for obj in objectives}

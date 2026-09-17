@@ -39,23 +39,56 @@ class GenerationResult:
     questions: tuple[Question, ...]
 
 
+def domains_of(objectives: Sequence[Objective]) -> tuple[str, ...]:
+    """The units a goal already has, in first-seen order, deduplicated.
+
+    How a caller builds the ``existing_domains`` argument below. It lives
+    here, beside the contract, rather than in the caller, because every
+    caller would otherwise write the same scrape - and one of them would
+    write it differently (sorted, or keeping the ``None``s) and hand a
+    generator a unit list that disagrees with the next caller's.
+    """
+    seen: dict[str, None] = {}
+    for objective in objectives:
+        domain = (objective.domain or "").strip()
+        if domain:
+            seen.setdefault(domain, None)
+    return tuple(seen)
+
+
 @runtime_checkable
 class QuestionGenerator(Protocol):
     """Turns a ``Material`` into proposed objectives and questions.
 
     Implementations must not invent near-duplicates of an objective the
     topic already has - that is why ``existing_objectives`` is an input,
-    not something the generator discovers on its own.
+    not something the generator discovers on its own. ``existing_domains``
+    is the same argument one level up: the units (``Objective.domain``,
+    SPEC section 1.2) the goal is already divided into, so that a new
+    objective lands in one of them instead of founding a unit of its own.
     """
 
     def generate(
         self,
         material: Material,
         existing_objectives: Sequence[Objective],
+        existing_domains: Sequence[str] = (),
         *,
         now: Clock,
     ) -> GenerationResult:
         """Proposes objectives and questions for ``material``.
+
+        ``existing_domains`` are the goal's units, typically
+        ``domains_of(existing_objectives)``. Every proposed objective must
+        take one of them; a new unit is for material no existing unit
+        covers. An empty ``existing_domains`` - a goal not divided into
+        units yet - leaves the generator free to propose them.
+
+        It is a separate argument rather than something each implementation
+        reads back off ``existing_objectives`` because it is a separate
+        decision: the objectives are what must not be duplicated, the units
+        are the shape the goal is kept in. A caller that knows a unit the
+        objectives have not reached yet can name it here.
 
         ``now`` is the source of ``created_at`` for anything proposed -
         never read from the system clock directly (SPEC I2's discipline).
