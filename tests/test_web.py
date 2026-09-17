@@ -1357,7 +1357,7 @@ def test_missing_credential_fails_only_generation(client: TestClient, material_t
     from generate.errors import MissingCredentialsError
 
     class NoCredentials:
-        def generate(self, material, existing_objectives, *, now):
+        def generate(self, material, existing_objectives, existing_domains=(), *, now):
             raise MissingCredentialsError("OPENAI_API_KEY is not set")
 
     client.app.state.resources.generator = NoCredentials()
@@ -1396,7 +1396,7 @@ def test_generation_failure_is_502_not_a_crash(client: TestClient, material_topi
     from generate.errors import GenerationError
 
     class Failing:
-        def generate(self, material, existing_objectives, *, now):
+        def generate(self, material, existing_objectives, existing_domains=(), *, now):
             raise GenerationError("the model produced no structured output")
 
     client.app.state.resources.generator = Failing()
@@ -1412,3 +1412,47 @@ def test_listing_an_unknown_topic_is_404_not_an_empty_list(client: TestClient) -
     response = client.get("/topics/no-such-topic/material")
     assert response.status_code == 404
     assert "no-such-topic" in response.json()["detail"]
+
+
+@pytest.mark.spec
+def test_generation_is_told_the_units_the_goal_already_has(
+    client: TestClient, material_topic: str
+) -> None:
+    """The router hands over the goal's units, not just its objectives.
+
+    Generation already receives the existing objectives so it will not
+    propose near-duplicates. Without the units beside them it still read a
+    unit off each page of notes, and one goal reached twenty-seven of them,
+    most holding a single objective (LEARN #50). The units are deduplicated
+    and in the objectives' own order, so the model sees the goal's shape
+    rather than one line per objective to infer it from.
+    """
+    from generate.generator import GenerationResult
+
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        conn.execute(
+            f"""INSERT INTO {POSTGRES_SCHEMA}.objectives
+                (profile_id, objective_id, title, domain, weight, tags)
+                VALUES ('ai-103', 'D1.1', 'Uno', 'D1', 1.0, ARRAY[]::text[]),
+                       ('ai-103', 'D1.2', 'Dos', 'D1', 1.0, ARRAY[]::text[]),
+                       ('ai-103', 'D2.1', 'Tres', 'D2', 1.0, ARRAY[]::text[]),
+                       ('ai-103', 'X.1', 'Suelto', NULL, 1.0, ARRAY[]::text[])"""
+        )
+        conn.commit()
+
+    class Recording:
+        def __init__(self) -> None:
+            self.domains: tuple[str, ...] | None = None
+
+        def generate(self, material, existing_objectives, existing_domains=(), *, now):
+            self.domains = tuple(existing_domains)
+            return GenerationResult(objectives=(), questions=())
+
+    recording = Recording()
+    client.app.state.resources.generator = recording
+    material_id = _upload(client, material_topic).json()["material_id"]
+
+    assert client.post(
+        f"/topics/{material_topic}/material/{material_id}/generate"
+    ).status_code == 200
+    assert recording.domains == ("D1", "D2")

@@ -8,11 +8,12 @@ the deterministic implementation the test suite runs against, and
 from __future__ import annotations
 
 from .errors import GenerationError, MissingCredentialsError
-from .generator import GenerationResult, QuestionGenerator
+from .generator import GenerationResult, QuestionGenerator, domains_of
 
 __all__ = [
     "GenerationError",
     "MissingCredentialsError",
     "GenerationResult",
     "QuestionGenerator",
+    "domains_of",
 ]

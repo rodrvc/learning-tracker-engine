@@ -23,6 +23,7 @@ from core.models import Objective
 from generate import prompting
 from generate.openai_backend import OpenAIGenerator
 from generate.errors import GenerationError, MissingCredentialsError
+from generate.generator import domains_of
 from generate.stub import StubGenerator
 
 UTC = timezone.utc
@@ -108,7 +109,13 @@ class _FakeResponses:
         self._response = response
         self._raises = raises
 
+        #: Every call's keyword arguments, so a test can assert on what was
+        #: actually sent to the model rather than on the helper that builds
+        #: it - a prompt rule nothing forwards is a rule that does nothing.
+        self.calls: list[dict[str, object]] = []
+
     def parse(self, **kwargs: object) -> object:
+        self.calls.append(kwargs)
         if self._raises is not None:
             raise self._raises
         return self._response
@@ -312,3 +319,120 @@ class TestResponseSchemaEnforcement:
     def test_a_response_of_more_than_eight_questions_is_rejected(self):
         with pytest.raises(ValidationError):
             _parsed(questions=[_question() for _ in range(9)])
+
+
+class TestUnitsOfAnExistingGoal:
+    """A proposed objective joins a unit the goal already has.
+
+    The rule this exercises is the one that was missing in the field: told
+    nothing about the goal's units, generation read a unit off each page of
+    notes, and one goal ended up with eighty-four objectives across
+    twenty-seven invented units - most of them holding one or two - next to a
+    hand-made version of the same syllabus with five (LEARN #50). The units
+    are the middle level of the Goal > Unit > Topic tree, so a unit per
+    upload does not merely look untidy: it empties that level of meaning.
+    """
+
+    def test_domains_of_keeps_first_seen_order_without_duplicates(self):
+        objectives = [
+            Objective(objective_id="a", title="A", domain="D2"),
+            Objective(objective_id="b", title="B", domain="D1"),
+            Objective(objective_id="c", title="C", domain="D2"),
+        ]
+        assert domains_of(objectives) == ("D2", "D1")
+
+    @pytest.mark.parametrize("domain", [None, "", "   "])
+    def test_domains_of_ignores_objectives_with_no_unit(self, domain):
+        """A goal is not divided into a unit called "" (LEARN #50)."""
+        objectives = [Objective(objective_id="a", title="A", domain=domain)]
+        assert domains_of(objectives) == ()
+
+    def test_stub_puts_a_proposed_objective_in_an_existing_unit(self):
+        result = StubGenerator().generate(
+            MATERIAL, existing_objectives=[], existing_domains=["D1", "D2"], now=FixedClock(T0)
+        )
+        assert [obj.domain for obj in result.objectives] == ["D1"]
+
+    def test_stub_leaves_the_unit_empty_when_the_goal_has_none(self):
+        """A goal with no units keeps today's behaviour."""
+        result = StubGenerator().generate(MATERIAL, existing_objectives=[], now=FixedClock(T0))
+        assert [obj.domain for obj in result.objectives] == [None]
+
+    def test_the_prompt_lists_the_goals_units(self):
+        client = _FakeClient(_response(_parsed()))
+        OpenAIGenerator(client=client).generate(
+            MATERIAL,
+            existing_objectives=[Objective(objective_id="s", title="S", domain="D1")],
+            existing_domains=["D1", "D2"],
+            now=FixedClock(T0),
+        )
+        sent = str(client.responses.calls[0]["input"])
+        assert "Existing units for this goal:" in sent
+        assert "- D1\n- D2" in sent
+        # The unit each existing objective sits in travels with it too, so
+        # the model can see which unit covers what rather than guessing from
+        # the unit names alone.
+        assert "[unit: D1]" in sent
+
+    def test_the_prompt_says_a_goal_without_units_has_none_yet(self):
+        client = _FakeClient(_response(_parsed()))
+        OpenAIGenerator(client=client).generate(
+            MATERIAL, existing_objectives=[], now=FixedClock(T0)
+        )
+        assert "no units" in str(client.responses.calls[0]["input"])
+
+    def test_the_instructions_carry_the_unit_rule(self):
+        """The rule mirrors the one that keeps objectives from duplicating."""
+        client = _FakeClient(_response(_parsed()))
+        OpenAIGenerator(client=client).generate(
+            MATERIAL, existing_objectives=[], existing_domains=["D1"], now=FixedClock(T0)
+        )
+        instructions = str(client.responses.calls[0]["instructions"])
+        assert "unit" in instructions
+        assert "Propose a new unit only for material that no existing unit covers" in instructions
+
+    @pytest.mark.parametrize("proposed", ["  D1  ", "d1", "D1"])
+    def test_a_unit_that_differs_only_in_case_or_space_is_snapped_back(self, proposed):
+        """Obeying the prompt loosely must not still split the unit in two."""
+        parsed = _parsed(
+            objectives=[
+                prompting._ProposedObjective(
+                    objective_id="blob-basics", title="Blob basics", domain=proposed
+                )
+            ]
+        )
+        gen = OpenAIGenerator(client=_FakeClient(_response(parsed)))
+        result = gen.generate(
+            MATERIAL, existing_objectives=[], existing_domains=["D1"], now=FixedClock(T0)
+        )
+        assert result.objectives[0].domain == "D1"
+
+    def test_a_genuinely_new_unit_is_kept(self):
+        """Material no existing unit covers may still found one."""
+        parsed = _parsed(
+            objectives=[
+                prompting._ProposedObjective(
+                    objective_id="blob-basics", title="Blob basics", domain="D7"
+                )
+            ]
+        )
+        gen = OpenAIGenerator(client=_FakeClient(_response(parsed)))
+        result = gen.generate(
+            MATERIAL, existing_objectives=[], existing_domains=["D1"], now=FixedClock(T0)
+        )
+        assert result.objectives[0].domain == "D7"
+
+    def test_a_blank_unit_becomes_no_unit(self):
+        """Whitespace is not a unit; stored, it becomes one the tree shows."""
+        parsed = _parsed(
+            objectives=[
+                prompting._ProposedObjective(
+                    objective_id="blob-basics", title="Blob basics", domain="   "
+                )
+            ]
+        )
+        gen = OpenAIGenerator(client=_FakeClient(_response(parsed)))
+        result = gen.generate(
+            MATERIAL, existing_objectives=[], existing_domains=["D1"], now=FixedClock(T0)
+        )
+        assert result.objectives[0].domain is None

@@ -30,6 +30,7 @@ from content.errors import UnknownMaterialError
 from content.models import Material
 from core.errors import UnknownProfileError
 from generate.errors import GenerationError, MissingCredentialsError
+from generate.generator import domains_of
 
 from ..deps import Resources, get_resources
 
@@ -203,7 +204,11 @@ def generate_from_material(
     """Turns one page of notes into objectives and questions.
 
     The generator is told which objectives the topic already has, so it
-    attaches questions to them rather than proposing near-duplicates.
+    attaches questions to them rather than proposing near-duplicates, and
+    which units (``Objective.domain``) the goal is divided into, so that an
+    objective it does propose joins one of them. Without that second list a
+    page of notes founds its own units, and a goal ends up with as many
+    units as it has uploads instead of the handful its syllabus has.
 
     Objectives are written with ``upsert_objectives``, which adds or overwrites
     and never deletes one that did not come back: a second page of notes about
@@ -221,7 +226,9 @@ def generate_from_material(
     existing = resources.profiles.list_objectives(topic_id)
 
     try:
-        result = resources.generator.generate(material, existing, now=resources.clock)
+        result = resources.generator.generate(
+            material, existing, domains_of(existing), now=resources.clock
+        )
     except MissingCredentialsError as exc:
         raise HTTPException(
             status_code=503,

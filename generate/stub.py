@@ -49,6 +49,7 @@ class StubGenerator:
         self,
         material: Material,
         existing_objectives: Sequence[Objective],
+        existing_domains: Sequence[str] = (),
         *,
         now: Clock,
     ) -> GenerationResult:
@@ -57,6 +58,14 @@ class StubGenerator:
         Attaches every question to ``existing_objectives[0]`` when there is
         one - never a near-duplicate objective for a topic that already has
         one; otherwise proposes exactly one new objective from the title.
+
+        An objective it does propose goes into ``existing_domains[0]`` when
+        the goal has units, and carries no unit when it has none. A real
+        backend chooses which of the units the material belongs to; the
+        choosing is what a stub cannot do. What it can do, and what the
+        suite is here to hold it to, is the part that actually went wrong
+        in the field: a proposed objective must land in a unit the goal
+        already has rather than found one of its own.
         """
         created_at = now.now()
         sentences = _sentences(material.body)
@@ -67,7 +76,11 @@ class StubGenerator:
         else:
             objective_id = f"{_slug(material.title)}-obj"
             proposed_objectives = (
-                Objective(objective_id=objective_id, title=material.title),
+                Objective(
+                    objective_id=objective_id,
+                    title=material.title,
+                    domain=existing_domains[0] if existing_domains else None,
+                ),
             )
 
         questions = []
