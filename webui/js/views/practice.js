@@ -2,11 +2,12 @@
 
 import { ApiError } from "../api.js";
 import {
+  escapeHtml,
   practiceQuestionView,
   practiceResultView,
   practiceAlreadyRecordedView,
-  describePracticeUnavailable,
 } from "../format.js";
+import { describeScopedUnavailable, practicingLabel } from "../practice-scope.js";
 import {
   resolveKeyAction,
   targetOwnsKey,
@@ -14,9 +15,18 @@ import {
   makeAttemptId,
 } from "../practice-keys.js";
 
-// Renders the practice view for one topic: one question at a time, answer
-// it, see immediately whether it was right with the explanation, carry on
-// (ACU-267). There is no route without a topic, same as material.js.
+// Renders one practice session: one question at a time, answer it, see
+// immediately whether it was right with the explanation, carry on
+// (ACU-267). Reached from the picker (views/practice-picker.js), never from
+// a route of its own, because a session is about a *selection* and a hash
+// cannot hold one honestly: `#/practice/<goal>` names a goal, not the unit
+// or the topic that was picked inside it.
+//
+// **The scope is a parameter, not state.** Every `next` call in this render
+// carries the same one (issue #49), so "siguiente" after an answer stays
+// inside what was chosen instead of quietly widening back to the whole
+// goal, and the header says which scope that is for as long as the session
+// lasts.
 //
 // State here (the current question, the selection, `phase`) is deliberately
 // local to this call, not a module like material-state.js's generation
@@ -25,19 +35,19 @@ import {
 // duplicate fire lands as the engine's own 409 ("already recorded" below),
 // not a double-counted attempt. Unlike the material view's paid, slow
 // generation call, so the same cross-render treatment does not apply here.
-export async function renderPractice(container, api, topicId) {
-  if (!topicId) {
-    container.innerHTML =
-      '<p class="empty-view">Elegí un tópico primero. <a href="#/topics">Ver tópicos</a></p>';
-    return;
-  }
-
+export async function renderPracticeSession(container, api, topicId, scope, onChangeScope) {
   container.innerHTML = `
-    <a href="#/topics/${encodeURIComponent(topicId)}" class="back-link">&larr; Tópico</a>
-    <h2>Practicar</h2>
+    <p class="practice-scope">
+      <button type="button" id="change-scope" class="back-link">&larr; Elegir otra cosa</button>
+      <span class="practice-scope-name">${escapeHtml(practicingLabel(scope))}</span>
+    </p>
     <div id="practice-area"><p class="empty-view">Cargando...</p></div>
   `;
   const area = container.querySelector("#practice-area");
+  container.querySelector("#change-scope").addEventListener("click", () => {
+    cleanup();
+    onChangeScope();
+  });
 
   // "answering" -> "submitting" -> "feedback" -> back to "answering" via a
   // fresh "loading". Every handler below checks `phase` first, and sets it
@@ -147,7 +157,7 @@ export async function renderPractice(container, api, topicId) {
     phase = "loading";
     area.innerHTML = '<p class="empty-view">Cargando...</p>';
     try {
-      question = await api.nextQuestion(topicId);
+      question = await api.nextQuestion(topicId, scope);
       selectedKey = null;
       const crypto = globalThis.crypto;
       attemptId = makeAttemptId(crypto && crypto.randomUUID && crypto.randomUUID.bind(crypto));
@@ -162,10 +172,13 @@ export async function renderPractice(container, api, topicId) {
   async function paintUnavailable(err) {
     // The extra lookup only resolves the ambiguous 404 (see format.js);
     // skip it on an unknown topic (would just 404 again) and on a network
-    // outage (status 0) - pointless in both, per review.
+    // outage (status 0) - pointless in both, per review. Also skipped on a
+    // narrowed scope, where the endpoint's own three 404s already say which
+    // case it is (see practice-scope.js).
     let objectiveCount;
+    const narrowed = Boolean(scope) && scope.kind !== "goal";
     const isUnknownTopic = err instanceof ApiError && err.message.startsWith("unknown topic:");
-    if (err instanceof ApiError && err.status === 404 && !isUnknownTopic) {
+    if (!narrowed && err instanceof ApiError && err.status === 404 && !isUnknownTopic) {
       try {
         objectiveCount = (await api.getTopic(topicId)).objectives.length;
       } catch {
@@ -175,7 +188,7 @@ export async function renderPractice(container, api, topicId) {
     area.innerHTML = "";
     const p = document.createElement("p");
     p.className = "empty-view";
-    p.textContent = describePracticeUnavailable(err, { objectiveCount, topicId });
+    p.textContent = describeScopedUnavailable(err, { scope, objectiveCount, topicId });
     area.appendChild(p);
   }
 

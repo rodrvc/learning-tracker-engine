@@ -88,6 +88,18 @@ main { padding: var(--gap); max-width: 40rem; margin: 0 auto; }
 /* The ladder in its own order: unassessed reads as absent, weak as a
    warning, mastered as done. */
 .level-chip, .due-marker { flex: none; font-size: 0.75rem; padding: 0.1rem 0.45rem; border-radius: 1rem; border: 1px solid var(--border); }
+/* Pick mode (the practice tab): one "Elegir" per selectable row, and the
+   chosen one marked by weight and border rather than by colour alone. */
+.pick { flex: none; padding: 0.25rem 0.6rem; border: 1px solid var(--border); border-radius: 1rem; background: none; color: inherit; font: inherit; font-size: 0.8rem; cursor: pointer; }
+.pick[aria-pressed="true"] { border-color: currentColor; border-width: 2px; font-weight: bold; }
+.tree-topic[aria-disabled="true"] { opacity: 0.6; }
+.no-questions { flex: none; font-size: 0.75rem; opacity: 0.8; }
+.pick-help { font-size: 0.9rem; opacity: 0.8; margin-top: 0; }
+#practice-start { width: 100%; padding: 0.75rem; font-size: 1rem; margin-bottom: var(--gap); }
+.practice-scope { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem; }
+.practice-scope-name { font-weight: bold; }
+#change-scope { border: none; background: none; color: inherit; font: inherit; padding: 0; cursor: pointer; text-decoration: underline; }
+
 .level-chip[data-level="UNASSESSED"] { opacity: 0.6; }
 .level-chip[data-level="WEAK"], .due-marker { color: light-dark(#c0392b, #ff8a80); border-color: currentColor; }
 .level-chip[data-level="LEARNING"] { color: light-dark(#b9770e, #f0b429); }
