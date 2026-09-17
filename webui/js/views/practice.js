@@ -38,7 +38,7 @@ import {
 export async function renderPracticeSession(container, api, topicId, scope, onChangeScope) {
   container.innerHTML = `
     <p class="practice-scope">
-      <button type="button" id="change-scope" class="back-link">&larr; Elegir otra cosa</button>
+      <button type="button" id="change-scope" class="back-link">Elegir otra cosa</button>
       <span class="practice-scope-name">${escapeHtml(practicingLabel(scope))}</span>
     </p>
     <div id="practice-area"><p class="empty-view">Cargando...</p></div>

@@ -1,107 +1,915 @@
-/* Mobile-first: a daily study tool used on a phone as often as at a desk. */
+/* Mobile-first: a daily study tool used on a phone as often as at a desk.
+ *
+ * The visual language is Acuaria Labs' `cl-ui` system - the "nuevo look"
+ * built on the rodrvc/nuevo-look branch of acuaria-labs-page and documented
+ * in its docs/decisiones/estilos.md (D5, 2026-09-08). Its rule there is that
+ * the system dresses the whole site, not one page, so this file adopts the
+ * language rather than copying the landing's markup.
+ *
+ * What makes it that system rather than merely "blue":
+ *   - Paper, not tint. The ground is #fcfdfd and structure is drawn with
+ *     hairlines, not with a border around every box.
+ *   - Headings in a grotesque at weight 400 with tight negative tracking.
+ *     Size carries the hierarchy; boldness does not.
+ *   - Micro-labels in tracked uppercase monospace - section headings, counts,
+ *     dates, levels.
+ *   - Square-ish geometry: 3px radii, an ink-filled primary button, outlined
+ *     everything else.
+ *   - No arrow glyphs anywhere (an explicit decision on that branch).
+ *
+ * The brand system is light-only by decision, and so is this application's
+ * default - the OS preference never picks it. Dark stays available because
+ * this is opened at night, but as a choice made in the header and remembered
+ * (js/theme.js). Every token below resolves through `light-dark()`: the light
+ * side is the system's own value, the dark side re-anchors the same inks
+ * rather than introducing a second palette. */
 
+/* Light is what this application *is*: the brand system is the light one by
+   decision, so the OS preference does not get to decide it. `color-scheme`
+   here is what every `light-dark()` below resolves against, and it only says
+   `dark` once someone picks dark in the header - see js/theme.js. */
 :root {
-  color-scheme: light dark;
-  --gap: 0.75rem;
-  --border: color-mix(in srgb, currentColor 20%, transparent);
+  color-scheme: light;
+
+  /* --- cl-ui inks (light side verbatim from that branch's styles.css) --- */
+  --ink: light-dark(#153c51, #e7eff4);
+  --accent: light-dark(#296f98, #64a1ce);
+  --muted: light-dark(#4f6878, #8ca5b5);
+  --paper: light-dark(#fcfdfd, #0e1f2b);
+  --sky: light-dark(#eaf4f9, #16303f);
+  --line: light-dark(#ccdee8, #26414f);
+  --ease: cubic-bezier(0.23, 1, 0.32, 1);
+
+  --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  /* Headings: a grotesque at 400. Arial first, exactly as the system has it. */
+  --display: Arial, Helvetica, sans-serif;
+
+  /* The filled button. On paper it is the system's ink, as the landing has
+     it; on the dark theme `--ink` is the *light* tone, so filling with it
+     produced a near-white slab. The accent carries it there instead: still
+     the brand, and it stops shouting over everything else on the screen. */
+  --btn-bg: light-dark(#153c51, #64a1ce);
+  --btn-fg: light-dark(#fcfdfd, #0e1f2b);
+  --btn-bg-hover: light-dark(#296f98, #8cbde0);
+
+  --danger: light-dark(#a3271b, #ff9d95);
+  --success: light-dark(#0f6249, #5fd3ab);
+
+  --radius: 3px;
+  /* The pill radius the chips take. Any large length does it; naming it
+     keeps the chips and the toggle on one value. */
+  --radius-full: 999px;
+  --shell: 46rem;      /* reading measure; the page may use less, never more */
+  --gutter: clamp(16px, 4vw, 32px);
 }
 
+:root[data-theme="dark"] { color-scheme: dark; }
+
 * { box-sizing: border-box; }
-body { margin: 0; font-family: system-ui, sans-serif; line-height: 1.4; }
-header { padding: var(--gap); border-bottom: 1px solid var(--border); }
-header h1 { margin: 0 0 var(--gap); font-size: 1.25rem; }
-nav { display: flex; gap: 0.5rem; flex-wrap: wrap; }
-nav a { text-decoration: none; color: inherit; padding: 0.4rem 0.6rem; border-radius: 0.4rem; }
-nav a.active { background: var(--border); font-weight: bold; }
-main { padding: var(--gap); max-width: 40rem; margin: 0 auto; }
 
-.topic-form { display: flex; flex-direction: column; gap: var(--gap); margin-bottom: var(--gap); }
-.topic-form input, .topic-form button { padding: 0.6rem; font-size: 1rem; }
+body {
+  margin: 0;
+  font-family: "Inter", system-ui, Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.65;
+  color: var(--ink);
+  background: var(--paper);
+  -webkit-font-smoothing: antialiased;
+}
 
-.topics-list, .objectives-list {
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; }
+}
+
+a { color: inherit; }
+
+:is(a, button, summary) { -webkit-tap-highlight-color: transparent; }
+
+/* The system's focus ring: thick, in the accent, held well off the element.
+   The practice view is keyboard-first, so this is function, not decoration. */
+:is(a, button, input, textarea, summary):focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 4px;
+}
+
+.skip {
+  position: fixed;
+  left: 20px;
+  top: -100px;
+  z-index: 50;
+  background: var(--paper);
+  padding: 12px 20px;
+  border: 1px solid var(--line);
+}
+
+.skip:focus { top: 12px; }
+
+#view:focus { outline: none; }
+
+/* --- Header ------------------------------------------------------------ */
+
+.shell { max-width: var(--shell); margin-inline: auto; width: 100%; }
+
+header {
+  background: var(--paper);
+  border-bottom: 1px solid var(--line);
+  padding: 20px var(--gutter);
+}
+
+header .shell {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px 32px;
+}
+
+/* The brand lockup: mark, two-tone wordmark at a tight -.06em, and the
+   tracked 8px line underneath. */
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  text-decoration: none;
+  flex-shrink: 0;
+}
+
+.brand img {
+  object-fit: contain;
+  /* The drop is solid brand navy on transparent, which all but disappears
+     against the dark ground; brightening lifts it without shifting the hue. */
+  filter: light-dark(none, brightness(1.5));
+}
+
+.brand > span {
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.06em;
+  line-height: 1.1;
+  font-family: var(--display);
+}
+
+.brand-light { font-weight: 400; }
+
+.brand small {
+  display: block;
+  font: 8px/1.5 var(--display);
+  letter-spacing: 0.22em;
+  color: var(--muted);
+  margin-top: 5px;
+}
+
+nav {
+  display: flex;
+  align-items: center;
+  gap: clamp(16px, 4vw, 30px);
+  flex-wrap: wrap;
+  font-size: 13px;
+  margin-left: auto;
+}
+
+nav a {
+  text-decoration: none;
+  color: var(--muted);
+  padding: 4px 0;
+  /* The underline is drawn on a transparent border so the row never shifts
+     by a pixel when a tab becomes the active one. */
+  border-bottom: 1px solid transparent;
+  transition: color 180ms var(--ease), border-color 180ms var(--ease);
+}
+
+nav a:hover { color: var(--ink); }
+nav a.active { color: var(--ink); border-bottom-color: var(--accent); }
+
+#auth:empty { display: none; }
+
+/* --- Page -------------------------------------------------------------- */
+
+main {
+  /* The measure caps the text, the gutters sit outside it: with border-box the
+     padding would eat into the 46rem and leave the column narrower than asked. */
+  max-width: calc(var(--shell) + var(--gutter) * 2);
+  margin-inline: auto;
+  padding: clamp(40px, 7vw, 72px) var(--gutter) 96px;
+}
+
+h2 {
+  font-family: var(--display);
+  font-weight: 400;
+  font-size: clamp(2rem, 6vw, 2.7rem);
+  line-height: 1.08;
+  letter-spacing: -0.04em;
+  text-wrap: balance;
+  margin: 0 0 32px;
+}
+
+/* Section headings are micro-labels, not titles: tracked uppercase monospace
+   over a hairline, with the system's accent dot. */
+h3 {
+  font: 10px/1.6 var(--mono);
+  font-weight: 400;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 20px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+
+h3::before {
+  content: "";
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+p { text-wrap: pretty; }
+
+section { margin-bottom: 56px; }
+section:last-child { margin-bottom: 0; }
+
+/* --- Controls ---------------------------------------------------------- */
+
+input, textarea, select {
+  width: 100%;
+  padding: 13px 14px;
+  font-family: inherit;
+  font-size: 15px;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  transition: border-color 180ms var(--ease);
+}
+
+input:hover, textarea:hover { border-color: var(--accent); }
+input::placeholder, textarea::placeholder { color: var(--muted); }
+
+input[type="file"] { padding: 9px; }
+
+input[type="file"]::file-selector-button {
+  margin-right: 14px;
+  padding: 7px 14px;
+  font: 11px/1 var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink);
+  background: var(--sky);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+label { font-size: 13px; color: var(--muted); }
+
+/* The system's primary button: ink-filled, 3px radius, no gradient and no
+   arrow. Text is centred - an explicit decision on that branch once the
+   arrows came out. */
+button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 52px;
+  padding: 15px 30px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--btn-fg);
+  background: var(--btn-bg);
+  border: 1px solid var(--btn-bg);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background 180ms var(--ease), transform 120ms var(--ease);
+}
+
+button:hover:not(:disabled) { background: var(--btn-bg-hover); border-color: var(--btn-bg-hover); }
+button:active:not(:disabled) { transform: scale(0.98); }
+button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* --- Forms ------------------------------------------------------------- */
+
+.topic-form, .material-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin: 0 0 48px;
+  padding: 28px;
+  background: var(--sky);
+  border-radius: var(--radius);
+}
+
+/* --- Editorial lists --------------------------------------------------- */
+
+/* A row is a rule and generous space, not a box. This is the single change
+   that makes the screen read as the system rather than as a stack of cards. */
+.topics-list, .objectives-list, .material-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 32px;
+}
+
+.topics-list a, .material-item, .objectives-list li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 20px;
+  width: 100%;
+  padding: 20px 4px;
+  text-align: left;
+  border: 0;
+  border-top: 1px solid var(--line);
+  background: none;
+  color: inherit;
+  font: inherit;
+  transition: background 180ms var(--ease), padding 180ms var(--ease);
+}
+
+.topics-list li:last-child a,
+.material-list li:last-child .material-item,
+.objectives-list li:last-child {
+  border-bottom: 1px solid var(--line);
+}
+
+.topics-list a, .material-item { cursor: pointer; text-decoration: none; }
+
+/* Hover bleeds the sky tone past the text and nudges the row in, which is
+   how the system signals a live row without drawing a box around it. */
+.topics-list a:hover, .material-item:hover {
+  background: var(--sky);
+  padding-inline: 12px;
+}
+
+.topics-list a > span:first-child,
+.material-item > span:first-child {
+  font-size: 17px;
+  letter-spacing: -0.01em;
+}
+
+/* Every count, date, source and level is a tracked monospace micro-label. */
+.topics-list a > span:last-child,
+.material-item span:not(:first-child) {
+  flex: none;
+  font: 10px/1.6 var(--mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.material-item { flex-wrap: wrap; }
+.material-item > span:first-child { flex: 1 1 14rem; }
+
+.objectives-list li { font-size: 15px; color: var(--muted); }
+
+.empty, .empty-view { color: var(--muted); font-size: 15px; padding: 8px 0; }
+
+.error { color: var(--danger); font-size: 15px; }
+
+/* --- Links ------------------------------------------------------------- */
+
+/* The system's text link: an underline drawn on the line colour that turns
+   accent on hover. No arrows. */
+.back-link, .empty-view a {
+  display: inline-block;
+  font-size: 13px;
+  text-decoration: none;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 2px;
+  transition: border-color 180ms var(--ease);
+}
+
+.back-link:hover, .empty-view a:hover { border-bottom-color: var(--accent); }
+
+.back-link { margin-bottom: 28px; color: var(--muted); }
+
+/* --- Material ---------------------------------------------------------- */
+
+.material-detail {
+  margin-top: 40px;
+  padding-top: 28px;
+  border-top: 1px solid var(--line);
+}
+
+.material-detail h3 {
+  font: inherit;
+  font-family: var(--display);
+  font-size: 1.5rem;
+  font-weight: 400;
+  letter-spacing: -0.03em;
+  text-transform: none;
+  color: var(--ink);
+  border-top: 0;
+  padding-top: 0;
+  margin-bottom: 8px;
+}
+
+.material-detail h3::before { display: none; }
+
+.material-source {
+  margin: 0 0 24px;
+  font: 10px/1.6 var(--mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.material-body {
+  white-space: pre-wrap;
+  font-family: inherit;
+  font-size: 15px;
+  line-height: 1.75;
+  margin: 0 0 28px;
+  padding: 24px;
+  background: var(--sky);
+  border-radius: var(--radius);
+  max-height: 26rem;
+  overflow-y: auto;
+}
+
+#generate-feedback { font-size: 13px; color: var(--muted); }
+#generate-feedback.error { color: var(--danger); }
+
+/* --- Practice ---------------------------------------------------------- */
+
+.practice-stem {
+  font-family: var(--display);
+  font-size: clamp(1.35rem, 4vw, 1.7rem);
+  font-weight: 400;
+  line-height: 1.25;
+  letter-spacing: -0.03em;
+  text-wrap: balance;
+  margin: 0 0 40px;
+}
+
+.practice-options {
   list-style: none;
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 10px;
+  margin: 0 0 32px;
 }
 
-.topics-list a {
+/* An option is a hit target, so it keeps an outline where a list row does
+   not - but a 3px one in the line colour, not a raised card. */
+.practice-option {
   display: flex;
-  justify-content: space-between;
-  gap: var(--gap);
-  padding: 0.75rem;
-  border: 1px solid var(--border);
-  border-radius: 0.5rem;
-  text-decoration: none;
+  align-items: flex-start;
+  gap: 18px;
+  width: 100%;
+  padding: 20px;
+  font: inherit;
+  font-size: 15px;
+  line-height: 1.5;
+  text-align: left;
   color: inherit;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: border-color 180ms var(--ease), background 180ms var(--ease);
 }
 
-.objectives-list li { padding: 0.5rem 0.75rem; border: 1px solid var(--border); border-radius: 0.5rem; }
-.empty, .empty-view { opacity: 0.7; padding: 0.5rem 0; }
-.error { color: light-dark(#c0392b, #ff8a80); }
-.back-link { display: inline-block; margin-bottom: var(--gap); }
+.practice-option:hover { border-color: var(--accent); background: var(--sky); }
 
-.material-form { display: flex; flex-direction: column; gap: var(--gap); margin-bottom: var(--gap); }
-.material-form input, .material-form textarea, .material-form button { padding: 0.6rem; font-size: 1rem; font-family: inherit; }
+.practice-option.selected {
+  border-color: var(--ink);
+  background: var(--sky);
+}
 
-.material-list { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: var(--gap); }
-.material-item { display: flex; justify-content: space-between; gap: var(--gap); width: 100%; padding: 0.75rem; border: 1px solid var(--border); border-radius: 0.5rem; background: none; color: inherit; font: inherit; text-align: left; }
+/* The number is the keyboard shortcut made visible (practice-keys.js), set
+   as the system sets a step number: small, monospace, in the accent. */
+.option-number {
+  flex: none;
+  font: 11px/1.7 var(--mono);
+  letter-spacing: 0.1em;
+  color: var(--accent);
+  padding-top: 2px;
+}
 
-.material-detail { border: 1px solid var(--border); border-radius: 0.5rem; padding: var(--gap); margin-top: var(--gap); }
-.material-body { white-space: pre-wrap; font-family: inherit; }
+.practice-option.selected .option-number { color: var(--ink); }
 
-.practice-stem { font-size: 1.1rem; }
-.practice-options { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 0.5rem; margin: var(--gap) 0; }
-.practice-option { display: flex; align-items: center; gap: var(--gap); width: 100%; padding: 0.75rem; border: 1px solid var(--border); border-radius: 0.5rem; background: none; color: inherit; font: inherit; text-align: left; }
-.practice-option.selected { border-color: currentColor; border-width: 2px; }
-.option-number { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 1.6rem; height: 1.6rem; border: 1px solid var(--border); border-radius: 50%; }
-#submit-answer, #next-question { padding: 0.75rem; font-size: 1rem; width: 100%; }
-.practice-verdict { font-size: 1.1rem; font-weight: bold; }
-.practice-verdict.correct { color: light-dark(#1e7e34, #6fcf97); }
+#submit-answer, #next-question { width: 100%; }
 
-.level-breakdown, .progress-list { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 0.5rem; margin: 0 0 var(--gap); }
-.level-row, .progress-item { display: flex; justify-content: space-between; align-items: center; gap: var(--gap); padding: 0.5rem 0.75rem; border: 1px solid var(--border); border-radius: 0.5rem; }
-.progress-item-title { flex: 1; }
-.progress-action { display: inline-block; margin-bottom: 0.5rem; }
+.practice-result {
+  padding-top: 28px;
+  border-top: 1px solid var(--line);
+}
 
-/* The Goal > Unit > Topic tree (issue #49). Built on <details>, so the
-   open/closed state is the browser's, not a class to keep in sync. Every
-   colour goes through light-dark() or currentColor: the page declares
-   `color-scheme: light dark` and never picks a theme itself. The bar has a
-   fixed width, because next to a long goal name at 400px a flexible one
-   collapses to a sliver. */
-.tree-goal, .tree-unit { border: 1px solid var(--border); border-radius: 0.5rem; margin-bottom: 0.5rem; }
-.tree-unit { margin: 0.5rem; }
-.tree-row { display: flex; align-items: center; gap: 0.5rem; padding: 0.6rem 0.75rem; cursor: pointer; }
-.tree-name { flex: 1; min-width: 0; }
-.goal-body { padding: 0 0.25rem 0.25rem; }
-.goal-actions { display: flex; gap: var(--gap); padding: 0 0.75rem; }
-.goal-create { margin-top: var(--gap); opacity: 0.8; }
-.goal-create summary { cursor: pointer; padding: 0.4rem 0; }
-.bar { flex: none; width: 4.5rem; height: 0.5rem; border-radius: 0.25rem; background: var(--border); overflow: hidden; }
-.bar-fill { display: block; height: 100%; background: light-dark(#1e7e34, #6fcf97); }
-.bar-count { flex: none; font-size: 0.85rem; opacity: 0.8; font-variant-numeric: tabular-nums; }
-.tree-topics { list-style: none; padding: 0 0.5rem 0.5rem; margin: 0; display: flex; flex-direction: column; gap: 0.35rem; }
-.tree-topic { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; padding: 0.4rem 0.5rem; }
-.tree-topic-title { flex: 1 1 12rem; min-width: 0; font-size: 0.95rem; }
-/* The ladder in its own order: unassessed reads as absent, weak as a
-   warning, mastered as done. */
-.level-chip, .due-marker { flex: none; font-size: 0.75rem; padding: 0.1rem 0.45rem; border-radius: 1rem; border: 1px solid var(--border); }
-/* Pick mode (the practice tab): one "Elegir" per selectable row, and the
-   chosen one marked by weight and border rather than by colour alone. */
-.pick { flex: none; padding: 0.25rem 0.6rem; border: 1px solid var(--border); border-radius: 1rem; background: none; color: inherit; font: inherit; font-size: 0.8rem; cursor: pointer; }
-.pick[aria-pressed="true"] { border-color: currentColor; border-width: 2px; font-weight: bold; }
-.tree-topic[aria-disabled="true"] { opacity: 0.6; }
-.no-questions { flex: none; font-size: 0.75rem; opacity: 0.8; }
-.pick-help { font-size: 0.9rem; opacity: 0.8; margin-top: 0; }
-#practice-start { width: 100%; padding: 0.75rem; font-size: 1rem; margin-bottom: var(--gap); }
-.practice-scope { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem; }
-.practice-scope-name { font-weight: bold; }
-#change-scope { border: none; background: none; color: inherit; font: inherit; padding: 0; cursor: pointer; text-decoration: underline; }
+.practice-verdict {
+  font: 10px/1.6 var(--mono);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  margin: 0 0 16px;
+  color: var(--muted);
+}
 
-.level-chip[data-level="UNASSESSED"] { opacity: 0.6; }
-.level-chip[data-level="WEAK"], .due-marker { color: light-dark(#c0392b, #ff8a80); border-color: currentColor; }
-.level-chip[data-level="LEARNING"] { color: light-dark(#b9770e, #f0b429); }
-.level-chip[data-level="COMPETENT"] { color: light-dark(#1f6feb, #79b8ff); }
-.level-chip[data-level="MASTERED"] { color: light-dark(#1e7e34, #6fcf97); }
+.practice-verdict.correct { color: var(--success); }
+.practice-verdict.error { color: var(--danger); }
+
+.practice-explanation {
+  margin: 0 0 32px;
+  font-size: 15px;
+  line-height: 1.75;
+  color: var(--muted);
+}
+
+/* --- Narrow screens ---------------------------------------------------- */
+
+@media (max-width: 30rem) {
+  header .shell { gap: 14px 20px; }
+  nav { margin-left: 0; width: 100%; justify-content: space-between; gap: 12px; }
+  .topic-form, .material-form { padding: 20px; }
+}
+
+/* --- The level ladder ------------------------------------------------- */
+
+/* A level is a **state with valence**, not merely a position: weak is bad
+   news and mastered is good news, and a single-hue ramp says "further along"
+   without ever saying which direction is good. So the ladder runs red ->
+   amber -> blue -> green. That is a deliberate departure from the brand's
+   one-blue rule, taken on Rodrigo's call, and it is confined to this ladder:
+   nothing else on any screen leaves the ramp.
+
+   The hues are computed, not picked. Each mode was run through the five
+   checks - lightness band, chroma floor, colourblind separation under
+   simulated protanopia and deuteranopia, a normal-vision floor on the same
+   pairs, and contrast against its own surface - and both modes pass all five.
+
+   Getting there took real re-stepping, which is the point of measuring:
+   - the first blue tried was the brand's own #2a6692, and it FAILED the
+     chroma floor at 0.094 - beside these saturated neighbours it read as grey;
+   - red and amber are adjacent on the ladder and kept colliding (worst pair
+     13.1, floor is 15) until the red moved toward rose;
+   - on the dark ground blue and green then collided in turn, and separated
+     only once the blue moved toward indigo and the green toward yellow-green.
+   These are a set, not a list: change one and re-run the checks.
+
+   `UNASSESSED` stays outside the ladder on a neutral - it is the absence of
+   evidence, not a verdict on it. Colour never carries this alone: every chip
+   prints its name, which is also what makes the 6-8 colourblind band legal
+   here. */
+:root {
+  --rung-unassessed: light-dark(#98aebb, #55707f);
+  --rung-weak: light-dark(#c2352c, #d8607c);
+  --rung-learning: light-dark(#bd7d0a, #ad9328);
+  --rung-competent: light-dark(#1668b8, #5b96d8);
+  --rung-mastered: light-dark(#14855a, #3fae62);
+}
+
+[data-level="UNASSESSED"] { --rung: var(--rung-unassessed); }
+[data-level="WEAK"] { --rung: var(--rung-weak); }
+[data-level="LEARNING"] { --rung: var(--rung-learning); }
+[data-level="COMPETENT"] { --rung: var(--rung-competent); }
+[data-level="MASTERED"] { --rung: var(--rung-mastered); }
+
+/* --- The theme toggle --------------------------------------------------- */
+
+.theme-toggle {
+  min-height: 0;
+  padding: 7px 14px;
+  font: 10px/1.6 var(--mono);
+  font-weight: 400;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-full);
+  margin-left: auto;
+}
+
+.theme-toggle:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--sky);
+  border-color: var(--border-strong, var(--accent));
+}
+
+/* The toggle takes the `margin-left: auto`, so the nav must give it up or
+   both push right and collide. */
+header nav { margin-left: 0; }
+
+/* --- The Goal > Unit > Topic tree (issue #49) --------------------------- */
+
+/* Built on <details>, so the open/closed state is the browser's, not a class
+   to keep in sync.
+
+   In the `cl-ui` language a row is a rule and generous space, not a card, so
+   the tree is drawn the way the editorial lists above are drawn: goals are
+   separated by hairlines, and a unit is indented behind a single rule rather
+   than boxed. Nesting is read from the indent and the type scale - goal at
+   17px, unit at 15px, objective at 14px - which is what keeps three levels
+   legible without three borders.
+
+   Every colour is a token. The rung variables set further up are what the
+   level chips read, so a level says the same thing here that it says
+   anywhere else on the screen. */
+
+.tree-goal { border-top: 1px solid var(--line); }
+.tree-goal:last-child { border-bottom: 1px solid var(--line); }
+
+/* `list-item` is the marker the browser draws on a <summary>. It goes, which
+   is what lets the triangle below be ours. */
+.tree-row::-webkit-details-marker { display: none; }
+
+.tree-row {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 18px 4px;
+  cursor: pointer;
+  transition: background 180ms var(--ease), padding 180ms var(--ease);
+}
+
+/* Hover bleeds the sky tone past the text and nudges the row in - the same
+   signal the topic and material rows give, so a live row reads as live
+   whether it navigates or unfolds. */
+.tree-row:hover { background: var(--sky); padding-inline: 12px; }
+
+/* The disclosure triangle, drawn rather than typed: the system's own rule is
+   no arrow glyphs, and a CSS triangle rotates where a glyph would have to be
+   swapped. */
+.tree-row::before {
+  content: "";
+  flex: none;
+  width: 0;
+  height: 0;
+  border-left: 5px solid var(--muted);
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transition: transform 180ms var(--ease);
+}
+
+details[open] > .tree-row::before { transform: rotate(90deg); }
+
+.tree-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 17px;
+  letter-spacing: -0.01em;
+}
+
+.goal-body { padding: 0 0 20px 21px; }
+
+/* The two things one does *to* a goal. Material stopped being a tab because
+   it is an action inside a goal, so it is set as the system sets a text
+   link, not as a button. */
+.goal-actions {
+  display: flex;
+  gap: 24px;
+  margin: 0 0 20px;
+  padding: 0;
+}
+
+.goal-actions a {
+  font-size: 13px;
+  text-decoration: none;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 2px;
+  transition: border-color 180ms var(--ease);
+}
+
+.goal-actions a:hover { border-bottom-color: var(--accent); }
+
+/* Creating a goal is the rarest action on this screen, so it sits at the
+   bottom folded away, in the muted register. */
+.goal-create { margin-top: 40px; }
+
+.goal-create > summary {
+  cursor: pointer;
+  font: 10px/1.6 var(--mono);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 8px 0;
+  transition: color 180ms var(--ease);
+}
+
+.goal-create > summary:hover { color: var(--ink); }
+.goal-create[open] > summary { margin-bottom: 8px; }
+
+/* --- Units ------------------------------------------------------------- */
+
+/* One rule down the left is the whole of the nesting. A border around each
+   unit would put a box inside a box inside the page. */
+.tree-units { list-style: none; padding: 0; margin: 0; border-left: 1px solid var(--line); }
+
+.tree-units > li + li { border-top: 1px solid var(--line); }
+
+.tree-unit > .tree-row { padding: 12px 4px 12px 14px; }
+.tree-unit .tree-name { font-size: 15px; }
+
+/* --- Bars -------------------------------------------------------------- */
+
+/* The bar keeps a fixed width: next to a long goal name at 400px a flexible
+   one collapses to a sliver. It is the accent, not a fifth rung colour - it
+   reports coverage, which is one quantity, and the ladder's valence belongs
+   to the levels underneath it. */
+.bar {
+  flex: none;
+  width: 4.5rem;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--sky);
+  overflow: hidden;
+}
+
+.bar-fill { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+
+/* The count that says what the bar means: a bar alone is a shape, "12/64" is
+   something to act on. Tabular figures so the column does not jitter. */
+.bar-count {
+  flex: none;
+  font: 10px/1.6 var(--mono);
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* --- Objectives -------------------------------------------------------- */
+
+/* These are the long lists - 52 objectives under one goal - so the row is
+   set tight, exactly as the due and unstarted lists were: the rule, the chip
+   and the measure do the work that row height was doing. */
+.tree-topics { list-style: none; padding: 0; margin: 0; }
+
+.tree-topic {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  padding: 9px 4px 9px 14px;
+  border-top: 1px solid var(--line);
+}
+
+.tree-topic-title {
+  flex: 1 1 12rem;
+  min-width: 0;
+  max-width: 34rem;
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+/* --- The level chip and the due marker --------------------------------- */
+
+/* The rung carried as a tint rather than at full strength, so the text above
+   it keeps its own contrast and the colour reads as a state, not as a block
+   of paint. The hairline of the rung itself is what holds the chip's edges
+   on the dark ground, where a tint alone came out a smudge. Every chip
+   prints its level name: colour never carries this alone. */
+.level-chip, .due-marker {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 9px 2px 7px;
+  font: 9px/1.6 var(--mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  border-radius: var(--radius-full);
+  color: var(--ink);
+  /* The fallback matters: a level this build has not been taught yet sets
+     no rung, and `color-mix` with an undefined variable is invalid at
+     computed-value time - the chip would lose its background entirely
+     rather than come out neutral. */
+  background: color-mix(in srgb, var(--rung, var(--rung-unassessed)) 26%, var(--paper));
+  border: 1px solid color-mix(in srgb, var(--rung, var(--rung-unassessed)) 45%, transparent);
+}
+
+.level-chip::before, .due-marker::before {
+  content: "";
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--rung, var(--rung-unassessed));
+}
+
+/* Due is not a rung: it is a deadline that has passed, whatever level the
+   objective sits on. It borrows the danger ink rather than a level colour so
+   it never reads as a sixth step on the ladder. */
+.due-marker { --rung: var(--danger); }
+
+@media (max-width: 34rem) {
+  .goal-body { padding-left: 12px; }
+  .tree-row { gap: 10px; }
+}
+
+/* --- Pick mode: the practice tab (issue #49) ---------------------------- */
+
+/* The same tree, with one "Elegir" per selectable row. Unselected, it is the
+   system's outlined control in the micro-label register - the theme toggle's
+   own shape, which is what an optional, repeated control looks like here.
+   Selected, it becomes the ink-filled primary: the system already says
+   "this one is chosen" that way, so the marking needs no colour of its own
+   and survives the dark theme, where `--btn-bg` is the accent. */
+.pick {
+  flex: none;
+  min-height: 0;
+  padding: 6px 13px;
+  font: 10px/1.6 var(--mono);
+  font-weight: 400;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-full);
+}
+
+.pick:hover:not(:disabled) { color: var(--ink); background: var(--sky); border-color: var(--accent); }
+
+.pick[aria-pressed="true"] {
+  color: var(--btn-fg);
+  background: var(--btn-bg);
+  border-color: var(--btn-bg);
+}
+
+.pick[aria-pressed="true"]:hover:not(:disabled) {
+  color: var(--btn-fg);
+  background: var(--btn-bg-hover);
+  border-color: var(--btn-bg-hover);
+}
+
+/* An objective with no stored question cannot be practised, so it recedes
+   instead of offering a control: its title is mixed further toward the paper
+   and it says why, in the same micro-label register as every other count and
+   level on the screen. Mixed rather than dimmed with `opacity`, so the row's
+   own chip keeps the strength the ladder gave it. */
+.tree-topic[aria-disabled="true"] .tree-topic-title {
+  color: color-mix(in srgb, var(--muted) 60%, var(--paper));
+}
+
+.no-questions {
+  flex: none;
+  font: 9px/1.6 var(--mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* The action: the primary button of this screen, full width the way the
+   practice view's own submit is. */
+#practice-start { width: 100%; margin-bottom: 40px; }
+
+.pick-help { margin: -16px 0 24px; font-size: 15px; color: var(--muted); }
+
+/* --- The scope while practising ---------------------------------------- */
+
+/* What is being drilled, kept on screen for the whole session. It takes the
+   accent dot the section headings take, which is how this system marks a
+   line as a label rather than as prose - and no arrow glyph anywhere, per
+   the system's own rule, so the way back is a text link that says where it
+   goes. */
+.practice-scope {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 20px;
+  margin: 0 0 36px;
+}
+
+.practice-scope-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.practice-scope-name::before {
+  content: "";
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+/* A button that is a link: it changes what is on screen without navigating,
+   so it has to be a button for the keyboard and read as the system's text
+   link for the eye. */
+button.back-link {
+  min-height: 0;
+  margin-bottom: 0;
+  padding: 0 0 2px;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+}
+
+button.back-link:hover:not(:disabled) { background: none; border-bottom-color: var(--accent); }
