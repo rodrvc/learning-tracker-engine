@@ -99,7 +99,32 @@ class ProfileStore(Protocol):
         ...
 
     def list_profiles(self) -> list[Profile]:
-        """Every known profile."""
+        """Every known profile, archived ones included.
+
+        Filtering the archived ones out is the caller's decision, not this
+        layer's: whoever asks for "the topics being studied" and whoever asks
+        for "the topics that exist" both need an answer, and a store that
+        could only give the first one would leave the archive unreachable.
+        """
+        ...
+
+    def set_archived(self, profile_id: str, archived: bool) -> Profile:
+        """Puts a profile away, or brings it back. Returns the updated profile.
+
+        It exists as a method of its own rather than being done through
+        ``save_profile`` for two reasons. ``save_profile`` replaces the whole
+        profile, so flipping a flag through it means reading the catalog and
+        writing every objective back — a rewrite of the objective table for a
+        single boolean, and a lost catalog if two writers race. And the
+        contract here is narrower and worth stating: **this touches nothing
+        but the flag.** No attempt, no objective and no derived state changes
+        when a topic is archived (SPEC I1).
+
+        Raises:
+            UnknownProfileError: if the profile does not exist. Archiving a
+                misspelled id fails loudly rather than creating one, the same
+                rule objectives follow (SPEC C8).
+        """
         ...
 
     def get_objective(self, profile_id: str, objective_id: str) -> Objective:

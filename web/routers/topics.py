@@ -10,7 +10,7 @@ other module in ``web/`` should need to translate again.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from core.errors import UnknownProfileError
@@ -27,6 +27,7 @@ class TopicSummary(BaseModel):
     topic_id: str
     name: str
     objective_count: int
+    archived: bool
 
 
 class TopicCreate(BaseModel):
@@ -52,6 +53,18 @@ class TopicDetail(BaseModel):
     topic_id: str
     name: str
     objectives: list[ObjectiveOut]
+    archived: bool
+
+
+class TopicArchiveUpdate(BaseModel):
+    """Body of the archive endpoint: where the topic should end up.
+
+    The desired state, not a verb, so the call is idempotent: archiving an
+    already archived topic is a success that changes nothing, and a client
+    that retries after a timeout cannot toggle the flag back by accident.
+    """
+
+    archived: bool
 
 
 def _to_summary(profile: Profile) -> TopicSummary:
@@ -59,6 +72,7 @@ def _to_summary(profile: Profile) -> TopicSummary:
         topic_id=profile.profile_id,
         name=profile.name,
         objective_count=len(profile.objectives),
+        archived=profile.archived,
     )
 
 
@@ -73,9 +87,30 @@ def _to_objective_out(objective: Objective) -> ObjectiveOut:
 
 
 @router.get("", response_model=list[TopicSummary])
-def list_topics(resources: Resources = Depends(get_resources)) -> list[TopicSummary]:
-    """Every topic, sorted by id (SPEC's ``list_profiles``)."""
-    return [_to_summary(profile) for profile in resources.profiles.list_profiles()]
+def list_topics(
+    archived: bool = Query(
+        False, description="List the archived topics instead of the active ones."
+    ),
+    resources: Resources = Depends(get_resources),
+) -> list[TopicSummary]:
+    """The topics being studied, sorted by id (SPEC's ``list_profiles``).
+
+    Archived ones are left out **by default**, because this listing is the
+    home screen: a topic is archived precisely to stop appearing here. They
+    are not unreachable, they are one query parameter away — ``?archived=true``
+    lists them, and the archive is a listing of its own rather than a subset
+    nobody can name.
+
+    The filter runs here and not in the store on purpose: the store's job is
+    to answer what exists (see ``ProfileStore.list_profiles``), and which half
+    of it a screen wants to show is a product decision that belongs in the
+    layer that knows about screens.
+    """
+    return [
+        _to_summary(profile)
+        for profile in resources.profiles.list_profiles()
+        if profile.archived == archived
+    ]
 
 
 @router.post("", response_model=TopicSummary, status_code=201)
@@ -117,7 +152,36 @@ def get_topic(topic_id: str, resources: Resources = Depends(get_resources)) -> T
     objectives = [
         _to_objective_out(profile.objectives[key]) for key in sorted(profile.objectives)
     ]
-    return TopicDetail(topic_id=profile.profile_id, name=profile.name, objectives=objectives)
+    return TopicDetail(
+        topic_id=profile.profile_id,
+        name=profile.name,
+        objectives=objectives,
+        archived=profile.archived,
+    )
+
+
+@router.put("/{topic_id}/archived", response_model=TopicSummary)
+def set_topic_archived(
+    topic_id: str,
+    body: TopicArchiveUpdate,
+    resources: Resources = Depends(get_resources),
+) -> TopicSummary:
+    """Archives a topic, or brings it back. The one door to the flag.
+
+    ``PUT`` and not ``DELETE``: nothing is deleted. The topic keeps every
+    attempt and every objective it had, which is the whole reason this exists
+    instead of a delete endpoint — attempts are append-only evidence of what
+    somebody knew (SPEC I1), and a topic that stopped being studied is not a
+    topic that was never studied.
+
+    404, naming the missing topic, when it does not exist: archiving a
+    misspelled id is a mistake worth hearing about, not a silent no-op.
+    """
+    try:
+        profile = resources.profiles.set_archived(topic_id, body.archived)
+    except UnknownProfileError as exc:
+        raise HTTPException(status_code=404, detail=f"unknown topic: {topic_id}") from exc
+    return _to_summary(profile)
 
 
 __all__ = ["router"]

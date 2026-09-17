@@ -83,7 +83,16 @@ def merge_objectives(
     for objective in incoming:
         merged[objective.objective_id] = objective
     return (
-        Profile(profile_id=profile.profile_id, name=profile.name, objectives=merged),
+        # Every field of the profile that is not the catalog is carried over,
+        # ``archived`` included. Rebuilding the profile from a subset of its
+        # fields is how an unrelated flag gets quietly reset by an objective
+        # upload; the copy has to be complete.
+        Profile(
+            profile_id=profile.profile_id,
+            name=profile.name,
+            objectives=merged,
+            archived=profile.archived,
+        ),
         len(incoming),
     )
 

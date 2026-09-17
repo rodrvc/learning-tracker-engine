@@ -42,7 +42,7 @@ import json
 import os
 import tempfile
 from contextlib import contextmanager
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable, Iterator
@@ -113,6 +113,7 @@ def _profile_to_json(profile: Profile) -> dict[str, Any]:
         "objectives": [
             _objective_to_json(o) for _, o in sorted(profile.objectives.items())
         ],
+        "archived": profile.archived,
     }
 
 
@@ -122,6 +123,11 @@ def _profile_from_json(data: dict[str, Any]) -> Profile:
         profile_id=data["profile_id"],
         name=data["name"],
         objectives={o.objective_id: o for o in objectives},
+        # ``.get`` and not ``[...]``: a file written before this field existed
+        # is a valid file, and every profile in it was being studied. Reading
+        # it must not fail, and the absence of the key means exactly "not
+        # archived", the same default the model states.
+        archived=data.get("archived", False),
     )
 
 
@@ -302,9 +308,27 @@ class JsonProfileStore:
         return profile
 
     def list_profiles(self) -> list[Profile]:
-        """Every profile, sorted by ``profile_id``."""
+        """Every profile, archived ones included, sorted by ``profile_id``."""
         profiles = self._load()
         return [profiles[k] for k in sorted(profiles)]
+
+    def set_archived(self, profile_id: str, archived: bool) -> Profile:
+        """Flips the archived flag and nothing else.
+
+        Under the same exclusive lock every other write takes: the flag lives
+        in the same file as the catalog, so a read-modify-rewrite of it can
+        lose a concurrent objective upload exactly as any other write can.
+        """
+        with _exclusive_lock(self._path):
+            profiles = self._load()
+            try:
+                profile = profiles[profile_id]
+            except KeyError:
+                raise UnknownProfileError(profile_id) from None
+            updated = replace(profile, archived=archived)
+            profiles[profile_id] = updated
+            self._save(profiles)
+        return updated
 
     def get_objective(self, profile_id: str, objective_id: str) -> Objective:
         """One objective of the profile. It fails loudly when missing (SPEC C8)."""

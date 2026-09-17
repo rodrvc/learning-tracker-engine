@@ -553,6 +553,92 @@ def test_upsert_does_not_mutate_the_frozen_profile_passed_in(profiles, profile):
     assert "new" not in profile.objectives
 
 
+# ======================================================================== archiving
+
+
+@pytest.mark.spec
+def test_a_saved_profile_starts_unarchived(profiles, profile):
+    profiles.save_profile(profile)
+    assert profiles.get_profile(P1).archived is False
+    assert profiles.list_profiles()[0].archived is False
+
+
+@pytest.mark.spec
+def test_set_archived_persists_and_returns_the_updated_profile(profiles, profile):
+    profiles.save_profile(profile)
+    returned = profiles.set_archived(P1, True)
+    assert returned.archived is True
+    assert profiles.get_profile(P1) == returned
+    assert profiles.set_archived(P1, False).archived is False
+    assert profiles.get_profile(P1).archived is False
+
+
+@pytest.mark.spec
+def test_set_archived_touches_nothing_but_the_flag(profiles, profile):
+    """The contract of the method, checked field by field.
+
+    Flipping the flag through ``save_profile`` would rewrite the objective
+    catalog, so a backend that implements it that way passes the flag
+    assertion above and still loses a concurrent objective upload. Comparing
+    the whole profile is what tells the two apart.
+    """
+    profiles.save_profile(profile)
+    archived = profiles.set_archived(P1, True)
+    assert archived == Profile(
+        profile_id=profile.profile_id,
+        name=profile.name,
+        objectives=profile.objectives,
+        archived=True,
+    )
+    assert profiles.list_objectives(P1) == [profile.objectives[O1], profile.objectives[O2]]
+
+
+@pytest.mark.spec
+def test_archived_profiles_still_appear_in_list_profiles(profiles, profile):
+    """The store answers what exists; hiding is the caller's decision.
+
+    A store that filtered archived profiles out of its own listing would make
+    the archive unreachable: there would be no call left that names it.
+    """
+    profiles.save_profile(profile)
+    profiles.save_profile(Profile(profile_id=P2, name="AZ-900"))
+    profiles.set_archived(P1, True)
+    assert [p.profile_id for p in profiles.list_profiles()] == sorted([P1, P2])
+
+
+@pytest.mark.spec
+def test_set_archived_unknown_profile_raises(profiles):
+    with pytest.raises(UnknownProfileError):
+        profiles.set_archived("ghost", True)
+
+
+@pytest.mark.edge
+def test_set_archived_is_idempotent(profiles, profile):
+    profiles.save_profile(profile)
+    first = profiles.set_archived(P1, True)
+    assert profiles.set_archived(P1, True) == first
+
+
+@pytest.mark.edge
+def test_upsert_objectives_does_not_unarchive_the_profile(profiles, profile):
+    """Guards the merge that rebuilds the profile around the new catalog.
+
+    Rebuilding it from ``profile_id`` and ``name`` alone silently drops every
+    other field, and an objective upload against an archived topic would bring
+    it back into the listing for no reason anybody asked for.
+    """
+    profiles.save_profile(profile)
+    profiles.set_archived(P1, True)
+    profiles.upsert_objectives(P1, [Objective(objective_id="D2.1-baz", title="Baz")])
+    assert profiles.get_profile(P1).archived is True
+
+
+@pytest.mark.spec
+def test_save_profile_writes_the_archived_flag_it_is_given(profiles):
+    profiles.save_profile(Profile(profile_id=P1, name="AI-103", archived=True))
+    assert profiles.get_profile(P1).archived is True
+
+
 # =========================================================================== SystemClock
 
 
@@ -840,6 +926,25 @@ def test_i8_corrupt_json_file_raises_storage_error(tmp_path):
     path.write_text('{"version": 1}', encoding="utf-8")
     with pytest.raises(StorageError):
         st.list_all(P1)
+
+
+@pytest.mark.edge
+def test_json_file_written_before_the_archived_field_still_reads(tmp_path):
+    """A file from an older version has no ``archived`` key, and is not broken.
+
+    Every profile in such a file was being studied, because there was no way
+    to put one away. Reading the absence as "not archived" is the only reading
+    that keeps that true; raising instead would turn an upgrade into data
+    loss for whoever runs the JSON backend.
+    """
+    path = tmp_path / "profiles.json"
+    path.write_text(
+        json.dumps(
+            {"version": 1, "profiles": [{"profile_id": P1, "name": "AI-103", "objectives": []}]}
+        ),
+        encoding="utf-8",
+    )
+    assert JsonProfileStore(path).get_profile(P1).archived is False
 
 
 @pytest.mark.invariant
