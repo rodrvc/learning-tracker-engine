@@ -20,6 +20,8 @@ import {
   practiceResultView,
   practiceAlreadyRecordedView,
   describePracticeUnavailable,
+  LEVEL_ORDER,
+  levelLabel,
 } from "../../webui/js/format.js";
 
 test("escapeHtml neutralises every HTML-significant character", () => {
@@ -272,4 +274,26 @@ test("describePracticeUnavailable shows an unknown-topic 404 in Spanish, naming 
 test("describePracticeUnavailable shows a non-404 failure's message unchanged", () => {
   const err = { status: 0, message: "No se pudo conectar con el servidor." };
   assert.equal(describePracticeUnavailable(err, { objectiveCount: 3 }), "No se pudo conectar con el servidor.");
+});
+
+// --- The level ladder --------------------------------------------------
+//
+// Kept when the progress screen was retired (issue #49): the learning tree
+// hangs every level chip on these two, so they are load-bearing for the
+// screen that replaced it.
+
+test("levelLabel translates every SPEC level to its Spanish product name", () => {
+  assert.equal(levelLabel("UNASSESSED"), "Sin evaluar");
+  assert.equal(levelLabel("WEAK"), "Débil");
+  assert.equal(levelLabel("LEARNING"), "Aprendiendo");
+  assert.equal(levelLabel("COMPETENT"), "Competente");
+  assert.equal(levelLabel("MASTERED"), "Dominado");
+});
+
+test("levelLabel falls back to the raw identifier instead of going blank", () => {
+  assert.equal(levelLabel("SOMETHING_NEW"), "SOMETHING_NEW");
+});
+
+test("LEVEL_ORDER is the SPEC 1.4 ladder, weakest evidence first", () => {
+  assert.deepEqual(LEVEL_ORDER, ["UNASSESSED", "WEAK", "LEARNING", "COMPETENT", "MASTERED"]);
 });

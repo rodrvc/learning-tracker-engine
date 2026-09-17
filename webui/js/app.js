@@ -3,10 +3,11 @@
 import { api, setTokenProvider } from "./api.js";
 import { mountAuth } from "./auth.js";
 import { parseHash, buildHash } from "./router.js";
-import { renderTopics } from "./views/topics.js";
+import { renderLearning } from "./views/learning.js";
 import { renderMaterial } from "./views/material.js";
-import { renderPractice } from "./views/practice.js";
-import { renderProgress } from "./views/progress.js";
+// The practice tab is the picker (issue #49); the session it opens lives in
+// views/practice.js and is reached through it, not through a route.
+import { renderPractice } from "./views/practice-picker.js";
 import { initTheme } from "./theme.js";
 
 const content = document.getElementById("view");
@@ -25,14 +26,12 @@ function highlightNav(view) {
 async function render() {
   const { view, param } = parseHash(location.hash);
   highlightNav(view);
-  if (view === "topics") {
-    await renderTopics(content, api, param);
+  if (view === "learning") {
+    await renderLearning(content, api, param);
   } else if (view === "material") {
     await renderMaterial(content, api, param);
   } else if (view === "practice") {
     await renderPractice(content, api, param);
-  } else if (view === "progress") {
-    await renderProgress(content, api, param);
   }
 }
 
@@ -62,6 +61,6 @@ window.addEventListener("DOMContentLoaded", async () => {
   if (location.hash) {
     render();
   } else {
-    location.hash = buildHash("topics");
+    location.hash = buildHash("learning");
   }
 });

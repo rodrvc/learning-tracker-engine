@@ -24,7 +24,7 @@
         <!-- The brand lockup of the `cl-ui` system: mark, two-tone wordmark,
              and the tracked line under it - here naming the product, with
              Acuaria Labs as the house it belongs to. -->
-        <a class="brand" href="#/topics" aria-label="Learning Tracker, inicio">
+        <a class="brand" href="#/learning" aria-label="Learning Tracker, inicio">
           <img src="img/mark.png" width="38" height="38" alt="" />
           <span>learning<span class="brand-light">tracker</span><small>ACUARIA LABS</small></span>
         </a>
@@ -33,11 +33,12 @@
              (webui/js/auth.js). -->
         <div id="auth"></div>
         <button type="button" id="theme-toggle" class="theme-toggle">Tema oscuro</button>
+        <!-- Two tabs, not four (issue #49): material is an action inside a
+             goal and progress is the tree itself, so neither is a place to
+             go any more. -->
         <nav aria-label="Navegación principal">
-          <a href="#/topics" data-view="topics">Tópicos</a>
-          <a href="#/material" data-view="material">Material</a>
+          <a href="#/learning" data-view="learning">Aprendiendo</a>
           <a href="#/practice" data-view="practice">Practicar</a>
-          <a href="#/progress" data-view="progress">Progreso</a>
         </nav>
       </div>
     </header>

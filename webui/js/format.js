@@ -183,14 +183,19 @@ export function describePracticeUnavailable(err, { objectiveCount, topicId } = {
   return message;
 }
 
-// --- Progress view (ACU-268) ---
+// --- The level ladder ---
 //
 // The engine computes the level and the threshold that produced it
 // (SPEC section 2); this module only translates the five identifiers that
 // travel over the API into the Spanish names a person reads, in the exact
 // order SPEC section 1.4 lists them. Nothing here derives a level from a
-// score or a date - every `ObjectiveStateOut` and `ProfileSummaryOut` field
-// used below is copied from the API response, not recomputed.
+// score or a date.
+//
+// These two are what the learning tree hangs its level chips on (tree.js).
+// The rest of what used to live below them - the coverage hero, the stacked
+// mix, the tiles, the breakdown and the two objective lists - belonged to
+// the progress screen, which the tree replaced (issue #49); they went with
+// it, along with the stylesheet that dressed them.
 
 export const LEVEL_ORDER = ["UNASSESSED", "WEAK", "LEARNING", "COMPETENT", "MASTERED"];
 
@@ -209,162 +214,3 @@ export function levelLabel(level) {
   return LEVEL_LABELS[level] || String(level);
 }
 
-// --- The ordinal ladder -------------------------------------------------
-//
-// The five levels are an **ordinal** scale, not categories: reordering them
-// changes the meaning. The correct encoding for that is one hue in monotone
-// lightness steps, which happens to be the brand's own single-blue ramp -
-// the ladder reads as a ladder even before the labels are read.
-// `UNASSESSED` sits outside the ramp and takes a neutral: it is the absence
-// of evidence, not the weakest rung of it.
-//
-// Colour never carries the meaning alone. Every level shows its Spanish name
-// beside the swatch, the breakdown below the bar is the bar's table view, and
-// the bar itself is labelled for a screen reader. The four ramp steps are
-// pinned in `css/style.css` and were validated there, not eyeballed.
-
-/** The share of each level as one stacked bar - the shape of the topic at a
- * glance, above the numbers that spell it out.
- *
- * Zero-count levels are dropped rather than rendered as a zero-width segment:
- * a segment that cannot be seen or hovered is not information, and the
- * breakdown underneath already reports every level including the zeros.
- *
- * `total` comes from the response (`total_objectives`) rather than being
- * assumed equal to the sum, so a level this front end has not been taught yet
- * still leaves its share of the bar unpainted instead of silently inflating
- * the others.
- */
-export function levelMixView(byLevel, total) {
-  const source = byLevel || {};
-  const levels = [...LEVEL_ORDER, ...Object.keys(source).filter((l) => !LEVEL_ORDER.includes(l))];
-  const whole = total || levels.reduce((sum, level) => sum + (source[level] || 0), 0);
-  if (!whole) return "";
-  const segments = levels
-    .filter((level) => (source[level] || 0) > 0)
-    .map((level) => {
-      const share = ((source[level] / whole) * 100).toFixed(2);
-      return `<span class="mix-segment" data-level="${escapeHtml(level)}" style="width:${share}%"></span>`;
-    })
-    .join("");
-  const reading = levels
-    .filter((level) => (source[level] || 0) > 0)
-    .map((level) => `${levelLabel(level)}: ${source[level]}`)
-    .join(", ");
-  return `<div class="level-mix" role="img" aria-label="Reparto por nivel. ${escapeHtml(reading)}">${segments}</div>`;
-}
-
-/** The one number the screen leads with: how much of the topic has any
- * evidence at all. `coverage` is the engine's own field (SPEC section 9.4),
- * not a ratio recomputed here. */
-export function coverageHeroView(summary) {
-  const coverage = Math.round((summary.coverage || 0) * 100);
-  return `<p class="hero-figure">${escapeHtml(coverage)}<span class="hero-unit">%</span></p>
-    <p class="hero-label">del tema con evidencia — ${escapeHtml(
-      summary.assessed_objectives,
-    )} de ${escapeHtml(summary.total_objectives)} objetivos</p>`;
-}
-
-/** The headline counts, each copied from the response rather than derived:
- * nothing here recomputes what the engine already decided. */
-export function summaryTilesView(summary) {
-  const tiles = [
-    ["Intentos", summary.total_attempts],
-    ["Vencidos", summary.due_objectives],
-    ["Nunca practicados", summary.unstarted_objectives],
-  ];
-  const cells = tiles
-    .map(
-      ([label, value]) => `<div class="tile">
-        <span class="tile-value">${escapeHtml(value ?? 0)}</span>
-        <span class="tile-label">${escapeHtml(label)}</span>
-      </div>`,
-    )
-    .join("");
-  return `<div class="tiles">${cells}</div>`;
-}
-
-/** The level breakdown (SPEC section 9.4's `by_level`), one row per level in
- * ladder order, zero counts included: "0 dominados" is information too.
- *
- * Iterates `LEVEL_ORDER` first, then appends any key the response carries
- * that the ladder does not name, so a level this front end has not been
- * taught yet still gets a row (through `levelLabel`'s own fallback) instead
- * of silently vanishing - the engine always sends exactly the five SPEC 1.4
- * levels today, but nothing here should assume it always will. */
-export function levelBreakdownView(byLevel, total) {
-  const source = byLevel || {};
-  const extraLevels = Object.keys(source).filter((level) => !LEVEL_ORDER.includes(level));
-  const levels = [...LEVEL_ORDER, ...extraLevels];
-  // The bar next to each count is scaled against the largest level, not
-  // against the total: with 52 of 64 unassessed, scaling by the total leaves
-  // every other bar too short to compare.
-  const peak = Math.max(1, ...levels.map((level) => source[level] || 0));
-  return levels
-    .map((level) => {
-      const count = source[level] ?? 0;
-      const share = ((count / peak) * 100).toFixed(2);
-      return `<li class="level-row" data-level="${escapeHtml(level)}"><span class="level-name">${escapeHtml(
-        levelLabel(level),
-      )}</span><span class="level-bar"><span style="width:${share}%"></span></span><span class="level-count">${escapeHtml(
-        count,
-      )}</span></li>`;
-    })
-    .join("");
-}
-
-// One row of the "due" or "never practised" lists: the objective's own
-// name (looked up by the caller, the progress endpoints return only an id)
-// and its current level. No link here - see `progressActionView` for why a
-// direct path into practising this screen owes lives once per list, not
-// once per row.
-export function objectiveRowView(state, title) {
-  return `<li class="progress-item" data-level="${escapeHtml(state.level)}">
-      <span class="progress-item-title">${escapeHtml(title || state.objective_id)}</span>
-      <span class="progress-item-level">${escapeHtml(levelLabel(state.level))}</span>
-    </li>`;
-}
-
-// The one honest "direct path to practising" this screen can promise, and
-// there is exactly one of it. `GET .../practice/next`
-// (web/routers/practice.py) walks `(*due, *unstarted)` and picks the
-// objective itself, skipping any with no stored question as it goes
-// (HANDOFF.md: this repo has questions for only a fraction of its
-// objectives). So a link beside a row cannot honestly claim to target that
-// row - not even the top of `due` - and a second link over the unstarted
-// list cannot claim to start something new either: due comes first
-// globally, so it returns an old objective whenever any due one has a
-// question, which is the normal state of a topic in use. One control, one
-// behaviour, and copy that describes the order the engine actually walks.
-export function progressActionView(topicId) {
-  const label = "Practicar (el motor elige: primero lo vencido, después lo nunca practicado)";
-  return `<a class="progress-action" href="#/practice/${encodeURIComponent(topicId)}">${escapeHtml(
-    label,
-  )}</a>`;
-}
-
-export function dueListView(states, titleFor) {
-  if (!states.length) return '<p class="empty-view">No hay nada vencido por ahora.</p>';
-  const rows = states.map((state) => objectiveRowView(state, titleFor(state.objective_id))).join("");
-  return `<ul class="progress-list">${rows}</ul>`;
-}
-
-export function unstartedListView(states, titleFor) {
-  if (!states.length) {
-    return '<p class="empty-view">Ya se practicó cada objetivo al menos una vez.</p>';
-  }
-  const rows = states.map((state) => objectiveRowView(state, titleFor(state.objective_id))).join("");
-  return `<ul class="progress-list">${rows}</ul>`;
-}
-
-// The only failure this view distinguishes is "the topic does not exist" -
-// the same wording `describePracticeUnavailable` uses for it, kept
-// consistent across views - versus everything else, shown verbatim rather
-// than guessed at.
-export function describeProgressError(err, { topicId } = {}) {
-  const message = (err && err.message) || "Error inesperado.";
-  if (err && err.status === 404 && message.startsWith("unknown topic:")) {
-    return `No existe el tema "${topicId}".`;
-  }
-  return message;
-}
