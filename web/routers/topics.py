@@ -38,13 +38,31 @@ class TopicCreate(BaseModel):
 
 
 class ObjectiveOut(BaseModel):
-    """One objective of a topic, as returned to clients."""
+    """One objective of a topic, as returned to clients.
+
+    ``has_questions`` is the one field here that is not the objective's own
+    data: it says whether the question store holds at least one question for
+    this objective in this topic. It lives here, on the listing the practice
+    tree is already built from, because the alternative is a client that
+    offers every row and discovers which ones are practisable by 404ing on
+    them one at a time (this repo has questions for only a fraction of its
+    objectives).
+
+    A boolean and not a count, deliberately. The count of stored questions
+    is not a measure of anything a person should act on -- it is content
+    inventory, and a UI given the number will end up showing it as if it
+    were coverage or progress, which the engine computes from attempts and
+    from nothing else (SPEC section 0, decision 1). The only honest question
+    at this boundary is the one the UI actually asks: can this row be
+    practised at all.
+    """
 
     objective_id: str
     title: str
     domain: str | None
     weight: float
     tags: tuple[str, ...]
+    has_questions: bool
 
 
 class TopicDetail(BaseModel):
@@ -76,13 +94,14 @@ def _to_summary(profile: Profile) -> TopicSummary:
     )
 
 
-def _to_objective_out(objective: Objective) -> ObjectiveOut:
+def _to_objective_out(objective: Objective, has_questions: bool) -> ObjectiveOut:
     return ObjectiveOut(
         objective_id=objective.objective_id,
         title=objective.title,
         domain=objective.domain,
         weight=objective.weight,
         tags=objective.tags,
+        has_questions=has_questions,
     )
 
 
@@ -144,13 +163,23 @@ def get_topic(topic_id: str, resources: Resources = Depends(get_resources)) -> T
     ``UnknownProfileError`` translated to HTTP rather than swallowed into an
     empty success (SPEC I8 — a failed lookup is never confused with one that
     found nothing).
+
+    Each objective carries ``has_questions`` so a client can tell which rows
+    are practisable before offering them (see ``ObjectiveOut``). It costs one
+    read of the topic's questions, not one per objective: the ids are
+    collected from a single ``list_for_topic`` call, and an objective with no
+    question simply does not appear in it.
     """
     try:
         profile = resources.profiles.get_profile(topic_id)
     except UnknownProfileError as exc:
         raise HTTPException(status_code=404, detail=f"unknown topic: {topic_id}") from exc
+    with_questions = {
+        question.objective_id for question in resources.questions.list_for_topic(topic_id)
+    }
     objectives = [
-        _to_objective_out(profile.objectives[key]) for key in sorted(profile.objectives)
+        _to_objective_out(profile.objectives[key], key in with_questions)
+        for key in sorted(profile.objectives)
     ]
     return TopicDetail(
         topic_id=profile.profile_id,

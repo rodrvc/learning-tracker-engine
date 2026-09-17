@@ -144,6 +144,9 @@ def test_get_topic_returns_its_objectives(client: TestClient) -> None:
             "domain": "D1",
             "weight": 1.0,
             "tags": [],
+            # No question was stored for it, so the practice tree may show it
+            # but must not offer it (issue #48).
+            "has_questions": False,
         }
     ]
 
@@ -615,12 +618,14 @@ def test_compare_earlier_after_later_is_400(client: TestClient) -> None:
 
 # --------------------------------------------------------------- ACU-250: practice
 
-def _insert_objective(conn, objective_id: str, topic_id: str = "ai-103") -> None:
+def _insert_objective(
+    conn, objective_id: str, topic_id: str = "ai-103", domain: str | None = None
+) -> None:
     conn.execute(
         f"""INSERT INTO {POSTGRES_SCHEMA}.objectives
             (profile_id, objective_id, title, domain, weight, tags)
-            VALUES (%s, %s, 'Title', NULL, 1.0, ARRAY[]::text[])""",
-        (topic_id, objective_id),
+            VALUES (%s, %s, 'Title', %s, 1.0, ARRAY[]::text[])""",
+        (topic_id, objective_id, domain),
     )
 
 
@@ -868,6 +873,243 @@ def test_next_question_404_details_are_pinned_for_the_webui(
     assert no_question.json()["detail"] == (
         f"topic {practice_topic} has no question for any due or unstarted objective: obj-mute"
     )
+
+
+# ------------------------------------------------------------- issue #48: scope
+
+@pytest.mark.spec
+def test_scoped_next_applies_the_engines_order_to_the_scope(
+    client: TestClient, practice_topic: str
+) -> None:
+    """The headline rule of this feature: a scope filters the engine's list,
+    it does not re-rank it.
+
+    Three due objectives. The most overdue of all is in D1; inside D2 the
+    most overdue is ``obj-d2-old``. Unscoped, the engine's first choice is
+    the D1 one; scoped to D2 the answer must be ``obj-d2-old`` -- the same
+    "most overdue first" rule (SPEC section 5.2), applied to a subset. If
+    this layer had rebuilt the order instead of filtering it, the recent D2
+    objective would be just as likely to come out.
+    """
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        _insert_objective(conn, "obj-d1-oldest", domain="D1")
+        _insert_objective(conn, "obj-d2-old", domain="D2")
+        _insert_objective(conn, "obj-d2-recent", domain="D2")
+        now = datetime.now(timezone.utc)
+        # A miss sets next_review_at = at + 1 day (SPEC section 4.2, S=0).
+        _insert_attempt(conn, "obj-d1-oldest", now - timedelta(days=30), correct=False)
+        _insert_attempt(conn, "obj-d2-old", now - timedelta(days=10), correct=False)
+        _insert_attempt(conn, "obj-d2-recent", now - timedelta(days=2), correct=False)
+        for objective_id in ("obj-d1-oldest", "obj-d2-old", "obj-d2-recent"):
+            _insert_question(conn, f"q-{objective_id}", objective_id)
+        conn.commit()
+
+    unscoped = client.get(f"/topics/{practice_topic}/practice/next")
+    assert unscoped.json()["objective_id"] == "obj-d1-oldest"
+
+    scoped = client.get(f"/topics/{practice_topic}/practice/next", params={"domain": "D2"})
+    assert scoped.status_code == 200
+    assert scoped.json()["objective_id"] == "obj-d2-old"
+
+
+@pytest.mark.spec
+def test_scoped_next_still_prefers_due_over_unstarted(
+    client: TestClient, practice_topic: str
+) -> None:
+    """The due-before-unstarted preference is the engine's too, and a scope
+    does not reshuffle it: inside D2, the due objective wins over the never
+    practised one, even though both are in scope."""
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        _insert_objective(conn, "obj-d2-due", domain="D2")
+        _insert_objective(conn, "obj-d2-new", domain="D2")
+        _insert_attempt(
+            conn, "obj-d2-due", datetime.now(timezone.utc) - timedelta(days=5), correct=False
+        )
+        _insert_question(conn, "q-d2-due", "obj-d2-due")
+        _insert_question(conn, "q-d2-new", "obj-d2-new")
+        conn.commit()
+
+    response = client.get(f"/topics/{practice_topic}/practice/next", params={"domain": "D2"})
+    assert response.status_code == 200
+    assert response.json()["objective_id"] == "obj-d2-due"
+
+
+@pytest.mark.edge
+def test_scoped_next_walks_past_an_objective_without_a_question(
+    client: TestClient, practice_topic: str
+) -> None:
+    """The unscoped walk skips candidates with no stored question; inside a
+    scope it must keep doing exactly that, rather than 404ing on the most
+    urgent muted objective of the scope."""
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        _insert_objective(conn, "obj-d3-mute", domain="D3")
+        _insert_objective(conn, "obj-d3-covered", domain="D3")
+        now = datetime.now(timezone.utc)
+        _insert_attempt(conn, "obj-d3-mute", now - timedelta(days=20), correct=False)
+        _insert_attempt(conn, "obj-d3-covered", now - timedelta(days=2), correct=False)
+        _insert_question(conn, "q-d3-covered", "obj-d3-covered")
+        conn.commit()
+
+    response = client.get(f"/topics/{practice_topic}/practice/next", params={"domain": "D3"})
+    assert response.status_code == 200
+    assert response.json()["objective_id"] == "obj-d3-covered"
+
+
+@pytest.mark.spec
+def test_next_scoped_to_one_objective_returns_that_objective(
+    client: TestClient, practice_topic: str
+) -> None:
+    """The narrowest scope the practice tree can select: a single topic row."""
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        _insert_objective(conn, "obj-chosen", domain="D1")
+        _insert_objective(conn, "obj-more-overdue", domain="D1")
+        now = datetime.now(timezone.utc)
+        _insert_attempt(conn, "obj-chosen", now - timedelta(days=3), correct=False)
+        _insert_attempt(conn, "obj-more-overdue", now - timedelta(days=30), correct=False)
+        _insert_question(conn, "q-chosen", "obj-chosen")
+        _insert_question(conn, "q-more-overdue", "obj-more-overdue")
+        conn.commit()
+
+    response = client.get(
+        f"/topics/{practice_topic}/practice/next", params={"objective_id": "obj-chosen"}
+    )
+    assert response.status_code == 200
+    assert response.json()["objective_id"] == "obj-chosen"
+
+
+@pytest.mark.edge
+def test_next_without_a_scope_is_unchanged(client: TestClient, practice_topic: str) -> None:
+    """Neither parameter given must be the old behaviour, not a scope over
+    everything that happens to look the same: the response body carries the
+    same keys and no trace of the new parameters."""
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        _insert_objective(conn, "obj-plain", domain="D1")
+        _insert_question(conn, "q-plain", "obj-plain")
+        conn.commit()
+
+    response = client.get(f"/topics/{practice_topic}/practice/next")
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body.keys()) == {"topic_id", "objective_id", "question_id", "stem", "options"}
+    assert body["objective_id"] == "obj-plain"
+
+
+@pytest.mark.edge
+def test_scope_matching_no_objective_fails_with_its_own_404(
+    client: TestClient, practice_topic: str
+) -> None:
+    """An empty scope is its own failure, and says so.
+
+    "There is no such domain" and "that domain has nothing to study right
+    now" are different answers, and a UI that shows the same message for
+    both would send someone looking for material they already have.
+    """
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        _insert_objective(conn, "obj-d1", domain="D1")
+        _insert_question(conn, "q-d1", "obj-d1")
+        conn.commit()
+
+    unknown_domain = client.get(
+        f"/topics/{practice_topic}/practice/next", params={"domain": "D9"}
+    )
+    assert unknown_domain.status_code == 404
+    assert unknown_domain.json()["detail"] == (
+        f"topic {practice_topic} has no objective matching domain D9"
+    )
+
+    unknown_objective = client.get(
+        f"/topics/{practice_topic}/practice/next", params={"objective_id": "obj-ghost"}
+    )
+    assert unknown_objective.status_code == 404
+    assert unknown_objective.json()["detail"] == (
+        f"topic {practice_topic} has no objective matching objective obj-ghost"
+    )
+
+
+@pytest.mark.edge
+def test_scope_without_a_stored_question_fails_with_its_own_404(
+    client: TestClient, practice_topic: str
+) -> None:
+    """The scope exists and is due, but nothing in it has a question. The
+    detail names the scope, so it cannot be read as the whole topic being
+    out of questions -- another domain may be perfectly practisable."""
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        _insert_objective(conn, "obj-d4-mute", domain="D4")
+        _insert_objective(conn, "obj-d1-covered", domain="D1")
+        now = datetime.now(timezone.utc)
+        _insert_attempt(conn, "obj-d4-mute", now - timedelta(days=5), correct=False)
+        _insert_attempt(conn, "obj-d1-covered", now - timedelta(days=5), correct=False)
+        _insert_question(conn, "q-d1-covered", "obj-d1-covered")
+        conn.commit()
+
+    scoped = client.get(f"/topics/{practice_topic}/practice/next", params={"domain": "D4"})
+    assert scoped.status_code == 404
+    assert scoped.json()["detail"] == (
+        f"topic {practice_topic} has no question for any due or unstarted "
+        f"objective matching domain D4: obj-d4-mute"
+    )
+
+    # The same topic, unscoped, still has something to practise: the scoped
+    # 404 was about the scope, not about the topic.
+    unscoped = client.get(f"/topics/{practice_topic}/practice/next")
+    assert unscoped.status_code == 200
+    assert unscoped.json()["objective_id"] == "obj-d1-covered"
+
+
+@pytest.mark.edge
+def test_scope_with_nothing_due_or_unstarted_says_so(
+    client: TestClient, practice_topic: str
+) -> None:
+    """Caught up inside a scope: the objective exists and has a question,
+    but it was just answered, so it is neither due nor unstarted."""
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        _insert_objective(conn, "obj-d5-fresh", domain="D5")
+        _insert_question(conn, "q-d5-fresh", "obj-d5-fresh")
+        _insert_attempt(conn, "obj-d5-fresh", datetime.now(timezone.utc), correct=True)
+        conn.commit()
+
+    response = client.get(f"/topics/{practice_topic}/practice/next", params={"domain": "D5"})
+    assert response.status_code == 404
+    assert response.json()["detail"] == (
+        f"nothing to study in topic {practice_topic} matching domain D5: "
+        "no objective is due or unstarted"
+    )
+
+
+@pytest.mark.edge
+def test_both_scope_parameters_are_rejected(client: TestClient, practice_topic: str) -> None:
+    """``objective_id`` would always win over ``domain``; a caller sending a
+    pair that disagrees has a bug, and hiding it under a precedence rule
+    would make the endpoint answer a question nobody asked."""
+    response = client.get(
+        f"/topics/{practice_topic}/practice/next",
+        params={"domain": "D1", "objective_id": "obj-anything"},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "scope is either domain or objective_id, not both"
+
+
+@pytest.mark.spec
+def test_topic_detail_says_which_objectives_have_questions(
+    client: TestClient, practice_topic: str
+) -> None:
+    """So the practice tree can disable the un-practisable rows instead of
+    letting someone click into a 404 (issue #48). Only a fraction of this
+    repo's objectives have stored questions, so this is the normal state,
+    not an edge case."""
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        _insert_objective(conn, "obj-covered", domain="D1")
+        _insert_objective(conn, "obj-bare", domain="D1")
+        _insert_question(conn, "q-covered", "obj-covered")
+        conn.commit()
+
+    response = client.get(f"/topics/{practice_topic}")
+    assert response.status_code == 200
+    has_questions = {
+        objective["objective_id"]: objective["has_questions"]
+        for objective in response.json()["objectives"]
+    }
+    assert has_questions == {"obj-bare": False, "obj-covered": True}
 
 
 @pytest.mark.spec

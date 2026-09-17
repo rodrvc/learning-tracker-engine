@@ -9,7 +9,9 @@ into ``resources.tracker_for(topic_id)``.
 next is decided entirely by ``LearningTracker.get_due`` (most overdue first)
 and, when nothing is due, ``LearningTracker.get_unstarted``. This router only
 picks a question for the objective the engine names; it never ranks
-objectives itself (SPEC section 9.4, section 5.2).
+objectives itself (SPEC section 9.4, section 5.2). A scope (``domain``,
+``objective_id``) narrows *which* candidates are considered, never the order
+they come in: the engine's list is filtered, never rebuilt or re-sorted.
 
 **The solution never reaches the browser before the question is answered.**
 ``NextQuestionOut`` carries no ``correct_key`` and no ``explanation`` on
@@ -21,7 +23,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import Enum
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from content.errors import UnknownQuestionError
@@ -148,9 +150,55 @@ def _pick_question(questions: list[Question], total_attempts: int) -> Question:
     return questions[total_attempts % len(questions)]
 
 
+def _describe_scope(domain: str | None, objective_id: str | None) -> str | None:
+    """How a scope is named in a 404 detail, or ``None`` when unscoped.
+
+    The wording is part of the contract: ``webui/js/format.js`` tells the
+    practice view's empty states apart by matching on these details (see
+    ``tests/test_web.py``, where the unscoped three are pinned verbatim).
+    Every scoped detail is built from this one function so that the scope
+    reads the same way in all three of them, and so that a reword touches
+    one place rather than three.
+    """
+    if objective_id is not None:
+        return f"objective {objective_id}"
+    if domain is not None:
+        return f"domain {domain}"
+    return None
+
+
+def _objectives_in_scope(
+    resources: Resources, topic_id: str, domain: str | None, objective_id: str | None
+) -> set[str]:
+    """The objective ids a scope selects, read from the topic's own objectives.
+
+    ``domain`` is free text on the objective (SPEC section 1.2), so it is
+    matched exactly and never normalised: a case-folding or trimming rule
+    invented here would be a second meaning of "same domain", living in the
+    web layer, that nothing else in the system shares.
+
+    The comparison is against the *stored* objectives rather than against
+    the states the engine returned, because a scope that matches no
+    objective at all and a scope whose objectives are simply neither due nor
+    unstarted are different answers to the caller, and only the profile can
+    tell them apart.
+    """
+    profile = resources.profiles.get_profile(topic_id)
+    if objective_id is not None:
+        return {objective_id} if objective_id in profile.objectives else set()
+    return {
+        candidate.objective_id
+        for candidate in profile.objectives.values()
+        if candidate.domain == domain
+    }
+
+
 @router.get("/next", response_model=NextQuestionOut)
 def next_question(
-    topic_id: str, resources: Resources = Depends(get_resources)
+    topic_id: str,
+    domain: str | None = Query(default=None),
+    objective_id: str | None = Query(default=None),
+    resources: Resources = Depends(get_resources),
 ) -> NextQuestionOut:
     """Picks the objective the engine says is most urgent, then a question for it.
 
@@ -168,7 +216,29 @@ def next_question(
     A topic the engine has nothing to say about, or one where *no* due or
     unstarted objective has a question, fails with a named 404 rather than
     an empty success that would look like there is nothing left to study.
+
+    **Scope (issue #48).** ``domain`` or ``objective_id`` narrow the walk to
+    the objectives the caller asked for -- the practice tab lets a row of
+    the topic tree be selected, and that selection has to reach the engine.
+    The narrowing is a filter over the list the engine already ordered, so
+    the priority inside a scope is the engine's unchanged: due first, most
+    overdue first, then unstarted. It is deliberately not a call to
+    ``get_due`` on some subset, and deliberately not a client-side pick:
+    either would be a second copy of SPEC section 5.2 free to drift from the
+    first, which is the divergence the engine exists to prevent (there is a
+    note about this in ``webui/js/views/progress.js``).
+
+    Giving both parameters is a 400, not a silent precedence rule:
+    ``objective_id`` would always win, and a caller who sent a ``domain``
+    that disagrees with it has a bug this endpoint should not hide.
+    Neither parameter given is the unscoped behaviour, unchanged down to the
+    wording of its 404s.
     """
+    if domain is not None and objective_id is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="scope is either domain or objective_id, not both",
+        )
     tracker = resources.tracker_for(topic_id)
     moment = resources.clock.now()
     try:
@@ -176,6 +246,20 @@ def next_question(
         unstarted = tracker.get_unstarted(moment)
     except UnknownProfileError as exc:
         raise HTTPException(status_code=404, detail=f"unknown topic: {topic_id}") from exc
+
+    scope = _describe_scope(domain, objective_id)
+    if scope is not None:
+        # Filtering here, after the engine produced the order, is the whole
+        # point: ``in_scope`` is a membership test, so the surviving states
+        # keep the relative order ``get_due``/``get_unstarted`` gave them.
+        in_scope = _objectives_in_scope(resources, topic_id, domain, objective_id)
+        if not in_scope:
+            raise HTTPException(
+                status_code=404,
+                detail=f"topic {topic_id} has no objective matching {scope}",
+            )
+        due = [state for state in due if state.objective_id in in_scope]
+        unstarted = [state for state in unstarted if state.objective_id in in_scope]
 
     for state in (*due, *unstarted):
         questions = _questions_for(resources, topic_id, state.objective_id)
@@ -189,18 +273,26 @@ def next_question(
                 options=[OptionOut(key=key, text=text) for key, text in question.options],
             )
 
+    # The scoped details say the same two things as the unscoped ones, plus
+    # which scope they are about. The unscoped wording is left byte for byte
+    # as it was: it is pinned in ``tests/test_web.py`` because the web UI
+    # parses it.
+    suffix = "" if scope is None else f" matching {scope}"
     if due or unstarted:
         candidates = ", ".join(s.objective_id for s in (*due, *unstarted))
         raise HTTPException(
             status_code=404,
             detail=(
                 f"topic {topic_id} has no question for any due or unstarted "
-                f"objective: {candidates}"
+                f"objective{suffix}: {candidates}"
             ),
         )
     raise HTTPException(
         status_code=404,
-        detail=f"nothing to study in topic {topic_id}: no objective is due or unstarted",
+        detail=(
+            f"nothing to study in topic {topic_id}{suffix}: "
+            "no objective is due or unstarted"
+        ),
     )
 
 
