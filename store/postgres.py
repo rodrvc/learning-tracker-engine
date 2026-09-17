@@ -304,7 +304,8 @@ class PostgresProfileStore:
         try:
             with self._connect() as conn:
                 row = conn.execute(
-                    f"SELECT name FROM {self._schema}.profiles WHERE profile_id = %s",
+                    f"""SELECT name, archived FROM {self._schema}.profiles
+                        WHERE profile_id = %s""",
                     (profile_id,),
                 ).fetchone()
                 if row is None:
@@ -319,7 +320,9 @@ class PostgresProfileStore:
         except psycopg.Error as exc:
             raise StorageError(f"no se pudo leer el perfil: {exc}") from exc
         objectives = {r[0]: _row_to_objective(r) for r in rows}
-        return Profile(profile_id=profile_id, name=row[0], objectives=objectives)
+        return Profile(
+            profile_id=profile_id, name=row[0], objectives=objectives, archived=row[1]
+        )
 
     def save_profile(self, profile: Profile) -> Profile:
         """Replaces the whole profile: an omitted objective disappears (guarantee 7)."""
@@ -328,11 +331,12 @@ class PostgresProfileStore:
             with self._connect() as conn:
                 conn.execute(
                     f"""
-                    INSERT INTO {self._schema}.profiles (profile_id, name)
-                    VALUES (%s, %s)
-                    ON CONFLICT (profile_id) DO UPDATE SET name = EXCLUDED.name
+                    INSERT INTO {self._schema}.profiles (profile_id, name, archived)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (profile_id) DO UPDATE SET
+                        name = EXCLUDED.name, archived = EXCLUDED.archived
                     """,
-                    (profile.profile_id, profile.name),
+                    (profile.profile_id, profile.name, profile.archived),
                 )
                 conn.execute(
                     f"DELETE FROM {self._schema}.objectives WHERE profile_id = %s",
@@ -359,7 +363,7 @@ class PostgresProfileStore:
         return profile
 
     def list_profiles(self) -> list[Profile]:
-        """Every profile, sorted by ``profile_id``.
+        """Every profile, archived ones included, sorted by ``profile_id``.
 
         One connection, two statements: the profiles and every objective of
         every profile, joined in Python. Looping ``get_profile`` per row would
@@ -369,7 +373,8 @@ class PostgresProfileStore:
         try:
             with self._connect() as conn:
                 profile_rows = conn.execute(
-                    f"SELECT profile_id, name FROM {self._schema}.profiles ORDER BY profile_id"
+                    f"""SELECT profile_id, name, archived FROM {self._schema}.profiles
+                        ORDER BY profile_id"""
                 ).fetchall()
                 objective_rows = conn.execute(
                     f"""SELECT profile_id, objective_id, title, domain, weight, tags
@@ -384,10 +389,39 @@ class PostgresProfileStore:
             by_id[objective.objective_id] = objective
         return [
             Profile(
-                profile_id=pid, name=name, objectives=objectives_by_profile.get(pid, {})
+                profile_id=pid,
+                name=name,
+                objectives=objectives_by_profile.get(pid, {}),
+                archived=archived,
             )
-            for pid, name in profile_rows
+            for pid, name, archived in profile_rows
         ]
+
+    def set_archived(self, profile_id: str, archived: bool) -> Profile:
+        """Flips the archived flag and nothing else.
+
+        A single ``UPDATE`` of one column, with ``RETURNING`` to tell a profile
+        that was updated from one that was never there — the alternative, a
+        ``SELECT`` followed by the ``UPDATE``, reports a row deleted between
+        the two as a success. The catalog is read afterwards, by
+        ``get_profile``, only to build the return value: no objective row is
+        written here, which is the whole point of not routing this through
+        ``save_profile``.
+        """
+        try:
+            with self._connect() as conn:
+                row = conn.execute(
+                    f"""UPDATE {self._schema}.profiles SET archived = %s
+                        WHERE profile_id = %s RETURNING profile_id""",
+                    (archived, profile_id),
+                ).fetchone()
+                if row is None:
+                    raise UnknownProfileError(profile_id)
+        except UnknownProfileError:
+            raise
+        except psycopg.Error as exc:
+            raise StorageError(f"no se pudo archivar el perfil: {exc}") from exc
+        return self.get_profile(profile_id)
 
     def get_objective(self, profile_id: str, objective_id: str) -> Objective:
         """One objective of the profile. It fails loudly when missing (SPEC C8)."""

@@ -94,15 +94,29 @@ class Profile:
     influences the state of another. Multi-profile is not a requirement today,
     but that isolation means adding it will not force a redesign.
 
+    ``archived`` is the one field here that is neither an identifier nor a
+    catalog, and it is deliberately **not** progress: nothing in ``core/``
+    reads it, so no computation can change because a profile was archived. It
+    exists because a topic that is no longer being studied still has to keep
+    its history — deleting it would destroy attempts, which the append-only
+    guarantee (SPEC I1) forbids — while disappearing from the list of what is
+    being studied. Note also SPEC C5: the engine never archives anything on
+    its own, however long a topic goes untouched. Archiving is always an
+    explicit human act, recorded here as a fact like any other.
+
     Attributes:
         profile_id: stable identifier. E.g. ``"ai-103"``.
         name: human readable name.
         objectives: objectives indexed by ``objective_id``.
+        archived: whether the topic is put away. It hides the profile from the
+            default listing and nothing else: attempts, objectives and every
+            computed state stay exactly as they were.
     """
 
     profile_id: str
     name: str
     objectives: dict[str, Objective] = field(default_factory=dict)
+    archived: bool = False
 
 
 @dataclass(frozen=True)

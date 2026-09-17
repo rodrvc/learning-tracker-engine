@@ -96,11 +96,23 @@ def test_health_reports_real_storage_state(client: TestClient) -> None:
 def test_create_and_list_topics(client: TestClient) -> None:
     created = client.post("/topics", json={"topic_id": "ai-103", "name": "AI-103"})
     assert created.status_code == 201
-    assert created.json() == {"topic_id": "ai-103", "name": "AI-103", "objective_count": 0}
+    assert created.json() == {
+        "topic_id": "ai-103",
+        "name": "AI-103",
+        "objective_count": 0,
+        "archived": False,
+    }
 
     listing = client.get("/topics")
     assert listing.status_code == 200
-    assert listing.json() == [{"topic_id": "ai-103", "name": "AI-103", "objective_count": 0}]
+    assert listing.json() == [
+        {
+            "topic_id": "ai-103",
+            "name": "AI-103",
+            "objective_count": 0,
+            "archived": False,
+        }
+    ]
 
 
 @pytest.mark.edge
@@ -176,6 +188,80 @@ def _seed_attempt(
 def _iso(at: datetime) -> str:
     """Formats an aware ``datetime`` as the ``...Z`` shape the query params use."""
     return at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+@pytest.mark.spec
+def test_archived_topics_leave_the_default_listing(client: TestClient) -> None:
+    client.post("/topics", json={"topic_id": "ai-103", "name": "AI-103"})
+    client.post("/topics", json={"topic_id": "junk", "name": "Junk"})
+
+    archived = client.put("/topics/junk/archived", json={"archived": True})
+    assert archived.status_code == 200
+    assert archived.json()["archived"] is True
+
+    active = client.get("/topics").json()
+    assert [topic["topic_id"] for topic in active] == ["ai-103"]
+
+    put_away = client.get("/topics?archived=true").json()
+    assert [topic["topic_id"] for topic in put_away] == ["junk"]
+
+
+@pytest.mark.spec
+def test_unarchiving_brings_the_topic_back(client: TestClient) -> None:
+    client.post("/topics", json={"topic_id": "junk", "name": "Junk"})
+    client.put("/topics/junk/archived", json={"archived": True})
+
+    back = client.put("/topics/junk/archived", json={"archived": False})
+    assert back.status_code == 200
+    assert back.json()["archived"] is False
+    assert [t["topic_id"] for t in client.get("/topics").json()] == ["junk"]
+    assert client.get("/topics?archived=true").json() == []
+
+
+@pytest.mark.edge
+def test_archiving_twice_is_idempotent(client: TestClient) -> None:
+    """The body says where the topic should end up, so a retry is harmless.
+
+    A verb-shaped endpoint (``POST /archive``) would have made a retried
+    request after a timeout a toggle, and the second one would have quietly
+    undone the first.
+    """
+    client.post("/topics", json={"topic_id": "junk", "name": "Junk"})
+    first = client.put("/topics/junk/archived", json={"archived": True})
+    second = client.put("/topics/junk/archived", json={"archived": True})
+    assert first.json() == second.json()
+    assert client.get("/topics").json() == []
+
+
+@pytest.mark.invariant
+def test_archiving_keeps_every_attempt_and_objective(client: TestClient) -> None:
+    """I1 turned into a product rule: archiving is not a disguised delete.
+
+    The reason the flag exists at all is that a topic nobody studies any more
+    still owns its evidence. If this ever starts failing, archiving has become
+    a deletion and the history it was supposed to protect is what it destroys.
+    """
+    _seed_objective("ai-103", "D1.1-foo")
+    _seed_attempt("ai-103", "D1.1-foo", "a1", "2020-01-01T00:00:00Z", True)
+    _seed_attempt("ai-103", "D1.1-foo", "a2", "2020-01-02T00:00:00Z", True)
+    before = client.get("/topics/ai-103/objectives/states?as_of=2020-06-01T00:00:00Z")
+
+    client.put("/topics/ai-103/archived", json={"archived": True})
+
+    detail = client.get("/topics/ai-103").json()
+    assert detail["archived"] is True
+    assert [o["objective_id"] for o in detail["objectives"]] == ["D1.1-foo"]
+    after = client.get("/topics/ai-103/objectives/states?as_of=2020-06-01T00:00:00Z")
+    assert after.json() == before.json()
+
+
+@pytest.mark.edge
+def test_archiving_an_unknown_topic_fails_instead_of_silent_success(
+    client: TestClient,
+) -> None:
+    response = client.put("/topics/does-not-exist/archived", json={"archived": True})
+    assert response.status_code == 404
+    assert "does-not-exist" in response.json()["detail"]
 
 
 @pytest.mark.spec

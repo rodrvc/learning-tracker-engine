@@ -9,6 +9,7 @@ the same.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime
 from typing import Iterable
 
@@ -89,8 +90,15 @@ class InMemoryProfileStore:
         return profile
 
     def list_profiles(self) -> list[Profile]:
-        """Every profile, sorted by ``profile_id``."""
+        """Every profile, archived ones included, sorted by ``profile_id``."""
         return [self._profiles[k] for k in sorted(self._profiles)]
+
+    def set_archived(self, profile_id: str, archived: bool) -> Profile:
+        """Flips the archived flag and nothing else."""
+        profile = self.get_profile(profile_id)
+        updated = replace(profile, archived=archived)
+        self._profiles[profile_id] = updated
+        return updated
 
     def get_objective(self, profile_id: str, objective_id: str) -> Objective:
         """One objective of the profile. It fails loudly when missing (SPEC C8)."""
