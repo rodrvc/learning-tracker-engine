@@ -10,6 +10,9 @@ import {
   LEVEL_ORDER,
   levelLabel,
   levelBreakdownView,
+  levelMixView,
+  coverageHeroView,
+  summaryTilesView,
   objectiveRowView,
   dueListView,
   unstartedListView,
@@ -172,4 +175,81 @@ test("describeProgressError does not special-case a 404 with an unrelated messag
   // Closes the same mutant from the other side: with `||`, a 404 status
   // alone would be enough, regardless of what the message actually says.
   assert.equal(describeProgressError({ status: 404, message: "boom" }, { topicId: "ai-103" }), "boom");
+});
+
+// --- The ordinal ladder ------------------------------------------------
+//
+// Colour is the one thing a string test cannot see, so what these pin is the
+// `data-level` hook the stylesheet hangs each rung on, and the label that
+// keeps the meaning from resting on colour at all.
+
+test("every level row carries its own level as a styling hook", () => {
+  const html = levelBreakdownView({ UNASSESSED: 1, WEAK: 2, MASTERED: 3 });
+  for (const level of LEVEL_ORDER) {
+    assert.ok(html.includes(`data-level="${level}"`), `${level} lost its hook`);
+  }
+});
+
+test("a level row names its level in Spanish, so colour is never the only carrier", () => {
+  const html = levelBreakdownView({ MASTERED: 3 });
+  assert.ok(html.includes("Dominado"));
+});
+
+test("levelMixView drops the levels with no objectives instead of painting zero-width segments", () => {
+  const html = levelMixView({ UNASSESSED: 3, WEAK: 0, MASTERED: 1 }, 4);
+  assert.ok(html.includes('data-level="UNASSESSED"'));
+  assert.ok(html.includes('data-level="MASTERED"'));
+  assert.equal(html.includes('data-level="WEAK"'), false);
+});
+
+test("levelMixView sizes each segment against the response's total, not the sum", () => {
+  // A level this front end has not been taught yet must leave its share
+  // unpainted rather than inflate the others to fill the bar.
+  const html = levelMixView({ WEAK: 5 }, 10);
+  assert.ok(html.includes("width:50.00%"));
+});
+
+test("levelMixView labels the bar for a reader who cannot see the colours", () => {
+  const html = levelMixView({ WEAK: 2, MASTERED: 1 }, 3);
+  assert.ok(html.includes('role="img"'));
+  assert.ok(html.includes("Débil: 2"));
+  assert.ok(html.includes("Dominado: 1"));
+});
+
+test("levelMixView renders nothing for a topic with no objectives", () => {
+  assert.equal(levelMixView({}, 0), "");
+  assert.equal(levelMixView(null, undefined), "");
+});
+
+test("coverageHeroView shows the engine's own coverage as a percentage", () => {
+  const html = coverageHeroView({ coverage: 0.1875, assessed_objectives: 12, total_objectives: 64 });
+  assert.ok(html.includes(">19<"));
+  assert.ok(html.includes("12 de 64"));
+});
+
+test("coverageHeroView reads zero coverage as 0%, never as a blank", () => {
+  const html = coverageHeroView({ coverage: 0, assessed_objectives: 0, total_objectives: 64 });
+  assert.ok(html.includes(">0<"));
+});
+
+test("summaryTilesView copies the response's counts rather than deriving them", () => {
+  const html = summaryTilesView({
+    total_attempts: 118,
+    due_objectives: 8,
+    unstarted_objectives: 52,
+  });
+  for (const value of [">118<", ">8<", ">52<"]) {
+    assert.ok(html.includes(value), `${value} missing`);
+  }
+});
+
+test("summaryTilesView shows a missing count as zero instead of undefined", () => {
+  const html = summaryTilesView({});
+  assert.equal(html.includes("undefined"), false);
+  assert.ok(html.includes(">0<"));
+});
+
+test("objectiveRowView carries its level as a styling hook too", () => {
+  const html = objectiveRowView({ objective_id: "o1", level: "COMPETENT" }, "Title");
+  assert.ok(html.includes('data-level="COMPETENT"'));
 });
