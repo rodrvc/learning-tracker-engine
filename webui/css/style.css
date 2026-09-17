@@ -806,12 +806,12 @@ details[open] > .tree-row::before { transform: rotate(90deg); }
 
 /* --- Pick mode: the practice tab (issue #49) ---------------------------- */
 
-/* The same tree, with one "Elegir" per selectable row. Unselected, it is the
-   system's outlined control in the micro-label register - the theme toggle's
-   own shape, which is what an optional, repeated control looks like here.
-   Selected, it becomes the ink-filled primary: the system already says
-   "this one is chosen" that way, so the marking needs no colour of its own
-   and survives the dark theme, where `--btn-bg` is the accent. */
+/* The same tree, with one "Elegir" per selectable row. Unselected it is the
+   outlined micro-label control the theme toggle already is - what a small,
+   repeated, optional control looks like in this system. Selected it becomes
+   the ink-filled primary, which is how the system says "this one is
+   chosen", so the marking needs no colour of its own and survives the dark
+   theme, where `--btn-bg` is the accent rather than the ink. */
 .pick {
   flex: none;
   min-height: 0;
@@ -841,10 +841,9 @@ details[open] > .tree-row::before { transform: rotate(90deg); }
 }
 
 /* An objective with no stored question cannot be practised, so it recedes
-   instead of offering a control: its title is mixed further toward the paper
-   and it says why, in the same micro-label register as every other count and
-   level on the screen. Mixed rather than dimmed with `opacity`, so the row's
-   own chip keeps the strength the ladder gave it. */
+   and says why in the micro-label register. Its title is mixed toward the
+   paper rather than the row dimmed with `opacity`, so the chip keeps the
+   strength the rung ladder gave it. */
 .tree-topic[aria-disabled="true"] .tree-topic-title {
   color: color-mix(in srgb, var(--muted) 60%, var(--paper));
 }
@@ -868,9 +867,8 @@ details[open] > .tree-row::before { transform: rotate(90deg); }
 
 /* What is being drilled, kept on screen for the whole session. It takes the
    accent dot the section headings take, which is how this system marks a
-   line as a label rather than as prose - and no arrow glyph anywhere, per
-   the system's own rule, so the way back is a text link that says where it
-   goes. */
+   line as a label rather than as prose. No arrow glyph, per the system's
+   own rule: the way back is a text link that says where it goes. */
 .practice-scope {
   display: flex;
   flex-wrap: wrap;
