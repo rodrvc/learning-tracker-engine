@@ -9,6 +9,11 @@ import {
   describeProgressError,
 } from "../format.js";
 
+// RETIRED by issue #49 and no longer imported: the numbers live in the
+// learning tree, and `#/progress/<id>` redirects there (router.js). Its
+// removal takes its half of format.js and of progress-format.test.mjs with
+// it, which did not fit this PR's diff budget - that is the follow-up.
+//
 // Renders the progress view for one topic (ACU-268): the level breakdown,
 // what is due and what was never practised, each list with one honest way
 // into practising.

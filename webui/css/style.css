@@ -64,3 +64,32 @@ main { padding: var(--gap); max-width: 40rem; margin: 0 auto; }
 .level-row, .progress-item { display: flex; justify-content: space-between; align-items: center; gap: var(--gap); padding: 0.5rem 0.75rem; border: 1px solid var(--border); border-radius: 0.5rem; }
 .progress-item-title { flex: 1; }
 .progress-action { display: inline-block; margin-bottom: 0.5rem; }
+
+/* The Goal > Unit > Topic tree (issue #49). Built on <details>, so the
+   open/closed state is the browser's, not a class to keep in sync. Every
+   colour goes through light-dark() or currentColor: the page declares
+   `color-scheme: light dark` and never picks a theme itself. The bar has a
+   fixed width, because next to a long goal name at 400px a flexible one
+   collapses to a sliver. */
+.tree-goal, .tree-unit { border: 1px solid var(--border); border-radius: 0.5rem; margin-bottom: 0.5rem; }
+.tree-unit { margin: 0.5rem; }
+.tree-row { display: flex; align-items: center; gap: 0.5rem; padding: 0.6rem 0.75rem; cursor: pointer; }
+.tree-name { flex: 1; min-width: 0; }
+.goal-body { padding: 0 0.25rem 0.25rem; }
+.goal-actions { display: flex; gap: var(--gap); padding: 0 0.75rem; }
+.goal-create { margin-top: var(--gap); opacity: 0.8; }
+.goal-create summary { cursor: pointer; padding: 0.4rem 0; }
+.bar { flex: none; width: 4.5rem; height: 0.5rem; border-radius: 0.25rem; background: var(--border); overflow: hidden; }
+.bar-fill { display: block; height: 100%; background: light-dark(#1e7e34, #6fcf97); }
+.bar-count { flex: none; font-size: 0.85rem; opacity: 0.8; font-variant-numeric: tabular-nums; }
+.tree-topics { list-style: none; padding: 0 0.5rem 0.5rem; margin: 0; display: flex; flex-direction: column; gap: 0.35rem; }
+.tree-topic { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; padding: 0.4rem 0.5rem; }
+.tree-topic-title { flex: 1 1 12rem; min-width: 0; font-size: 0.95rem; }
+/* The ladder in its own order: unassessed reads as absent, weak as a
+   warning, mastered as done. */
+.level-chip, .due-marker { flex: none; font-size: 0.75rem; padding: 0.1rem 0.45rem; border-radius: 1rem; border: 1px solid var(--border); }
+.level-chip[data-level="UNASSESSED"] { opacity: 0.6; }
+.level-chip[data-level="WEAK"], .due-marker { color: light-dark(#c0392b, #ff8a80); border-color: currentColor; }
+.level-chip[data-level="LEARNING"] { color: light-dark(#b9770e, #f0b429); }
+.level-chip[data-level="COMPETENT"] { color: light-dark(#1f6feb, #79b8ff); }
+.level-chip[data-level="MASTERED"] { color: light-dark(#1e7e34, #6fcf97); }

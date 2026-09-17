@@ -226,7 +226,7 @@ def next_question(
     ``get_due`` on some subset, and deliberately not a client-side pick:
     either would be a second copy of SPEC section 5.2 free to drift from the
     first, which is the divergence the engine exists to prevent (there is a
-    note about this in ``webui/js/views/progress.js``).
+    note about this in ``webui/js/tree.js``).
 
     Giving both parameters is a 400, not a silent precedence rule:
     ``objective_id`` would always win, and a caller who sent a ``domain``

@@ -106,6 +106,10 @@ export const api = {
   // adds no query parameter of its own that would let this layer pick a
   // date or a threshold in the engine's place.
   getSummary: (topicId) => request(`/topics/${encodeURIComponent(topicId)}/summary`),
+  // Every objective's state in one call: the tree's unit bars and topic
+  // levels are counted off these rows (webui/js/tree.js), never off the
+  // attempts - the engine already decided each level here.
+  getStates: (topicId) => request(`/topics/${encodeURIComponent(topicId)}/objectives/states`),
   getDue: (topicId) => request(`/topics/${encodeURIComponent(topicId)}/objectives/due`),
   getUnstarted: (topicId) =>
     request(`/topics/${encodeURIComponent(topicId)}/objectives/unstarted`),
