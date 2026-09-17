@@ -307,13 +307,13 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* A row is a rule and generous space, not a box. This is the single change
    that makes the screen read as the system rather than as a stack of cards. */
-.topics-list, .objectives-list, .material-list, .progress-list, .level-breakdown {
+.topics-list, .objectives-list, .material-list {
   list-style: none;
   padding: 0;
   margin: 0 0 32px;
 }
 
-.topics-list a, .material-item, .level-row, .progress-item, .objectives-list li {
+.topics-list a, .material-item, .objectives-list li {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
@@ -331,8 +331,6 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .topics-list li:last-child a,
 .material-list li:last-child .material-item,
-.level-breakdown li:last-child,
-.progress-list li:last-child,
 .objectives-list li:last-child {
   border-bottom: 1px solid var(--line);
 }
@@ -354,9 +352,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* Every count, date, source and level is a tracked monospace micro-label. */
 .topics-list a > span:last-child,
-.material-item span:not(:first-child),
-.level-count,
-.progress-item-level {
+.material-item span:not(:first-child) {
   flex: none;
   font: 10px/1.6 var(--mono);
   letter-spacing: 0.1em;
@@ -368,10 +364,6 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .material-item { flex-wrap: wrap; }
 .material-item > span:first-child { flex: 1 1 14rem; }
 
-.level-count, .progress-item-level { color: var(--accent); }
-.level-name, .progress-item-title { font-size: 15px; }
-.progress-item-title { flex: 1; }
-
 .objectives-list li { font-size: 15px; color: var(--muted); }
 
 .empty, .empty-view { color: var(--muted); font-size: 15px; padding: 8px 0; }
@@ -382,7 +374,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* The system's text link: an underline drawn on the line colour that turns
    accent on hover. No arrows. */
-.back-link, .progress-action, .empty-view a, main > a:not([class]) {
+.back-link, .empty-view a {
   display: inline-block;
   font-size: 13px;
   text-decoration: none;
@@ -391,17 +383,9 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   transition: border-color 180ms var(--ease);
 }
 
-.back-link:hover, .progress-action:hover, .empty-view a:hover,
-main > a:not([class]):hover { border-bottom-color: var(--accent); }
+.back-link:hover, .empty-view a:hover { border-bottom-color: var(--accent); }
 
 .back-link { margin-bottom: 28px; color: var(--muted); }
-.progress-action { margin-bottom: 40px; }
-
-/* The topic detail's three actions (material / practice / progress) are the
-   only classless links rendered straight into <main> - see views/topics.js.
-   Reaching them by position keeps this file from touching markup the view
-   tests pin. */
-main > a:not([class]) { margin: 0 24px 40px 0; }
 
 /* --- Material ---------------------------------------------------------- */
 
@@ -543,7 +527,7 @@ main > a:not([class]) { margin: 0 24px 40px 0; }
   .topic-form, .material-form { padding: 20px; }
 }
 
-/* --- Progress: the level ladder -------------------------------------- */
+/* --- The level ladder ------------------------------------------------- */
 
 /* A level is a **state with valence**, not merely a position: weak is bad
    news and mastered is good news, and a single-hue ramp says "further along"
@@ -584,117 +568,6 @@ main > a:not([class]) { margin: 0 24px 40px 0; }
 [data-level="COMPETENT"] { --rung: var(--rung-competent); }
 [data-level="MASTERED"] { --rung: var(--rung-mastered); }
 
-.headline { margin-bottom: 48px; }
-
-/* The hero figure goes in the body sans, not the display face the headings
-   use: at this size a display face reads as a logo rather than as a number. */
-.hero-figure {
-  font-family: "Inter", system-ui, sans-serif;
-  font-size: clamp(3.25rem, 13vw, 4.5rem);
-  font-weight: 600;
-  line-height: 1;
-  letter-spacing: -0.04em;
-  margin: 0 0 8px;
-  color: var(--ink);
-}
-
-.hero-unit { font-size: 0.4em; font-weight: 500; color: var(--muted); margin-left: 4px; }
-
-.hero-label {
-  margin: 0 0 24px;
-  font-size: 14px;
-  color: var(--muted);
-}
-
-/* The stacked bar. The 2px surface gap between segments is what separates
-   them - neighbouring rungs are one step apart, so a gap reads where a
-   stroke would only add noise. */
-.level-mix {
-  display: flex;
-  gap: 2px;
-  height: 10px;
-  margin-bottom: 28px;
-  border-radius: var(--radius);
-  overflow: hidden;
-}
-
-.mix-segment { background: var(--rung); min-width: 2px; }
-
-.tiles {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-}
-
-.tile {
-  flex: 1 1 7rem;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 16px 18px;
-  background: var(--sky);
-  border-radius: var(--radius);
-}
-
-.tile-value {
-  font-size: 1.75rem;
-  font-weight: 600;
-  line-height: 1.1;
-  letter-spacing: -0.03em;
-}
-
-.tile-label {
-  font: 10px/1.6 var(--mono);
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-
-/* The breakdown is the bar's table view: every level, zeros included, with
-   the name always beside the swatch so nothing is carried by colour alone. */
-.level-row { gap: 16px; }
-
-.level-name { display: flex; align-items: center; gap: 10px; flex: none; min-width: 8.5rem; }
-
-.level-name::before {
-  content: "";
-  flex: none;
-  width: 10px;
-  height: 10px;
-  border-radius: 2px;
-  background: var(--rung);
-}
-
-.level-bar {
-  flex: 1;
-  height: 6px;
-  border-radius: 3px;
-  background: var(--sky);
-  overflow: hidden;
-}
-
-.level-bar > span { display: block; height: 100%; background: var(--rung); border-radius: 3px; }
-
-.level-count { color: var(--ink); font-size: 12px; }
-
-/* A due or unstarted row carries its rung as a dot beside the level name, so
-   the two lists read on the same scale as the breakdown above them. */
-.progress-item-level { display: inline-flex; align-items: center; gap: 8px; }
-
-.progress-item-level::before {
-  content: "";
-  flex: none;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--rung);
-}
-
-@media (max-width: 30rem) {
-  .level-name { min-width: 7rem; }
-  .tile { padding: 14px; }
-}
-
 /* --- The theme toggle --------------------------------------------------- */
 
 .theme-toggle {
@@ -720,64 +593,6 @@ main > a:not([class]) { margin: 0 24px 40px 0; }
 /* The toggle takes the `margin-left: auto`, so the nav must give it up or
    both push right and collide. */
 header nav { margin-left: 0; }
-
-/* --- Progress rows: the rung is a badge, not a whisper ------------------ */
-
-/* Every level badge used to be the same muted blue, which made a screen of
-   rows read as one flat block: the thing the screen is *about* - which rung
-   each objective sits on - was the least visible thing on it. The badge now
-   carries its rung as a tint, with the dot and the label on top of it.
-   The tint is a 16% mix into the surface rather than the rung at full
-   strength, so the text above it keeps its own contrast and the colour
-   reads as a state rather than as a block of paint. */
-.progress-item-level {
-  padding: 2px 9px 2px 7px;
-  font-size: 9px;
-  border-radius: var(--radius-full);
-  /* 16% of the rung vanished on the dark ground, where the rung is already
-     close to the surface. 26% plus a hairline of the rung itself holds on
-     both, and the border is what keeps the chip an object rather than a
-     smudge. */
-  background: color-mix(in srgb, var(--rung) 26%, var(--paper));
-  border: 1px solid color-mix(in srgb, var(--rung) 45%, transparent);
-  color: var(--ink);
-}
-
-.progress-item-level::before { width: 5px; height: 5px; }
-
-/* The badge column is fixed so the badges line up down the page - a column
-   of rungs is scannable in a way that badges floating after each title is
-   not - but the title is capped so a short one does not leave a stretch of
-   empty row between it and its badge. */
-/* These two lists are the long ones - 8 due and 52 unstarted here - so the
-   row is set tight: a 72px row for one line of text turned eight objectives
-   into a page of scrolling. The rule, the chip and the measure do the work
-   that height was doing. */
-.progress-item {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 8.5rem;
-  align-items: baseline;
-  gap: 4px 16px;
-  padding: 9px 4px;
-}
-
-.progress-item-title { max-width: 34rem; font-size: 14px; line-height: 1.4; }
-.progress-item-level { justify-self: end; }
-
-/* The two lists sit closer together than a full section gap: they are two
-   halves of one answer ("what now?"), not two unrelated blocks. */
-.progress-list { margin-bottom: 0; }
-
-/* A section heading of its own is enough separation between the two lists;
-   the full 56px section gap left a hole under the last row. */
-.progress-list + *, section:has(.progress-list) { margin-bottom: 32px; }
-
-@media (max-width: 34rem) {
-  /* The badge drops under the title rather than squeezing the title into a
-     column two words wide. */
-  .progress-item { grid-template-columns: minmax(0, 1fr); }
-  .progress-item-level { justify-self: start; }
-}
 
 /* --- The Goal > Unit > Topic tree (issue #49) --------------------------- */
 
