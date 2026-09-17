@@ -1,6 +1,7 @@
 "use strict";
 
 import { authHeaders } from "./auth.js";
+import { scopeQuery } from "./practice-scope.js";
 
 // Single place the API's base URL lives, so moving the front end to its own
 // repository later is a one-line change here, not a hunt through every view.
@@ -94,7 +95,14 @@ export const api = {
     ),
   // No `correct_key`, no `explanation` in the response - the practice
   // endpoint withholds the solution on purpose (see web/routers/practice.py).
-  nextQuestion: (topicId) => request(`/topics/${encodeURIComponent(topicId)}/practice/next`),
+  //
+  // `scope` is the practice tab's selection (issue #49): a unit sends
+  // `?domain=`, a topic `?objective_id=`, and a goal - or no selection at
+  // all - sends neither, which is the unscoped call this has always made.
+  // The query is built by `scopeQuery` rather than here so that "a scope is
+  // one parameter, never both" is a tested rule and not a convention.
+  nextQuestion: (topicId, scope) =>
+    request(`/topics/${encodeURIComponent(topicId)}/practice/next${scopeQuery(scope)}`),
   answerQuestion: (topicId, { question_id, attempt_id, selected_key }) =>
     request(`/topics/${encodeURIComponent(topicId)}/practice/answer`, {
       method: "POST",

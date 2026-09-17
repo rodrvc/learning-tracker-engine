@@ -14,19 +14,26 @@ import { escapeHtml, levelLabel } from "./format.js";
 //   - `"read"` (implemented, the learning tab): every row reports where it
 //     stands - a bar for the goal and each unit, a level and a due marker
 //     for each topic - and nothing is clickable but the triangles.
-//   - `"pick"` (NOT implemented; the practice tab's half of #49): the same
-//     tree, rows selectable at any level, feeding the scoped
-//     `GET /topics/{id}/practice/next?domain=&objective_id=`. It throws
-//     rather than quietly rendering the read one: a tree that looks
-//     selectable and is not is worse than an error.
-// Pick mode is a selection control plus a click delegate, not a rewrite:
-// every row already carries `data-scope` ("goal" | "unit" | "topic") and
-// what that scope needs - `data-topic-id` on the goal, `data-domain` on the
-// unit (absent on the fallback bucket, which has no domain to scope by),
-// `data-objective-id` and `data-has-questions` on the topic. A
-// `has_questions === false` row is the one to render disabled: the practice
-// endpoint skips objectives with no stored question, so offering one would
-// promise what the engine cannot deliver.
+//   - `"pick"` (implemented, the practice tab): the same tree, plus one
+//     "Elegir" button per selectable row, feeding the scoped
+//     `GET /topics/{id}/practice/next?domain=&objective_id=`. Any other
+//     mode still throws rather than quietly rendering the read one: a tree
+//     that looks selectable and is not is worse than an error.
+// Pick mode stayed a selection control plus a click delegate, not a
+// rewrite: every row already carried `data-scope` and what that scope needs
+// - `data-topic-id` on the goal, `data-domain` on the unit (absent on the
+// fallback bucket, which has no domain to scope by), `data-objective-id`
+// and `data-has-questions` on the topic. Which is why the pick button is
+// absent from that bucket and from a `has_questions === false` topic: the
+// practice endpoint skips objectives with no stored question, so offering
+// one would promise what the engine cannot deliver, and the row says "Sin
+// preguntas" instead.
+//
+// The button carries `data-pick` (the kind) and `data-pick-label` (what the
+// selection is called in Spanish, e.g. "D3 - Visión"). Building that label
+// here rather than in the view is deliberate: this file is the one that
+// knows a unit by both its code and its name, which leaves the view thin
+// enough to be a click handler.
 
 // Bare codes say nothing in a tree. These names are read off the objectives
 // each code actually holds in `ai-103-oficial` (D1 is all choose / deploy /
@@ -113,21 +120,42 @@ export function progressBarView(progress) {
     ><span class="bar-count">${escapeHtml(progress.assessed)}/${escapeHtml(progress.total)}</span>`;
 }
 
-export function topicRowView(topic) {
+/** The "Elegir" button, rendered in pick mode on a selectable row only.
+ * `aria-pressed` carries the selected state - exactly one button in the
+ * tree says `true` - which is a radio group written with the control that
+ * already reads as a target on a phone. */
+export function pickView(kind, label) {
+  return `<button type="button" class="pick" data-pick="${escapeHtml(kind)}"
+      data-pick-label="${escapeHtml(label)}" aria-pressed="false">Elegir</button>`;
+}
+
+export function topicRowView(topic, options = {}) {
   const id = `data-objective-id="${escapeHtml(topic.objectiveId)}" data-has-questions="${topic.hasQuestions}"`;
   const chip = `<span class="level-chip" data-level="${escapeHtml(topic.level)}">${escapeHtml(levelLabel(topic.level))}</span>`;
-  return `<li class="tree-topic" data-scope="topic" ${id}>
+  const picking = options.mode === "pick";
+  const pick = !picking
+    ? ""
+    : topic.hasQuestions
+      ? pickView("topic", `${topic.objectiveId} - ${topic.title}`)
+      : '<span class="no-questions">Sin preguntas</span>';
+  // `aria-disabled`, not a hidden row: its level and its due marker are the
+  // reason to go generate questions for it. It just offers no way to
+  // practise it, because the endpoint has nothing to serve.
+  const disabled = picking && !topic.hasQuestions ? ' aria-disabled="true"' : "";
+  return `<li class="tree-topic" data-scope="topic" ${id}${disabled}>
       <span class="tree-topic-title">${escapeHtml(topic.title)}</span>
-      ${chip}${topic.isDue ? '<span class="due-marker">Vencido</span>' : ""}
+      ${chip}${topic.isDue ? '<span class="due-marker">Vencido</span>' : ""}${pick}
     </li>`;
 }
 
-export function unitView(unit) {
+export function unitView(unit, options = {}) {
   const domain = unit.code ? ` data-domain="${escapeHtml(unit.code)}"` : "";
-  const head = `<span class="tree-name">${escapeHtml(unit.name)}</span>${progressBarView(unit.progress)}`;
+  const pick =
+    options.mode === "pick" && unit.code ? pickView("unit", `${unit.code} - ${unit.name}`) : "";
+  const head = `<span class="tree-name">${escapeHtml(unit.name)}</span>${progressBarView(unit.progress)}${pick}`;
   return `<li><details class="tree-unit" data-scope="unit"${domain}>
       <summary class="tree-row">${head}</summary>
-      <ul class="tree-topics">${unit.topics.map(topicRowView).join("")}</ul>
+      <ul class="tree-topics">${unit.topics.map((topic) => topicRowView(topic, options)).join("")}</ul>
     </details></li>`;
 }
 
@@ -137,7 +165,7 @@ export function unitView(unit) {
 export function unitsView(units, options = {}) {
   assertMode(options.mode);
   if (!units.length) return '<p class="empty">Todavía no tiene objetivos.</p>';
-  return `<ul class="tree-units">${units.map(unitView).join("")}</ul>`;
+  return `<ul class="tree-units">${units.map((unit) => unitView(unit, options)).join("")}</ul>`;
 }
 
 /** The goal row, open or closed. `progress` may be null while its summary
@@ -145,7 +173,8 @@ export function unitsView(units, options = {}) {
 export function goalView(model, body, options = {}) {
   assertMode(options.mode);
   const bar = model.progress ? progressBarView(model.progress) : "";
-  const head = `<span class="tree-name">${escapeHtml(model.name)}</span>${bar}`;
+  const pick = options.mode === "pick" ? pickView("goal", model.name) : "";
+  const head = `<span class="tree-name">${escapeHtml(model.name)}</span>${bar}${pick}`;
   return `<details class="tree-goal" data-scope="goal" data-topic-id="${escapeHtml(model.topicId)}"${options.open ? " open" : ""}>
       <summary class="tree-row">${head}</summary>
       <div class="goal-body">${body}</div>
@@ -158,5 +187,7 @@ export function treeView(model, options = {}) {
 }
 
 function assertMode(mode) {
-  if (mode !== undefined && mode !== "read") throw new Error(`tree mode not implemented: ${mode}`);
+  if (mode !== undefined && mode !== "read" && mode !== "pick") {
+    throw new Error(`tree mode not implemented: ${mode}`);
+  }
 }

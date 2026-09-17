@@ -79,9 +79,45 @@ test("every row carries its scope, its identifier and its state", () => {
 });
 
 // An unimplemented mode fails loudly: read-only markup returned for a
-// selectable tree would look like a bug in the practice tab.
+// selectable tree would look like a bug in whatever asked for it.
 test("an unimplemented mode throws instead of rendering the read one", () => {
-  assert.throws(() => treeView(buildTree(topic, states, summary), { mode: "pick" }), /not implemented/);
+  assert.throws(() => treeView(buildTree(topic, states, summary), { mode: "edit" }), /not implemented/);
+});
+
+// --- Pick mode (issue #49, the practice tab) ---
+
+test("pick mode offers one button per selectable row, labelled in Spanish", () => {
+  const html = treeView(buildTree(topic, states, summary), { mode: "pick" });
+  assert.match(html, /data-pick="goal"\s+data-pick-label="AI-103"/);
+  assert.match(html, /data-pick="unit"\s+data-pick-label="D1 - Planificar/);
+  assert.match(html, /data-pick="topic"\s+data-pick-label="D1\.1\.a - Elegir un modelo"/);
+  // Nothing starts selected: the view marks the chosen row itself.
+  assert.doesNotMatch(html, /aria-pressed="true"/);
+});
+
+// The two rows that must not be selectable, for the same reason in both
+// cases: there is nothing behind them to practise.
+test("a topic with no question and the unnamed bucket offer no way to practise them", () => {
+  const html = treeView(buildTree(topic, states, summary), { mode: "pick" });
+  assert.match(html, /data-objective-id="D1\.2\.a" data-has-questions="false" aria-disabled="true"/);
+  assert.match(html, /Sin preguntas/);
+  assert.doesNotMatch(html, /data-pick-label="D1\.2\.a/);
+  assert.doesNotMatch(html, /data-pick-label="null/);
+  // One unit button per named unit (D1, D2), none for "Sin unidad".
+  assert.equal(html.match(/data-pick="unit"/g).length, 2);
+});
+
+// Pick mode adds to the read tree, it does not replace it (what a row says
+// about where it stands is the reason to pick it), and read mode gains
+// nothing from it.
+test("pick mode keeps what read mode shows, and read mode gains no controls", () => {
+  const picked = treeView(buildTree(topic, states, summary), { mode: "pick" });
+  assert.match(picked, /Dominado/);
+  assert.match(picked, /due-marker/);
+  assert.match(picked, /bar-count/);
+  const html = treeView(buildTree(topic, states, summary), { mode: "read" });
+  assert.doesNotMatch(html, /data-pick/);
+  assert.doesNotMatch(html, /Sin preguntas/);
 });
 
 test("a name with markup in it is escaped, not interpolated", () => {

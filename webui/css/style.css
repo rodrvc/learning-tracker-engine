@@ -803,3 +803,111 @@ details[open] > .tree-row::before { transform: rotate(90deg); }
   .goal-body { padding-left: 12px; }
   .tree-row { gap: 10px; }
 }
+
+/* --- Pick mode: the practice tab (issue #49) ---------------------------- */
+
+/* The same tree, with one "Elegir" per selectable row. Unselected it is the
+   outlined micro-label control the theme toggle already is - what a small,
+   repeated, optional control looks like in this system. Selected it becomes
+   the ink-filled primary, which is how the system says "this one is
+   chosen", so the marking needs no colour of its own and survives the dark
+   theme, where `--btn-bg` is the accent rather than the ink. */
+.pick {
+  flex: none;
+  min-height: 0;
+  padding: 6px 13px;
+  font: 10px/1.6 var(--mono);
+  font-weight: 400;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-full);
+}
+
+.pick:hover:not(:disabled) { color: var(--ink); background: var(--sky); border-color: var(--accent); }
+
+.pick[aria-pressed="true"] {
+  color: var(--btn-fg);
+  background: var(--btn-bg);
+  border-color: var(--btn-bg);
+}
+
+.pick[aria-pressed="true"]:hover:not(:disabled) {
+  color: var(--btn-fg);
+  background: var(--btn-bg-hover);
+  border-color: var(--btn-bg-hover);
+}
+
+/* An objective with no stored question cannot be practised, so it recedes
+   and says why in the micro-label register. Its title is mixed toward the
+   paper rather than the row dimmed with `opacity`, so the chip keeps the
+   strength the rung ladder gave it. */
+.tree-topic[aria-disabled="true"] .tree-topic-title {
+  color: color-mix(in srgb, var(--muted) 60%, var(--paper));
+}
+
+.no-questions {
+  flex: none;
+  font: 9px/1.6 var(--mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* The action: the primary button of this screen, full width the way the
+   practice view's own submit is. */
+#practice-start { width: 100%; margin-bottom: 40px; }
+
+.pick-help { margin: -16px 0 24px; font-size: 15px; color: var(--muted); }
+
+/* --- The scope while practising ---------------------------------------- */
+
+/* What is being drilled, kept on screen for the whole session. It takes the
+   accent dot the section headings take, which is how this system marks a
+   line as a label rather than as prose. No arrow glyph, per the system's
+   own rule: the way back is a text link that says where it goes. */
+.practice-scope {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 20px;
+  margin: 0 0 36px;
+}
+
+.practice-scope-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.practice-scope-name::before {
+  content: "";
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+/* A button that is a link: it changes what is on screen without navigating,
+   so it has to be a button for the keyboard and read as the system's text
+   link for the eye. */
+button.back-link {
+  min-height: 0;
+  margin-bottom: 0;
+  padding: 0 0 2px;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+}
+
+button.back-link:hover:not(:disabled) { background: none; border-bottom-color: var(--accent); }

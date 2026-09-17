@@ -5,7 +5,9 @@ import { mountAuth } from "./auth.js";
 import { parseHash, buildHash } from "./router.js";
 import { renderLearning } from "./views/learning.js";
 import { renderMaterial } from "./views/material.js";
-import { renderPractice } from "./views/practice.js";
+// The practice tab is the picker (issue #49); the session it opens lives in
+// views/practice.js and is reached through it, not through a route.
+import { renderPractice } from "./views/practice-picker.js";
 import { initTheme } from "./theme.js";
 
 const content = document.getElementById("view");
