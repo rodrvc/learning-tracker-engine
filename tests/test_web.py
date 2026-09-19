@@ -1521,6 +1521,33 @@ def test_partial_re_registration_merges_instead_of_erasing(
     ]
 
 
+@pytest.mark.invariant
+def test_explicit_null_domain_clears_it_unlike_an_omitted_field(
+    client: TestClient, practice_topic: str
+) -> None:
+    """The one case the "omitted field is merged" rule does not cover: a
+    caller that sends ``"domain": null`` on purpose is asking to clear it,
+    not leaving it unspecified. ``_merge_objective`` tells the two apart via
+    ``model_fields_set``, which includes ``domain`` here because it was
+    sent, just with the value ``None`` -- a future simplification to
+    ``if body.domain is not None`` would look like a harmless cleanup and
+    would silently break exactly this, so it is pinned on its own."""
+    client.post(
+        f"/topics/{practice_topic}/objectives",
+        json={"objectives": [{"objective_id": "ext-clear", "title": "A", "domain": "D1"}]},
+    )
+    response = client.post(
+        f"/topics/{practice_topic}/objectives",
+        json={"objectives": [{"objective_id": "ext-clear", "title": "A", "domain": None}]},
+    )
+    assert response.status_code == 201
+
+    detail = client.get(f"/topics/{practice_topic}")
+    assert detail.json()["objectives"] == [
+        {"objective_id": "ext-clear", "title": "A", "domain": None, "weight": 1.0, "tags": []}
+    ]
+
+
 @pytest.mark.spec
 def test_registering_a_batch_of_new_objectives_writes_all_with_defaults(
     client: TestClient, practice_topic: str
@@ -1656,7 +1683,7 @@ def test_duplicate_external_attempt_id_is_rejected(
     assert second.status_code == 409
     assert second.json()["detail"] == (
         "attempt_id already taken: ext-att-dup "
-        "(attempt_id is unique across every topic, not just this one)"
+        "(attempt_id is unique across every topic and objective, not just this one)"
     )
 
     with psycopg.connect(POSTGRES_DSN) as conn:
