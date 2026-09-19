@@ -1456,3 +1456,290 @@ def test_generation_is_told_the_units_the_goal_already_has(
         f"/topics/{material_topic}/material/{material_id}/generate"
     ).status_code == 200
     assert recording.domains == ("D1", "D2")
+# ============================================================= ingest (ACU-268)
+
+
+@pytest.mark.spec
+def test_register_objectives_adds_them_to_the_topic(client: TestClient, practice_topic: str) -> None:
+    """The route wraps ``ProfileStore.upsert_objectives`` (core/storage.py):
+    a registered objective must show up exactly like one created through
+    material generation, from ``GET /topics/{id}``."""
+    response = client.post(
+        f"/topics/{practice_topic}/objectives",
+        json={
+            "objectives": [
+                {"objective_id": "ext-1", "title": "Free-text writing accuracy"}
+            ]
+        },
+    )
+    assert response.status_code == 201
+    assert response.json() == {"written": 1}
+
+    detail = client.get(f"/topics/{practice_topic}")
+    assert detail.json()["objectives"] == [
+        {
+            "objective_id": "ext-1",
+            "title": "Free-text writing accuracy",
+            "domain": None,
+            "weight": 1.0,
+            "tags": [],
+            # Registration writes no questions: this route is for a source
+            # that brings its own, and asks the engine only to keep score.
+            "has_questions": False,
+        }
+    ]
+
+
+@pytest.mark.invariant
+def test_partial_re_registration_merges_instead_of_erasing(
+    client: TestClient, practice_topic: str
+) -> None:
+    """The bug this pins: ``ObjectiveIn`` gives ``domain``/``weight``/``tags``
+    model defaults, and ``upsert_objectives`` is a full replace at the
+    storage layer (``store/_common.py``, ``store/postgres.py``), not a
+    merge. A source that re-registers only ``objective_id`` and ``title`` on
+    every run -- the safe-to-repeat usage ``register_objectives`` documents
+    -- must not silently strip ``domain``/``weight``/``tags`` from an
+    objective that already had them. ``_merge_objective`` fixes this via
+    ``model_fields_set``. A full resend (every field present) still
+    replaces every field, same as before."""
+    obj = {"objective_id": "ext-2", "title": "Draft", "domain": "D1", "weight": 3.0, "tags": ["x"]}
+    client.post(f"/topics/{practice_topic}/objectives", json={"objectives": [obj]})
+    full = {**obj, "title": "Final", "domain": "D2", "weight": 4.0, "tags": ["y"]}
+    full_resend = client.post(f"/topics/{practice_topic}/objectives", json={"objectives": [full]})
+    partial = {"objective_id": "ext-2", "title": "Final"}
+    partial_resend = client.post(
+        f"/topics/{practice_topic}/objectives", json={"objectives": [partial]}
+    )
+    assert full_resend.status_code == 201
+    assert partial_resend.status_code == 201
+    assert partial_resend.json() == {"written": 1}
+
+    detail = client.get(f"/topics/{practice_topic}")
+    assert detail.json()["objectives"] == [
+        {"objective_id": "ext-2", "title": "Final", "domain": "D2", "weight": 4.0, "tags": ["y"], "has_questions": False}
+    ]
+
+
+@pytest.mark.invariant
+def test_explicit_null_domain_clears_it_unlike_an_omitted_field(
+    client: TestClient, practice_topic: str
+) -> None:
+    """The one case the "omitted field is merged" rule does not cover: a
+    caller that sends ``"domain": null`` on purpose is asking to clear it,
+    not leaving it unspecified. ``_merge_objective`` tells the two apart via
+    ``model_fields_set``, which includes ``domain`` here because it was
+    sent, just with the value ``None`` -- a future simplification to
+    ``if body.domain is not None`` would look like a harmless cleanup and
+    would silently break exactly this, so it is pinned on its own."""
+    client.post(
+        f"/topics/{practice_topic}/objectives",
+        json={"objectives": [{"objective_id": "ext-clear", "title": "A", "domain": "D1"}]},
+    )
+    response = client.post(
+        f"/topics/{practice_topic}/objectives",
+        json={"objectives": [{"objective_id": "ext-clear", "title": "A", "domain": None}]},
+    )
+    assert response.status_code == 201
+
+    detail = client.get(f"/topics/{practice_topic}")
+    assert detail.json()["objectives"] == [
+        {"objective_id": "ext-clear", "title": "A", "domain": None, "weight": 1.0, "tags": [], "has_questions": False}
+    ]
+
+
+@pytest.mark.spec
+def test_registering_a_batch_of_new_objectives_writes_all_with_defaults(
+    client: TestClient, practice_topic: str
+) -> None:
+    """A brand new ``objective_id`` has nothing to merge onto (unlike the
+    partial-resend case above): an omitted field takes ``core.models
+    .Objective``'s own default. And every other test in this module sends a
+    single-element list, which never exercises ``written`` as anything but
+    1 -- a source registers its whole objective set at once."""
+    response = client.post(
+        f"/topics/{practice_topic}/objectives",
+        json={
+            "objectives": [
+                {"objective_id": "batch-1", "title": "One"},
+                {"objective_id": "batch-2", "title": "Two", "domain": "D1"},
+                {"objective_id": "batch-3", "title": "Three", "weight": 2.0},
+            ]
+        },
+    )
+    assert response.status_code == 201
+    assert response.json() == {"written": 3}
+
+    detail = client.get(f"/topics/{practice_topic}")
+    assert detail.json()["objectives"] == [
+        {"objective_id": "batch-1", "title": "One", "domain": None, "weight": 1.0, "tags": [], "has_questions": False},
+        {"objective_id": "batch-2", "title": "Two", "domain": "D1", "weight": 1.0, "tags": [], "has_questions": False},
+        {"objective_id": "batch-3", "title": "Three", "domain": None, "weight": 2.0, "tags": [], "has_questions": False},
+    ]
+
+
+@pytest.mark.edge
+def test_register_objectives_on_unknown_topic_fails(client: TestClient) -> None:
+    response = client.post(
+        "/topics/does-not-exist/objectives",
+        json={"objectives": [{"objective_id": "ext-3", "title": "Anything"}]},
+    )
+    assert response.status_code == 404
+    assert "does-not-exist" in response.json()["detail"]
+
+
+@pytest.mark.spec
+def test_recording_an_external_attempt_moves_the_objectives_state(
+    client: TestClient, practice_topic: str
+) -> None:
+    """The external verdict is taken as given: no question lookup, no
+    server-derived ``correct``. Recording one must move the objective's
+    state exactly as the quiz path does (SPEC section 9.4)."""
+    client.post(
+        f"/topics/{practice_topic}/objectives",
+        json={"objectives": [{"objective_id": "ext-write", "title": "Writing"}]},
+    )
+
+    response = client.post(
+        f"/topics/{practice_topic}/objectives/ext-write/attempts",
+        json={
+            "correct": True,
+            "at": "2024-01-01T12:00:00Z",
+            "kind": "exercise",
+            "note": "graded by the writing module",
+            "attempt_id": "ext-att-1",
+        },
+    )
+    assert response.status_code == 201
+    assert response.json() == {
+        "attempt_id": "ext-att-1",
+        "objective_id": "ext-write",
+        "at": "2024-01-01T12:00:00Z",
+        "correct": True,
+        "kind": "exercise",
+        "confidence": None,
+        "note": "graded by the writing module",
+    }
+
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        row = conn.execute(
+            f"SELECT correct, kind, note FROM {POSTGRES_SCHEMA}.attempts "
+            "WHERE attempt_id = 'ext-att-1'"
+        ).fetchone()
+    assert row == (True, "exercise", "graded by the writing module")
+
+
+@pytest.mark.spec
+def test_recording_an_attempt_out_of_order_is_accepted(
+    client: TestClient, practice_topic: str
+) -> None:
+    """SPEC C4: ``at`` may precede attempts already recorded, sorted by
+    ``at`` and not by write order. This router is the first HTTP caller
+    that lets the client choose ``at`` at all, so nothing pinned this
+    before over HTTP."""
+    client.post(
+        f"/topics/{practice_topic}/objectives",
+        json={"objectives": [{"objective_id": "ext-order", "title": "Writing"}]},
+    )
+    base = {"kind": "exercise"}
+    later = client.post(
+        f"/topics/{practice_topic}/objectives/ext-order/attempts",
+        json={**base, "correct": True, "at": "2024-06-01T00:00:00Z", "attempt_id": "att-later"},
+    )
+    earlier = client.post(
+        f"/topics/{practice_topic}/objectives/ext-order/attempts",
+        json={**base, "correct": False, "at": "2024-01-01T00:00:00Z", "attempt_id": "att-earlier"},
+    )
+    assert later.status_code == 201
+    assert earlier.status_code == 201
+
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        rows = conn.execute(
+            f"SELECT attempt_id FROM {POSTGRES_SCHEMA}.attempts "
+            "WHERE objective_id = 'ext-order' ORDER BY at"
+        ).fetchall()
+    assert [row[0] for row in rows] == ["att-earlier", "att-later"]
+
+
+@pytest.mark.edge
+def test_duplicate_external_attempt_id_is_rejected(
+    client: TestClient, practice_topic: str
+) -> None:
+    """A retried request carries the same ``attempt_id``: it must be
+    rejected with 409, not recorded twice (SPEC C9)."""
+    client.post(
+        f"/topics/{practice_topic}/objectives",
+        json={"objectives": [{"objective_id": "ext-dup", "title": "Writing"}]},
+    )
+    body = {
+        "correct": True,
+        "at": "2024-01-01T12:00:00Z",
+        "kind": "exercise",
+        "attempt_id": "ext-att-dup",
+    }
+    first = client.post(f"/topics/{practice_topic}/objectives/ext-dup/attempts", json=body)
+    second = client.post(f"/topics/{practice_topic}/objectives/ext-dup/attempts", json=body)
+    assert first.status_code == 201
+    assert second.status_code == 409
+    assert second.json()["detail"] == (
+        "attempt_id already taken: ext-att-dup "
+        "(attempt_id is unique across every topic and objective, not just this one)"
+    )
+
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        (count,) = conn.execute(
+            f"SELECT count(*) FROM {POSTGRES_SCHEMA}.attempts WHERE attempt_id = 'ext-att-dup'"
+        ).fetchone()
+    assert count == 1
+
+
+@pytest.mark.edge
+def test_duplicate_attempt_id_across_topics_is_also_rejected(client: TestClient) -> None:
+    """``attempt_id`` is one primary key shared by every topic and objective,
+    not scoped to the topic in the URL. Reusing it for a genuinely different
+    topic and objective must still 409, with a message that says the
+    collision is global -- this verdict was discarded, not saved."""
+    client.post("/topics", json={"topic_id": "t1-dup", "name": "T1"})
+    client.post("/topics", json={"topic_id": "t2-dup", "name": "T2"})
+    client.post("/topics/t1-dup/objectives", json={"objectives": [{"objective_id": "o1", "title": "One"}]})
+    client.post("/topics/t2-dup/objectives", json={"objectives": [{"objective_id": "o2", "title": "Two"}]})
+    first = client.post(
+        "/topics/t1-dup/objectives/o1/attempts",
+        json={"correct": True, "at": "2024-01-01T00:00:00Z", "kind": "exercise", "attempt_id": "shared-id"},
+    )
+    second = client.post(
+        "/topics/t2-dup/objectives/o2/attempts",
+        json={"correct": False, "at": "2024-01-02T00:00:00Z", "kind": "exam_sim", "attempt_id": "shared-id"},
+    )
+    assert first.status_code == 201
+    assert second.status_code == 409
+    assert "unique across every topic" in second.json()["detail"]
+
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        (count,) = conn.execute(
+            f"SELECT count(*) FROM {POSTGRES_SCHEMA}.attempts WHERE attempt_id = 'shared-id'"
+        ).fetchone()
+    assert count == 1
+
+
+@pytest.mark.edge
+def test_recording_an_attempt_for_unknown_objective_fails(
+    client: TestClient, practice_topic: str
+) -> None:
+    """The objective must already exist -- it is never auto-created (SPEC C8)."""
+    response = client.post(
+        f"/topics/{practice_topic}/objectives/does-not-exist/attempts",
+        json={"correct": True, "at": "2024-01-01T12:00:00Z", "kind": "exercise", "attempt_id": "att-unknown"},
+    )
+    assert response.status_code == 404
+    assert "does-not-exist" in response.json()["detail"]
+
+
+@pytest.mark.edge
+def test_recording_an_attempt_on_unknown_topic_fails(client: TestClient) -> None:
+    response = client.post(
+        "/topics/does-not-exist/objectives/ext-1/attempts",
+        json={"correct": True, "at": "2024-01-01T12:00:00Z", "kind": "exercise", "attempt_id": "att-no-topic"},
+    )
+    assert response.status_code == 404
+    assert "does-not-exist" in response.json()["detail"]

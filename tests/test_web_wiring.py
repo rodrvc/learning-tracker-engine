@@ -204,6 +204,31 @@ def test_naive_cut_date_is_422_not_500(dead_settings, path):
     assert response.status_code == 422, (path, response.status_code, response.text)
 
 
+@pytest.mark.edge
+def test_naive_attempt_at_is_422_not_500(dead_settings):
+    """``web.routers.ingest.AttemptIn.at`` must reject a naive value the same
+    way the query-param cut dates above do (SPEC I2, practice.py:85-91).
+
+    This is pure Pydantic body validation: it runs before the endpoint body
+    -- and therefore before any store call -- so it belongs here rather than
+    in ``tests/test_web.py``, whose module fixture skips the whole file
+    without a live Postgres. It is the single guarantee SPEC I2 rests on at
+    this boundary and must not be able to skip silently for lack of a
+    database it never touches.
+    """
+    with TestClient(create_app(dead_settings), raise_server_exceptions=False) as client:
+        response = client.post(
+            "/topics/whatever/objectives/whichever/attempts",
+            json={
+                "correct": True,
+                "at": "2024-01-01T12:00:00",
+                "kind": "exercise",
+                "attempt_id": "att-naive",
+            },
+        )
+    assert response.status_code == 422, (response.status_code, response.text)
+
+
 @pytest.mark.spec
 def test_objective_state_out_matches_the_engine_field_for_field():
     """The response model can neither drop nor add a field of `ObjectiveState`.

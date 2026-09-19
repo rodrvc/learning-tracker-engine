@@ -143,5 +143,13 @@ class ProfileStore(Protocol):
     def upsert_objectives(
         self, profile_id: str, objectives: Iterable[Objective]
     ) -> int:
-        """Adds or updates objectives. Returns how many were written."""
+        """Adds or replaces objectives. Returns how many were written.
+
+        The replace is **total**: every field of an existing
+        ``objective_id`` is overwritten, including a dataclass default for
+        a field the caller left unset -- there is no merge at this layer. A
+        caller accepting a partial payload must merge it onto the stored
+        :class:`Objective` itself first (``web/routers/ingest.py``'s
+        ``_merge_objective``).
+        """
         ...
