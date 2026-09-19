@@ -1517,7 +1517,7 @@ def test_partial_re_registration_merges_instead_of_erasing(
 
     detail = client.get(f"/topics/{practice_topic}")
     assert detail.json()["objectives"] == [
-        {"objective_id": "ext-2", "title": "Final", "domain": "D2", "weight": 4.0, "tags": ["y"]}
+        {"objective_id": "ext-2", "title": "Final", "domain": "D2", "weight": 4.0, "tags": ["y"], "has_questions": False}
     ]
 
 
@@ -1544,7 +1544,7 @@ def test_explicit_null_domain_clears_it_unlike_an_omitted_field(
 
     detail = client.get(f"/topics/{practice_topic}")
     assert detail.json()["objectives"] == [
-        {"objective_id": "ext-clear", "title": "A", "domain": None, "weight": 1.0, "tags": []}
+        {"objective_id": "ext-clear", "title": "A", "domain": None, "weight": 1.0, "tags": [], "has_questions": False}
     ]
 
 
@@ -1572,9 +1572,9 @@ def test_registering_a_batch_of_new_objectives_writes_all_with_defaults(
 
     detail = client.get(f"/topics/{practice_topic}")
     assert detail.json()["objectives"] == [
-        {"objective_id": "batch-1", "title": "One", "domain": None, "weight": 1.0, "tags": []},
-        {"objective_id": "batch-2", "title": "Two", "domain": "D1", "weight": 1.0, "tags": []},
-        {"objective_id": "batch-3", "title": "Three", "domain": None, "weight": 2.0, "tags": []},
+        {"objective_id": "batch-1", "title": "One", "domain": None, "weight": 1.0, "tags": [], "has_questions": False},
+        {"objective_id": "batch-2", "title": "Two", "domain": "D1", "weight": 1.0, "tags": [], "has_questions": False},
+        {"objective_id": "batch-3", "title": "Three", "domain": None, "weight": 2.0, "tags": [], "has_questions": False},
     ]
 
 
