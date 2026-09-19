@@ -236,6 +236,34 @@ nothing to change in an existing integration. This does not partition data by ca
 valid session is only proof that *someone* signed in, still against the one shared set of
 topics (see `SPEC.md`, and the note on `profile_id` in the ACU-278 ticket).
 
+**A source that grades something other than this engine's own quiz bank** — free text, a
+written exercise, a spoken answer, a simulated exam — uses two routes in
+`web/routers/ingest.py` instead of `POST .../practice/answer`:
+
+```
+POST /topics/{topic_id}/objectives
+{"objectives": [{"objective_id": "...", "title": "...", "domain": "...", "weight": 1.0, "tags": [...]}]}
+
+POST /topics/{topic_id}/objectives/{objective_id}/attempts
+{"correct": true, "at": "2024-01-01T12:00:00Z", "kind": "exercise", "confidence": 0.8, "note": "...", "attempt_id": "..."}
+```
+
+Registering objectives is safe to repeat: a later call may send only `objective_id` and
+`title`, and whatever it omits (`domain`, `weight`, `tags`) is merged onto what is already
+stored rather than erased.
+
+**`attempt_id` uniqueness is global**, one primary key shared by the whole engine
+(`store/postgres.py`'s `exists()`: "in any profile"), not scoped to the topic in the URL —
+so **generate it as a UUID**, never as a per-topic or per-session counter. A `409` here
+means that id was already used *somewhere* in the engine: safe to treat as "my retry
+landed" only when it is genuinely your own retry of the same request. If the id was a
+fresh one that happened to collide with an unrelated topic or objective, the verdict was
+**discarded, not saved** — the response detail names the collision as global for exactly
+this reason.
+
+`at` must carry a timezone; a naive value is rejected with `422` rather than assumed to be
+UTC, the same rule `?as_of=` query parameters already follow on the progress routes.
+
 ---
 
 ## What to expect the first few days

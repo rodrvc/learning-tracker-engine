@@ -1491,28 +1491,64 @@ def test_register_objectives_adds_them_to_the_topic(client: TestClient, practice
 
 
 @pytest.mark.invariant
-def test_registering_the_same_objective_twice_is_idempotent(
+def test_partial_re_registration_merges_instead_of_erasing(
     client: TestClient, practice_topic: str
 ) -> None:
-    """``upsert_objectives`` is idempotent by design: registering the same
-    ``objective_id`` again updates it in place rather than erroring or
-    duplicating it."""
-    first = client.post(
-        f"/topics/{practice_topic}/objectives",
-        json={"objectives": [{"objective_id": "ext-2", "title": "Draft"}]},
+    """The bug this pins: ``ObjectiveIn`` gives ``domain``/``weight``/``tags``
+    model defaults, and ``upsert_objectives`` is a full replace at the
+    storage layer (``store/_common.py``, ``store/postgres.py``), not a
+    merge. A source that re-registers only ``objective_id`` and ``title`` on
+    every run -- the safe-to-repeat usage ``register_objectives`` documents
+    -- must not silently strip ``domain``/``weight``/``tags`` from an
+    objective that already had them. ``_merge_objective`` fixes this via
+    ``model_fields_set``. A full resend (every field present) still
+    replaces every field, same as before."""
+    obj = {"objective_id": "ext-2", "title": "Draft", "domain": "D1", "weight": 3.0, "tags": ["x"]}
+    client.post(f"/topics/{practice_topic}/objectives", json={"objectives": [obj]})
+    full = {**obj, "title": "Final", "domain": "D2", "weight": 4.0, "tags": ["y"]}
+    full_resend = client.post(f"/topics/{practice_topic}/objectives", json={"objectives": [full]})
+    partial = {"objective_id": "ext-2", "title": "Final"}
+    partial_resend = client.post(
+        f"/topics/{practice_topic}/objectives", json={"objectives": [partial]}
     )
-    second = client.post(
-        f"/topics/{practice_topic}/objectives",
-        json={"objectives": [{"objective_id": "ext-2", "title": "Final"}]},
-    )
-    assert first.status_code == 201
-    assert second.status_code == 201
-    assert second.json() == {"written": 1}
+    assert full_resend.status_code == 201
+    assert partial_resend.status_code == 201
+    assert partial_resend.json() == {"written": 1}
 
     detail = client.get(f"/topics/{practice_topic}")
-    objectives = detail.json()["objectives"]
-    assert len(objectives) == 1
-    assert objectives[0]["title"] == "Final"
+    assert detail.json()["objectives"] == [
+        {"objective_id": "ext-2", "title": "Final", "domain": "D2", "weight": 4.0, "tags": ["y"]}
+    ]
+
+
+@pytest.mark.spec
+def test_registering_a_batch_of_new_objectives_writes_all_with_defaults(
+    client: TestClient, practice_topic: str
+) -> None:
+    """A brand new ``objective_id`` has nothing to merge onto (unlike the
+    partial-resend case above): an omitted field takes ``core.models
+    .Objective``'s own default. And every other test in this module sends a
+    single-element list, which never exercises ``written`` as anything but
+    1 -- a source registers its whole objective set at once."""
+    response = client.post(
+        f"/topics/{practice_topic}/objectives",
+        json={
+            "objectives": [
+                {"objective_id": "batch-1", "title": "One"},
+                {"objective_id": "batch-2", "title": "Two", "domain": "D1"},
+                {"objective_id": "batch-3", "title": "Three", "weight": 2.0},
+            ]
+        },
+    )
+    assert response.status_code == 201
+    assert response.json() == {"written": 3}
+
+    detail = client.get(f"/topics/{practice_topic}")
+    assert detail.json()["objectives"] == [
+        {"objective_id": "batch-1", "title": "One", "domain": None, "weight": 1.0, "tags": []},
+        {"objective_id": "batch-2", "title": "Two", "domain": "D1", "weight": 1.0, "tags": []},
+        {"objective_id": "batch-3", "title": "Three", "domain": None, "weight": 2.0, "tags": []},
+    ]
 
 
 @pytest.mark.edge
@@ -1554,6 +1590,7 @@ def test_recording_an_external_attempt_moves_the_objectives_state(
         "at": "2024-01-01T12:00:00Z",
         "correct": True,
         "kind": "exercise",
+        "confidence": None,
         "note": "graded by the writing module",
     }
 
@@ -1566,30 +1603,35 @@ def test_recording_an_external_attempt_moves_the_objectives_state(
 
 
 @pytest.mark.spec
-def test_naive_at_is_rejected_with_422(client: TestClient, practice_topic: str) -> None:
-    """``at`` must be aware: a naive value is rejected, never silently
-    assumed to be UTC (practice.py:85-91)."""
+def test_recording_an_attempt_out_of_order_is_accepted(
+    client: TestClient, practice_topic: str
+) -> None:
+    """SPEC C4: ``at`` may precede attempts already recorded, sorted by
+    ``at`` and not by write order. This router is the first HTTP caller
+    that lets the client choose ``at`` at all, so nothing pinned this
+    before over HTTP."""
     client.post(
         f"/topics/{practice_topic}/objectives",
-        json={"objectives": [{"objective_id": "ext-naive", "title": "Writing"}]},
+        json={"objectives": [{"objective_id": "ext-order", "title": "Writing"}]},
     )
-
-    response = client.post(
-        f"/topics/{practice_topic}/objectives/ext-naive/attempts",
-        json={
-            "correct": True,
-            "at": "2024-01-01T12:00:00",
-            "kind": "exercise",
-            "attempt_id": "ext-att-naive",
-        },
+    base = {"kind": "exercise"}
+    later = client.post(
+        f"/topics/{practice_topic}/objectives/ext-order/attempts",
+        json={**base, "correct": True, "at": "2024-06-01T00:00:00Z", "attempt_id": "att-later"},
     )
-    assert response.status_code == 422
+    earlier = client.post(
+        f"/topics/{practice_topic}/objectives/ext-order/attempts",
+        json={**base, "correct": False, "at": "2024-01-01T00:00:00Z", "attempt_id": "att-earlier"},
+    )
+    assert later.status_code == 201
+    assert earlier.status_code == 201
 
     with psycopg.connect(POSTGRES_DSN) as conn:
-        (count,) = conn.execute(
-            f"SELECT count(*) FROM {POSTGRES_SCHEMA}.attempts WHERE attempt_id = 'ext-att-naive'"
-        ).fetchone()
-    assert count == 0
+        rows = conn.execute(
+            f"SELECT attempt_id FROM {POSTGRES_SCHEMA}.attempts "
+            "WHERE objective_id = 'ext-order' ORDER BY at"
+        ).fetchall()
+    assert [row[0] for row in rows] == ["att-earlier", "att-later"]
 
 
 @pytest.mark.edge
@@ -1612,10 +1654,43 @@ def test_duplicate_external_attempt_id_is_rejected(
     second = client.post(f"/topics/{practice_topic}/objectives/ext-dup/attempts", json=body)
     assert first.status_code == 201
     assert second.status_code == 409
+    assert second.json()["detail"] == (
+        "attempt_id already taken: ext-att-dup "
+        "(attempt_id is unique across every topic, not just this one)"
+    )
 
     with psycopg.connect(POSTGRES_DSN) as conn:
         (count,) = conn.execute(
             f"SELECT count(*) FROM {POSTGRES_SCHEMA}.attempts WHERE attempt_id = 'ext-att-dup'"
+        ).fetchone()
+    assert count == 1
+
+
+@pytest.mark.edge
+def test_duplicate_attempt_id_across_topics_is_also_rejected(client: TestClient) -> None:
+    """``attempt_id`` is one primary key shared by every topic and objective,
+    not scoped to the topic in the URL. Reusing it for a genuinely different
+    topic and objective must still 409, with a message that says the
+    collision is global -- this verdict was discarded, not saved."""
+    client.post("/topics", json={"topic_id": "t1-dup", "name": "T1"})
+    client.post("/topics", json={"topic_id": "t2-dup", "name": "T2"})
+    client.post("/topics/t1-dup/objectives", json={"objectives": [{"objective_id": "o1", "title": "One"}]})
+    client.post("/topics/t2-dup/objectives", json={"objectives": [{"objective_id": "o2", "title": "Two"}]})
+    first = client.post(
+        "/topics/t1-dup/objectives/o1/attempts",
+        json={"correct": True, "at": "2024-01-01T00:00:00Z", "kind": "exercise", "attempt_id": "shared-id"},
+    )
+    second = client.post(
+        "/topics/t2-dup/objectives/o2/attempts",
+        json={"correct": False, "at": "2024-01-02T00:00:00Z", "kind": "exam_sim", "attempt_id": "shared-id"},
+    )
+    assert first.status_code == 201
+    assert second.status_code == 409
+    assert "unique across every topic" in second.json()["detail"]
+
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        (count,) = conn.execute(
+            f"SELECT count(*) FROM {POSTGRES_SCHEMA}.attempts WHERE attempt_id = 'shared-id'"
         ).fetchone()
     assert count == 1
 
@@ -1627,12 +1702,7 @@ def test_recording_an_attempt_for_unknown_objective_fails(
     """The objective must already exist -- it is never auto-created (SPEC C8)."""
     response = client.post(
         f"/topics/{practice_topic}/objectives/does-not-exist/attempts",
-        json={
-            "correct": True,
-            "at": "2024-01-01T12:00:00Z",
-            "kind": "exercise",
-            "attempt_id": "ext-att-unknown",
-        },
+        json={"correct": True, "at": "2024-01-01T12:00:00Z", "kind": "exercise", "attempt_id": "att-unknown"},
     )
     assert response.status_code == 404
     assert "does-not-exist" in response.json()["detail"]
@@ -1642,12 +1712,7 @@ def test_recording_an_attempt_for_unknown_objective_fails(
 def test_recording_an_attempt_on_unknown_topic_fails(client: TestClient) -> None:
     response = client.post(
         "/topics/does-not-exist/objectives/ext-1/attempts",
-        json={
-            "correct": True,
-            "at": "2024-01-01T12:00:00Z",
-            "kind": "exercise",
-            "attempt_id": "ext-att-no-topic",
-        },
+        json={"correct": True, "at": "2024-01-01T12:00:00Z", "kind": "exercise", "attempt_id": "att-no-topic"},
     )
     assert response.status_code == 404
     assert "does-not-exist" in response.json()["detail"]

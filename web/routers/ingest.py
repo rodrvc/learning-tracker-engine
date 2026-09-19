@@ -6,24 +6,23 @@ its own multiple-choice quiz bank: ``POST .../practice/answer``
 own store and derives ``correct`` itself by comparing keys. A source that
 grades something else -- free text, a written exercise, a spoken answer, a
 simulated exam -- has no HTTP path in, even though the engine underneath is
-subject-agnostic by design (``INTEGRATION.md``, the CLI's
-``record --correct|--wrong``) and already accepts a caller-supplied verdict.
+subject-agnostic by design (``INTEGRATION.md``) and already accepts a
+caller-supplied verdict via the CLI's ``record --correct|--wrong``.
 
-**Vocabulary**, the same rule as every other router: the product says
-"topic", the engine says "profile" (``core.models.Profile``). Every
-request/response model here says "topic"; every call into ``resources``
-says "profile" or "objective", matching the engine's own words.
+**Vocabulary**, the same rule as every other router: "topic" in every
+request/response model, "profile"/"objective" in every call into
+``resources``, matching the engine's own words.
 
-**Two routes, two engine calls already built for this exact shape:**
+**Two routes:**
 
 * ``POST /topics/{id}/objectives`` wraps ``ProfileStore.upsert_objectives``
-  (``core/storage.py``), idempotent by design: registering the same
-  objective twice is not an error, it updates in place.
+  (``core/storage.py``), idempotent by design. That store call is a full
+  replace, not a merge, so this router merges a partial payload onto what
+  is already stored before calling it -- see ``_merge_objective``.
 * ``POST /topics/{id}/objectives/{objective_id}/attempts`` wraps
-  ``LearningTracker.record_attempt`` (``core/tracker.py``) with exactly the
-  shape an external verdict needs: a caller-supplied ``at`` and
-  ``attempt_id``, and a ``correct`` flag taken as given rather than derived
-  here.
+  ``LearningTracker.record_attempt`` (``core/tracker.py``): a
+  caller-supplied ``at`` and ``attempt_id``, ``correct`` taken as given
+  rather than derived here.
 """
 
 from __future__ import annotations
@@ -31,7 +30,7 @@ from __future__ import annotations
 from enum import Enum
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import AwareDatetime, BaseModel, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 from core.errors import (
     DuplicateAttemptError,
@@ -44,6 +43,19 @@ from core.models import AttemptKind, Objective
 from ..deps import Resources, get_resources
 
 router = APIRouter(prefix="/topics/{topic_id}/objectives", tags=["ingest"])
+
+#: Largest batch accepted in one registration call. ``upsert_objectives``
+#: issues one sequential ``INSERT`` per objective inside a single pooled
+#: connection (``store/postgres.py``): an unbounded batch holds that
+#: connection for the whole loop against ``POOL_MAX_SIZE=10`` (``web/deps
+#: .py``) and a five second checkout timeout -- a self-inflicted 503 for
+#: every other request waiting on the pool.
+MAX_OBJECTIVES_PER_CALL = 500
+
+#: Largest ``attempt_id``/``note`` accepted. Attempts are append-only with
+#: no delete path (SPEC I1): an oversized value here is permanent.
+MAX_ATTEMPT_ID_CHARS = 200
+MAX_NOTE_CHARS = 2_000
 
 
 class AttemptKindName(str, Enum):
@@ -62,19 +74,29 @@ class AttemptKindName(str, Enum):
 class ObjectiveIn(BaseModel):
     """One objective to register. Only ``objective_id`` and ``title`` are
     required (``core.models.Objective``, C-level fields); ``domain``,
-    ``weight`` and ``tags`` are optional exactly as the engine has them."""
+    ``weight`` and ``tags`` are optional exactly as the engine has them.
+    ``extra="forbid"`` fails a stray field loudly instead of discarding it
+    silently. Unset ``domain``/``weight``/``tags`` are **not** the same as
+    sending their default: :func:`_merge_objective` reads
+    ``model_fields_set`` to tell the two apart and merge a partial payload
+    onto what is already stored.
+    """
 
-    objective_id: str = Field(min_length=1)
-    title: str = Field(min_length=1)
-    domain: str | None = None
-    weight: float = 1.0
+    model_config = ConfigDict(extra="forbid")
+
+    objective_id: str = Field(min_length=1, max_length=200)
+    title: str = Field(min_length=1, max_length=500)
+    domain: str | None = Field(default=None, max_length=200)
+    weight: float = Field(default=1.0, ge=0)
     tags: tuple[str, ...] = ()
 
 
 class ObjectivesIn(BaseModel):
     """Body to register objectives on a topic."""
 
-    objectives: list[ObjectiveIn] = Field(min_length=1)
+    model_config = ConfigDict(extra="forbid")
+
+    objectives: list[ObjectiveIn] = Field(min_length=1, max_length=MAX_OBJECTIVES_PER_CALL)
 
 
 class ObjectivesOut(BaseModel):
@@ -88,26 +110,35 @@ class ObjectivesOut(BaseModel):
 class AttemptIn(BaseModel):
     """An external source's verdict on one objective.
 
-    ``correct`` is taken as given: this router never derives it, unlike
-    ``practice.py``'s quiz answer, because the grading already happened
-    outside this engine.
+    ``correct`` is taken as given: unlike ``practice.py``'s quiz answer,
+    this router never derives it -- the grading already happened outside
+    this engine.
 
     ``at`` is caller-supplied and required, typed ``AwareDatetime`` so a
     naive value is rejected with 422 rather than silently assumed to be UTC
-    -- the guard ``practice.py``'s ``AnswerIn`` docstring asks for, applied
-    here because this is the first client that actually supplies its own
-    time (SPEC I2: the engine never fabricates ``at`` itself).
+    -- the guard ``practice.py``'s ``AnswerIn`` docstring asks for (SPEC I2:
+    the engine never fabricates ``at`` itself).
 
-    ``attempt_id`` is caller-supplied, not generated here, so a retried
-    request carries the same id and ``DuplicateAttemptError`` (SPEC C9)
-    rejects the retry instead of recording it twice.
+    ``attempt_id`` is caller-supplied, so a retried request carries the same
+    id and ``DuplicateAttemptError`` (SPEC C9) rejects the retry. It is a
+    single primary key shared by every topic (``store/postgres.py``'s
+    ``exists``, "in any profile"), not scoped to this one -- see
+    ``INTEGRATION.md`` for why it must be a UUID, not a local counter.
+
+    ``confidence`` is exposed here (unlike the quiz answer) because a
+    source grading free text has a self-assessment worth recording
+    (``core.models.Attempt``); ``extra="forbid"`` is what stops any other
+    field vanishing silently if the caller sends it anyway.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     correct: bool
     at: AwareDatetime
     kind: AttemptKindName
-    note: str | None = None
-    attempt_id: str = Field(min_length=1)
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    note: str | None = Field(default=None, max_length=MAX_NOTE_CHARS)
+    attempt_id: str = Field(min_length=1, max_length=MAX_ATTEMPT_ID_CHARS)
 
 
 class AttemptOut(BaseModel):
@@ -118,16 +149,40 @@ class AttemptOut(BaseModel):
     at: AwareDatetime
     correct: bool
     kind: AttemptKindName
+    confidence: float | None
     note: str | None
 
 
-def _to_objective(body: ObjectiveIn) -> Objective:
+def _merge_objective(body: ObjectiveIn, existing: Objective | None) -> Objective:
+    """Builds the ``Objective`` to write, merging onto what is already stored.
+
+    ``upsert_objectives`` (``core/storage.py``, ``store/postgres.py``) is a
+    full replace, not a merge: every column is overwritten with whatever
+    this call passes, including this model's own defaults for a field the
+    caller never sent. Left uncorrected, a source that re-registers only
+    ``objective_id`` and ``title`` on every run -- the safe-to-repeat usage
+    this router documents -- would silently erase ``domain``/``weight``/
+    ``tags`` on an objective that already had them. The store's own
+    contract stays a full replace (correct for a caller that always sends
+    the full record, e.g. material generation); this router is the one
+    that promises a partial payload is safe, so the merge happens here, via
+    ``body.model_fields_set`` -- which fields the client actually sent.
+
+    ``existing`` is ``None`` for a brand new ``objective_id``: nothing to
+    merge onto, so an unsent field takes ``ObjectiveIn``'s own default.
+    """
+    fallback = existing.domain if existing else None
+    domain = body.domain if "domain" in body.model_fields_set else fallback
+    weight = body.weight if "weight" in body.model_fields_set else (
+        existing.weight if existing else 1.0
+    )
+    tags = body.tags if "tags" in body.model_fields_set else (existing.tags if existing else ())
     return Objective(
         objective_id=body.objective_id,
         title=body.title,
-        domain=body.domain,
-        weight=body.weight,
-        tags=body.tags,
+        domain=domain,
+        weight=weight,
+        tags=tags,
     )
 
 
@@ -139,21 +194,24 @@ def register_objectives(
     generation.
 
     404, naming the topic, when it does not exist: ``upsert_objectives``
-    does not create the topic itself, matching how every other route here
-    treats an unknown topic.
+    does not create the topic itself, matching every other route here.
 
-    Idempotent by design (``ProfileStore.upsert_objectives``): calling this
-    twice with the same objectives is not an error, it upserts in place, so
-    a source can register its full objective set on every run without
-    tracking what it already sent.
+    Idempotent and safe to repeat: a caller may send only ``objective_id``
+    and ``title`` on a later call, and an unsent ``domain``/``weight``/
+    ``tags`` is merged onto whatever is already stored rather than erased
+    (:func:`_merge_objective`), so a source can register its full objective
+    set on every run without tracking what it already sent.
     """
     try:
         resources.profiles.get_profile(topic_id)
     except UnknownProfileError as exc:
         raise HTTPException(status_code=404, detail=f"unknown topic: {topic_id}") from exc
-    written = resources.profiles.upsert_objectives(
-        topic_id, [_to_objective(o) for o in body.objectives]
-    )
+    existing = resources.profiles.list_objectives(topic_id)
+    existing_by_id = {objective.objective_id: objective for objective in existing}
+    merged = [
+        _merge_objective(o, existing_by_id.get(o.objective_id)) for o in body.objectives
+    ]
+    written = resources.profiles.upsert_objectives(topic_id, merged)
     return ObjectivesOut(written=written)
 
 
@@ -179,12 +237,24 @@ def record_attempt(
             correct=body.correct,
             at=body.at,
             kind=AttemptKind(body.kind.value),
+            confidence=body.confidence,
             note=body.note,
             attempt_id=body.attempt_id,
         )
     except DuplicateAttemptError as exc:
+        # attempt_id is one primary key shared by every topic and objective
+        # (store/postgres.py's exists(): "in any profile"), not scoped to
+        # this one. A message that says "attempt already recorded" without
+        # qualification reads as "my retry landed, I can stop" -- true only
+        # when the id collided with this exact request. A different caller,
+        # topic or objective reusing the same id is a genuinely new verdict
+        # that was just discarded, and the message must not say it was saved.
         raise HTTPException(
-            status_code=409, detail=f"attempt already recorded: {body.attempt_id}"
+            status_code=409,
+            detail=(
+                f"attempt_id already taken: {body.attempt_id} "
+                "(attempt_id is unique across every topic, not just this one)"
+            ),
         ) from exc
     except (UnknownProfileError, UnknownObjectiveError) as exc:
         raise HTTPException(
@@ -199,6 +269,7 @@ def record_attempt(
         at=attempt.at,
         correct=attempt.correct,
         kind=AttemptKindName(attempt.kind.value),
+        confidence=attempt.confidence,
         note=attempt.note,
     )
 
