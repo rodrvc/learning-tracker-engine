@@ -1456,3 +1456,198 @@ def test_generation_is_told_the_units_the_goal_already_has(
         f"/topics/{material_topic}/material/{material_id}/generate"
     ).status_code == 200
     assert recording.domains == ("D1", "D2")
+# ============================================================= ingest (ACU-268)
+
+
+@pytest.mark.spec
+def test_register_objectives_adds_them_to_the_topic(client: TestClient, practice_topic: str) -> None:
+    """The route wraps ``ProfileStore.upsert_objectives`` (core/storage.py):
+    a registered objective must show up exactly like one created through
+    material generation, from ``GET /topics/{id}``."""
+    response = client.post(
+        f"/topics/{practice_topic}/objectives",
+        json={
+            "objectives": [
+                {"objective_id": "ext-1", "title": "Free-text writing accuracy"}
+            ]
+        },
+    )
+    assert response.status_code == 201
+    assert response.json() == {"written": 1}
+
+    detail = client.get(f"/topics/{practice_topic}")
+    assert detail.json()["objectives"] == [
+        {
+            "objective_id": "ext-1",
+            "title": "Free-text writing accuracy",
+            "domain": None,
+            "weight": 1.0,
+            "tags": [],
+            # Registration writes no questions: this route is for a source
+            # that brings its own, and asks the engine only to keep score.
+            "has_questions": False,
+        }
+    ]
+
+
+@pytest.mark.invariant
+def test_registering_the_same_objective_twice_is_idempotent(
+    client: TestClient, practice_topic: str
+) -> None:
+    """``upsert_objectives`` is idempotent by design: registering the same
+    ``objective_id`` again updates it in place rather than erroring or
+    duplicating it."""
+    first = client.post(
+        f"/topics/{practice_topic}/objectives",
+        json={"objectives": [{"objective_id": "ext-2", "title": "Draft"}]},
+    )
+    second = client.post(
+        f"/topics/{practice_topic}/objectives",
+        json={"objectives": [{"objective_id": "ext-2", "title": "Final"}]},
+    )
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert second.json() == {"written": 1}
+
+    detail = client.get(f"/topics/{practice_topic}")
+    objectives = detail.json()["objectives"]
+    assert len(objectives) == 1
+    assert objectives[0]["title"] == "Final"
+
+
+@pytest.mark.edge
+def test_register_objectives_on_unknown_topic_fails(client: TestClient) -> None:
+    response = client.post(
+        "/topics/does-not-exist/objectives",
+        json={"objectives": [{"objective_id": "ext-3", "title": "Anything"}]},
+    )
+    assert response.status_code == 404
+    assert "does-not-exist" in response.json()["detail"]
+
+
+@pytest.mark.spec
+def test_recording_an_external_attempt_moves_the_objectives_state(
+    client: TestClient, practice_topic: str
+) -> None:
+    """The external verdict is taken as given: no question lookup, no
+    server-derived ``correct``. Recording one must move the objective's
+    state exactly as the quiz path does (SPEC section 9.4)."""
+    client.post(
+        f"/topics/{practice_topic}/objectives",
+        json={"objectives": [{"objective_id": "ext-write", "title": "Writing"}]},
+    )
+
+    response = client.post(
+        f"/topics/{practice_topic}/objectives/ext-write/attempts",
+        json={
+            "correct": True,
+            "at": "2024-01-01T12:00:00Z",
+            "kind": "exercise",
+            "note": "graded by the writing module",
+            "attempt_id": "ext-att-1",
+        },
+    )
+    assert response.status_code == 201
+    assert response.json() == {
+        "attempt_id": "ext-att-1",
+        "objective_id": "ext-write",
+        "at": "2024-01-01T12:00:00Z",
+        "correct": True,
+        "kind": "exercise",
+        "note": "graded by the writing module",
+    }
+
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        row = conn.execute(
+            f"SELECT correct, kind, note FROM {POSTGRES_SCHEMA}.attempts "
+            "WHERE attempt_id = 'ext-att-1'"
+        ).fetchone()
+    assert row == (True, "exercise", "graded by the writing module")
+
+
+@pytest.mark.spec
+def test_naive_at_is_rejected_with_422(client: TestClient, practice_topic: str) -> None:
+    """``at`` must be aware: a naive value is rejected, never silently
+    assumed to be UTC (practice.py:85-91)."""
+    client.post(
+        f"/topics/{practice_topic}/objectives",
+        json={"objectives": [{"objective_id": "ext-naive", "title": "Writing"}]},
+    )
+
+    response = client.post(
+        f"/topics/{practice_topic}/objectives/ext-naive/attempts",
+        json={
+            "correct": True,
+            "at": "2024-01-01T12:00:00",
+            "kind": "exercise",
+            "attempt_id": "ext-att-naive",
+        },
+    )
+    assert response.status_code == 422
+
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        (count,) = conn.execute(
+            f"SELECT count(*) FROM {POSTGRES_SCHEMA}.attempts WHERE attempt_id = 'ext-att-naive'"
+        ).fetchone()
+    assert count == 0
+
+
+@pytest.mark.edge
+def test_duplicate_external_attempt_id_is_rejected(
+    client: TestClient, practice_topic: str
+) -> None:
+    """A retried request carries the same ``attempt_id``: it must be
+    rejected with 409, not recorded twice (SPEC C9)."""
+    client.post(
+        f"/topics/{practice_topic}/objectives",
+        json={"objectives": [{"objective_id": "ext-dup", "title": "Writing"}]},
+    )
+    body = {
+        "correct": True,
+        "at": "2024-01-01T12:00:00Z",
+        "kind": "exercise",
+        "attempt_id": "ext-att-dup",
+    }
+    first = client.post(f"/topics/{practice_topic}/objectives/ext-dup/attempts", json=body)
+    second = client.post(f"/topics/{practice_topic}/objectives/ext-dup/attempts", json=body)
+    assert first.status_code == 201
+    assert second.status_code == 409
+
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        (count,) = conn.execute(
+            f"SELECT count(*) FROM {POSTGRES_SCHEMA}.attempts WHERE attempt_id = 'ext-att-dup'"
+        ).fetchone()
+    assert count == 1
+
+
+@pytest.mark.edge
+def test_recording_an_attempt_for_unknown_objective_fails(
+    client: TestClient, practice_topic: str
+) -> None:
+    """The objective must already exist -- it is never auto-created (SPEC C8)."""
+    response = client.post(
+        f"/topics/{practice_topic}/objectives/does-not-exist/attempts",
+        json={
+            "correct": True,
+            "at": "2024-01-01T12:00:00Z",
+            "kind": "exercise",
+            "attempt_id": "ext-att-unknown",
+        },
+    )
+    assert response.status_code == 404
+    assert "does-not-exist" in response.json()["detail"]
+
+
+@pytest.mark.edge
+def test_recording_an_attempt_on_unknown_topic_fails(client: TestClient) -> None:
+    response = client.post(
+        "/topics/does-not-exist/objectives/ext-1/attempts",
+        json={
+            "correct": True,
+            "at": "2024-01-01T12:00:00Z",
+            "kind": "exercise",
+            "attempt_id": "ext-att-no-topic",
+        },
+    )
+    assert response.status_code == 404
+    assert "does-not-exist" in response.json()["detail"]
