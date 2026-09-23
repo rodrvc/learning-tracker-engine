@@ -16,21 +16,32 @@ material's whole question set atomically. Attempts are evidence of what
 somebody knew at a moment, they are append-only by contract, and the engine
 exposes no way to delete one. A learner who regenerates keeps every recorded
 answer (SPEC I1).
+
+**A coverage run adds, it does not replace.** ``POST .../cover-uncovered`` runs
+the same machinery the other way round: instead of turning one page into
+practice, it takes the objectives with no question and looks for a stored page
+that can close them. It writes with ``add_many`` because the pages it reads
+already carry questions for other objectives, and it reports every objective it
+could not ground a question for instead of filling the gap with an invented one.
+The gap being visible is the point of the endpoint.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Sequence
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
 
-from content.errors import UnknownMaterialError
+from content.errors import ContentError, UnknownMaterialError
 from content.models import Material
 from core.errors import UnknownProfileError
+from core.models import Objective
 from generate.errors import GenerationError, MissingCredentialsError
-from generate.generator import domains_of
+from generate.generator import GenerationResult, domains_of
+from generate.targeting import objectives_without_questions, plan_coverage_run
 
 from ..deps import Resources, get_resources
 
@@ -94,6 +105,56 @@ class GenerationOut(BaseModel):
     questions_written: int
 
 
+#: Pages a coverage run may read by default. One page is one model call and a
+#: few seconds, so an unbounded run over a topic with dozens of pages is a bill
+#: and a request timeout. Overridable per request because how much to spend is
+#: the caller's decision, not this module's.
+DEFAULT_MAX_PAGES = 6
+
+#: Reported for an objective no page of this run was even read for: either no
+#: stored page mentions it - the D3 and D4 case of LEARN #63, where nothing
+#: grounded can be generated until notes exist - or the page budget ran out
+#: first. Worded to claim only what is certain either way.
+_NO_MATERIAL_REASON = "no page read in this run supports it; it probably needs notes of its own"
+
+
+class ObjectiveCoverageOut(BaseModel):
+    """What a coverage run managed for one objective.
+
+    ``questions_written`` counts the questions actually written for this
+    objective, never anything the generator claimed: ``covered`` is
+    ``questions_written > 0`` and nothing else can make it true.
+    """
+
+    objective_id: str
+    title: str
+    domain: str | None
+    covered: bool
+    questions_written: int
+    #: The page the questions came from, or ``None`` when none were written.
+    material_id: str | None
+    #: Why this objective is still uncovered. ``None`` once it is covered.
+    reason: str | None
+
+
+class CoverageRunOut(BaseModel):
+    """The result of one coverage run.
+
+    ``report`` is the feature's output, not a footnote to the counts: a run
+    closing three gaps out of thirteen has told the learner which ten still
+    need notes, and that list is the actionable half of the answer.
+    """
+
+    topic_id: str
+    #: The pages read, in the order they were read.
+    materials_used: list[str]
+    objectives_targeted: int
+    objectives_covered: int
+    objectives_still_uncovered: int
+    questions_written: int
+    report: list[ObjectiveCoverageOut]
+
+
 def _to_summary(material: Material) -> MaterialSummaryOut:
     return MaterialSummaryOut(
         material_id=material.material_id,
@@ -141,6 +202,35 @@ def _owned_material(resources: Resources, topic_id: str, material_id: str) -> Ma
             detail=f"material {material_id} does not belong to topic {topic_id}",
         )
     return material
+
+
+def _generated(
+    resources: Resources,
+    material: Material,
+    objectives: Sequence[Objective],
+    targets: Sequence[Objective] = (),
+) -> GenerationResult:
+    """One generation call, with this router's translation of its failures.
+
+    Shared by both endpoints so they cannot drift into reporting the same
+    failure differently: 503 when no credential is configured (the rest of the
+    application keeps working without one), 502 when the model answered with
+    something unusable.
+    """
+    try:
+        return resources.generator.generate(
+            material,
+            objectives,
+            domains_of(objectives),
+            uncovered_objectives=targets,
+            now=resources.clock,
+        )
+    except MissingCredentialsError as exc:
+        raise HTTPException(
+            status_code=503, detail=f"question generation is not configured: {exc}"
+        ) from exc
+    except GenerationError as exc:
+        raise HTTPException(status_code=502, detail=f"generation failed: {exc}") from exc
 
 
 @router.post("", response_model=MaterialOut, status_code=201)
@@ -197,6 +287,101 @@ def get_material(
     return _to_out(_owned_material(resources, topic_id, material_id))
 
 
+@router.post("/cover-uncovered", response_model=CoverageRunOut)
+def cover_uncovered_objectives(
+    topic_id: str,
+    max_pages: int = Query(DEFAULT_MAX_PAGES, ge=1, le=20),
+    resources: Resources = Depends(get_resources),
+) -> CoverageRunOut:
+    """Generates over the stored material, aimed at the objectives with no
+    question, and reports what it could not reach.
+
+    The per-page endpoint below asks "what practice can this page produce?". This
+    one asks the question a learner actually has: "which of my objectives has no
+    question, and can anything I already uploaded close that?". So the run picks
+    the material itself: the targets are found in storage and ``plan_coverage_run``
+    ranks the pages by how many of them each plausibly supports.
+
+    **Nothing here can fabricate coverage.** Three defences, the third holding
+    even if the first two fail: the generator is told which objectives are
+    uncovered and instructed to report, not answer, the ones this page does not
+    support; ``prompting.build_result`` scopes an aimed run to its targets and
+    derives coverage from the questions it managed to build; and this function
+    counts an objective covered only from the questions it actually wrote for it,
+    with ``add_many`` atomic, so a counted question is a stored one. An objective
+    no page supports therefore comes back in ``report`` with ``covered == False``
+    and a reason.
+
+    Questions are **added**, not swapped in with ``replace_for_material``: the
+    pages this run reads already carry questions for other objectives, and
+    replacing a page's set to close one gap would open several. Attempts, as
+    always, are untouched (SPEC I1).
+    """
+    _require_topic(resources, topic_id)
+    objectives = resources.profiles.list_objectives(topic_id)
+    targets = objectives_without_questions(
+        objectives, resources.questions.list_for_topic(topic_id)
+    )
+    plan = plan_coverage_run(
+        resources.materials.list_for_topic(topic_id), targets, max_pages=max_pages
+    )
+
+    #: objective_id -> (page it was covered from, questions written for it).
+    covered: dict[str, tuple[str, int]] = {}
+    #: objective_id -> why it is still uncovered.
+    reasons: dict[str, str] = {}
+    materials_used: list[str] = []
+
+    for step in plan:
+        remaining = tuple(o for o in step.targets if o.objective_id not in covered)
+        if not remaining:
+            # Closed by an earlier page of this same run: a page is only worth
+            # its model call for the gaps that are still open.
+            continue
+        result = _generated(resources, step.material, objectives, remaining)
+        materials_used.append(step.material.material_id)
+        if result.questions:
+            try:
+                resources.questions.add_many(result.questions)
+            except ContentError as exc:
+                raise HTTPException(
+                    status_code=502, detail=f"could not store the questions: {exc}"
+                ) from exc
+        stated = {entry.objective_id: entry.reason for entry in result.uncovered}
+        for objective in remaining:
+            written = [q for q in result.questions if q.objective_id == objective.objective_id]
+            if written:
+                covered[objective.objective_id] = (step.material.material_id, len(written))
+            else:
+                reasons[objective.objective_id] = stated.get(
+                    objective.objective_id,
+                    f"{step.material.title} does not support this objective",
+                )
+
+    return CoverageRunOut(
+        topic_id=topic_id,
+        materials_used=materials_used,
+        objectives_targeted=len(targets),
+        objectives_covered=len(covered),
+        objectives_still_uncovered=len(targets) - len(covered),
+        questions_written=sum(count for _, count in covered.values()),
+        report=[
+            ObjectiveCoverageOut(
+                objective_id=obj.objective_id,
+                title=obj.title,
+                domain=obj.domain,
+                covered=obj.objective_id in covered,
+                questions_written=covered.get(obj.objective_id, ("", 0))[1],
+                material_id=covered.get(obj.objective_id, (None, 0))[0],
+                reason=reasons.get(obj.objective_id, _NO_MATERIAL_REASON)
+                if obj.objective_id not in covered
+                else None,
+            )
+            for obj in targets
+        ],
+    )
+
+
 @router.post("/{material_id}/generate", response_model=GenerationOut)
 def generate_from_material(
     topic_id: str, material_id: str, resources: Resources = Depends(get_resources)
@@ -225,18 +410,7 @@ def generate_from_material(
     material = _owned_material(resources, topic_id, material_id)
     existing = resources.profiles.list_objectives(topic_id)
 
-    try:
-        result = resources.generator.generate(
-            material, existing, domains_of(existing), now=resources.clock
-        )
-    except MissingCredentialsError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail=f"question generation is not configured: {exc}",
-        ) from exc
-    except GenerationError as exc:
-        raise HTTPException(status_code=502, detail=f"generation failed: {exc}") from exc
-
+    result = _generated(resources, material, existing)
     objectives_written = (
         resources.profiles.upsert_objectives(topic_id, result.objectives)
         if result.objectives
@@ -252,4 +426,4 @@ def generate_from_material(
     )
 
 
-__all__ = ["router", "MAX_BODY_CHARS"]
+__all__ = ["router", "MAX_BODY_CHARS", "DEFAULT_MAX_PAGES"]
