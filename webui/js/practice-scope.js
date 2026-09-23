@@ -12,12 +12,47 @@ import { describePracticeUnavailable } from "./format.js";
 //
 //     { topicId, goalLabel, items: [{ kind: "unit" | "topic", value, label }] }
 //
-// `items` empty is not "nothing selected": it is the goal itself, which
-// means "practise this goal, engine's choice" - exactly the unscoped call
-// this endpoint has always answered. That is why the goal is not an item:
-// an empty selection already says it, and an item for it would be a second
-// spelling of the same request, free to disagree with the first. Only a
-// unit (-> `domain`) and a topic (-> `objective_id`) narrow the walk.
+// `items` empty is not "nothing selected" - `null` is: it is the goal
+// itself, which means "practise this goal, engine's choice", exactly the
+// unscoped call this endpoint has always answered. That is why the goal is
+// not an item: an empty list already says it, and an item for it would be a
+// second spelling of the same request, free to disagree with the first. Only
+// a unit (-> `domain`) and a topic (-> `objective_id`) narrow the walk.
+//
+// **`items` is the coarsest honest description of the set, and the display
+// is derived from it** (issue #71 follow-up). This is the one idea that
+// makes the cascade and the query agree instead of fighting:
+//
+//   - *the display cascades down.* `rowState` asks "is this row covered by
+//     something in `items`?", so the goal ticked (`items: []`) shows every
+//     unit and every objective ticked, and a unit ticked shows its
+//     objectives ticked. A tree of checkboxes means that everywhere else and
+//     it has to mean it here.
+//   - *the request stays as small as it can honestly be.* A ticked goal is
+//     still the empty list, so the query is still no parameters at all - the
+//     unscoped call the engine owns - and not sixteen repeated `domain=`.
+//     Nothing about the cascade reaches `selectionQuery`.
+//
+// A parent is expanded into its children only when one of them is taken
+// out, because that is the only moment the coarse form stops being able to
+// say what is meant: "the whole goal minus D3" is not any `items: []`, it is
+// the four other units. `normalize` puts it back the moment the children are
+// all ticked again, so there is one canonical form per set and a goal whose
+// units are all ticked one by one is the same `items: []` as a goal ticked
+// in one press.
+//
+// Expanding needs the goal's shape, which the caller reads off the tree and
+// passes in:
+//
+//     { units: [{ code, label, objectives: [{ id, label }] }], ungrouped }
+//
+// `objectives` holds only the ones that can be practised - an objective with
+// no stored question has no checkbox and no `objective_id` worth sending.
+// `ungrouped` says the goal also holds objectives filed under no unit at
+// all: they cannot be named by any parameter, so a goal that has them is
+// never collapsed back to `items: []` from its units, and expanding it does
+// lose them. That is the one lossy step here, and it only happens because
+// the person just narrowed the selection themselves.
 //
 // **One goal, never two**, because the endpoint is per topic
 // (`/topics/{id}/practice/next`): ticking a row in another goal starts that
@@ -46,47 +81,161 @@ export function itemFromRow({ kind, domain, objectiveId, label } = {}) {
   return null;
 }
 
-/** Items compare by what they select, not by object reference: the picker
+/** Items compare by what they select, not by object reference: the view
  * re-renders its rows (a goal's units arrive after its first open), so a
  * ticked row has to be found again by value every time. */
 function sameItem(left, right) {
   return Boolean(left) && Boolean(right) && left.kind === right.kind && left.value === right.value;
 }
 
-/**
- * The selection after ticking (or unticking) one row: a new selection out,
- * the old one untouched. Three rules live here and only here:
- *   - the goal row *replaces* the selection with the empty one. "The whole
- *     goal" and "these three units" are contradictory answers to the same
- *     question, and keeping both would send a narrowed query while the
- *     screen claimed the engine was choosing.
- *   - a row in another goal starts that goal's selection (see the header).
- *   - a ticked row is unticked; the last one leaves the empty selection,
- *     never `null`, so the button keeps offering the goal instead of going
- *     dead.
- */
-export function toggleRow(selection, row = {}) {
-  const { topicId, goalLabel } = row;
-  if (!topicId) return selection;
-  if (row.kind === "goal") return emptySelection(topicId, goalLabel);
-  const item = itemFromRow(row);
-  if (!item) return selection;
-  if (!selection || selection.topicId !== topicId) {
-    return { topicId, goalLabel: goalLabel || topicId, items: [item] };
-  }
-  const items = selection.items.some((current) => sameItem(current, item))
-    ? selection.items.filter((current) => !sameItem(current, item))
-    : [...selection.items, item];
-  return { ...selection, items };
+/** The selectable objectives of one unit, as the shape reported them. */
+function objectivesOf(shape, code) {
+  const unit = ((shape && shape.units) || []).find((current) => current.code === code);
+  return (unit && unit.objectives) || [];
 }
 
-/** Whether a row's checkbox is ticked. The goal's is ticked exactly when
- * nothing finer is, which is what makes the two readable as one choice. */
-export function isRowSelected(selection, row = {}) {
-  if (!selection || selection.topicId !== row.topicId) return false;
-  if (row.kind === "goal") return selection.items.length === 0;
-  const item = itemFromRow(row);
-  return Boolean(item) && selection.items.some((current) => sameItem(current, item));
+function hasItem(items, kind, value) {
+  return items.some((item) => item.kind === kind && item.value === value);
+}
+
+/**
+ * How a row's checkbox is drawn: `"on"`, `"off"` or `"partial"`.
+ *
+ * Three states, not two, because a parent whose children are only some of
+ * them ticked is neither: drawn ticked it would claim the ones that are not,
+ * drawn empty it would hide the ones that are. `partial` is the browser's
+ * own `indeterminate`, so the distinction costs no mark of our own.
+ *
+ * Coverage, never identity: a row is on when *anything in `items` covers
+ * it*, which is what makes ticking a goal tick every row underneath without
+ * `items` having to list them.
+ */
+export function rowState(selection, row = {}, shape = {}) {
+  if (!selection || selection.topicId !== row.topicId) return "off";
+  const { items } = selection;
+  // The whole goal: everything under it is covered, at every level.
+  if (!items.length) return "on";
+  // ...and anything narrower leaves the goal itself partly ticked, since a
+  // non-empty list is by definition less than all of it.
+  if (row.kind === "goal") return "partial";
+  if (row.kind === "unit") {
+    if (hasItem(items, "unit", row.domain)) return "on";
+    const ids = objectivesOf(shape, row.domain).map((objective) => objective.id);
+    return ids.some((id) => hasItem(items, "topic", id)) ? "partial" : "off";
+  }
+  if (row.kind === "topic") {
+    // An objective is covered by its own unit as well as by itself. There is
+    // no third state for a leaf: it has nothing underneath to be partly of.
+    return hasItem(items, "unit", row.domain) || hasItem(items, "topic", row.objectiveId)
+      ? "on"
+      : "off";
+  }
+  return "off";
+}
+
+/**
+ * The selection after ticking (or unticking) one row: a new selection out,
+ * the old one untouched. The rules that live here and only here:
+ *   - a row that is fully on goes off, and takes everything under it with
+ *     it. One that is off *or only partly on* goes fully on, children
+ *     included - partial to on is the move every file tree makes, and it
+ *     leaves no way to get stuck halfway.
+ *   - taking a child out of a ticked parent expands that parent into its
+ *     siblings, which is the only way "the whole goal minus D3" can be said
+ *     at all.
+ *   - putting the last child back collapses them into the parent again
+ *     (`normalize`), so one set has one spelling.
+ *   - a row in another goal starts that goal's selection (see the header).
+ *   - unticking the last thing leaves `null`, not the empty list: the empty
+ *     list is the whole goal, and a selection that meant "everything" the
+ *     moment it was emptied would be a trap.
+ */
+export function toggleRow(selection, row = {}, shape = {}) {
+  const { topicId, goalLabel, kind } = row;
+  if (!topicId) return selection;
+  if (kind !== "goal" && !itemFromRow(row)) return selection;
+  const mine = selection && selection.topicId === topicId ? selection : null;
+  const named = { topicId, goalLabel: goalLabel || topicId };
+  const state = rowState(mine, row, shape);
+  // The goal is the only row whose "on" *is* the empty list, so it is the
+  // only one that toggles without expanding or collapsing anything.
+  if (kind === "goal") return state === "on" ? null : { ...named, items: [] };
+  // "Everything" has to become the units it stands for before a child can be
+  // taken out of it.
+  const items = !mine ? [] : mine.items.length ? mine.items : expandGoal(shape);
+  if (state !== "on") {
+    // An empty list out of `normalize` is the goal itself - every unit ended
+    // up ticked - which is the one result that must not be read as "nothing
+    // left", hence the two returns rather than one length test.
+    const next = normalize([...withoutSubtree(items, row, shape), itemFromRow(row)], shape);
+    return { ...named, items: next };
+  }
+  const rest = turnOff(items, row, shape);
+  return rest.length ? { ...named, items: rest } : null;
+}
+
+// The goal as the units it stands for. Objectives filed under no unit are
+// dropped here, because no parameter can name them - see the header.
+function expandGoal(shape) {
+  return ((shape && shape.units) || []).map((unit) => ({
+    kind: "unit",
+    value: unit.code,
+    label: unit.label || unit.code,
+  }));
+}
+
+function expandUnit(shape, code) {
+  return objectivesOf(shape, code).map((objective) => ({
+    kind: "topic",
+    value: objective.id,
+    label: objective.label || objective.id,
+  }));
+}
+
+// What a row about to be ticked makes redundant: its own item, and - for a
+// unit - every one of its objectives. Leaving them in would let the same
+// objectives be named twice and let `normalize` read a unit as complete
+// while its own item was already there.
+function withoutSubtree(items, row, shape) {
+  if (row.kind !== "unit") return items.filter((item) => !sameItem(item, itemFromRow(row)));
+  const ids = objectivesOf(shape, row.domain).map((objective) => objective.id);
+  return items.filter(
+    (item) => item.value !== row.domain && !(item.kind === "topic" && ids.includes(item.value)),
+  );
+}
+
+// Taking one row out of a set that covers it. An objective covered by its
+// unit is the case that has to expand: the unit goes, its other objectives
+// arrive in its place.
+function turnOff(items, row, shape) {
+  if (row.kind === "unit") return withoutSubtree(items, row, shape);
+  const rest = hasItem(items, "unit", row.domain)
+    ? [...items.filter((item) => !(item.kind === "unit" && item.value === row.domain)),
+       ...expandUnit(shape, row.domain)]
+    : items;
+  return rest.filter((item) => !(item.kind === "topic" && item.value === row.objectiveId));
+}
+
+// The coarsest spelling of the same set: every objective of a unit becomes
+// the unit, every unit of the goal becomes the goal. Guarded twice - a shape
+// that reported no unit at all must not collapse to "the whole goal", and
+// neither must a goal that also holds objectives no unit can name.
+function normalize(items, shape) {
+  const units = (shape && shape.units) || [];
+  let next = items;
+  for (const unit of units) {
+    const ids = unit.objectives.map((objective) => objective.id);
+    if (!ids.length || !ids.every((id) => hasItem(next, "topic", id))) continue;
+    next = [
+      ...next.filter((item) => !(item.kind === "topic" && ids.includes(item.value))),
+      { kind: "unit", value: unit.code, label: unit.label || unit.code },
+    ];
+  }
+  const whole =
+    units.length &&
+    !(shape && shape.ungrouped) &&
+    units.every((unit) => hasItem(next, "unit", unit.code));
+  return whole ? [] : next;
 }
 
 /** How many rows narrow the selection. Zero is the goal. */

@@ -810,59 +810,48 @@ details[open] > .tree-row::before { transform: rotate(90deg); }
 
 /* --- The checkbox on a row (issues #49, #62 and #71) -------------------- */
 
-/* One control per selectable row, and one kind of control: the "Elegir"
-   checkbox, on every row, always (issue #71). It wears the outlined
-   micro-label pill the theme toggle wears - what a small, repeated,
-   optional control looks like in this system - so sixty-four of them read as
-   a column of ticks rather than as a column of buttons. Ticked, the pill
-   becomes the ink-filled primary, which is how the system says "this one is
-   chosen", so the marking needs no colour of its own and survives the dark
-   theme, where `--btn-bg` is the accent rather than the ink. */
+/* One control per selectable row, and it is a bare checkbox: no pill, no
+   border and no word. It said "Elegir" until sixty-four rows each saying it
+   turned out to be the same wall of repetition the per-row buttons were,
+   only quieter - the row's own text says what is being ticked, and the box
+   is the one mark in this system that means "choose me".
+
+   Checked, mixed and empty are all the browser's own marks, tinted through
+   the accent token: the system draws in CSS and owns no glyph, and a native
+   box is also what tells a screen reader that several of these may be on at
+   once and that a partly ticked parent is mixed. */
 .pick {
   display: inline-flex;
   flex: none;
+  /* The objective rows align on the baseline, which a lone box has nothing
+     useful to sit on. */
+  align-self: center;
   align-items: center;
-  gap: 7px;
-  min-height: 0;
-  padding: 6px 13px;
-  font: 10px/1.6 var(--mono);
-  font-weight: 400;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--muted);
-  background: none;
-  border: 1px solid var(--line);
+  justify-content: center;
+  /* With the pill gone, this padding is the whole of the target: a thumb's
+     worth of room around a 14px box. The negative margins take it back out
+     of the layout - the reach grows, the row height does not, and the
+     inline one exactly cancels the row's own 4px of padding so nothing
+     leans past the rule. */
+  padding: 11px;
+  margin: -11px -4px -11px 0;
   border-radius: var(--radius-full);
   cursor: pointer;
+  transition: background 180ms var(--ease);
 }
 
-.pick:hover {
-  color: var(--ink);
-  background: var(--sky);
-  border-color: var(--accent);
-}
+/* The row lights up under the pointer already, so the box marks only where
+   the pointer actually is: the accent, well short of full strength, closed
+   into a disc. */
+.pick:hover { background: color-mix(in srgb, var(--accent) 16%, transparent); }
 
-/* The tick itself is the browser's own, tinted through the accent token: the
-   system draws its marks in CSS and owns no glyph, and a native box is also
-   what tells a screen reader that several of these may be on at once. */
 .pick-check {
   flex: none;
-  width: 11px;
-  height: 11px;
+  width: 14px;
+  height: 14px;
   margin: 0;
   accent-color: var(--accent);
-}
-
-.pick:has(.pick-check:checked) {
-  color: var(--btn-fg);
-  background: var(--btn-bg);
-  border-color: var(--btn-bg);
-}
-
-.pick:has(.pick-check:checked):hover {
-  color: var(--btn-fg);
-  background: var(--btn-bg-hover);
-  border-color: var(--btn-bg-hover);
+  cursor: pointer;
 }
 
 /* An objective with no stored question cannot be practised, so it recedes
