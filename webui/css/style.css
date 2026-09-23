@@ -806,14 +806,18 @@ details[open] > .tree-row::before { transform: rotate(90deg); }
 
 /* --- Pick mode: the practice tab (issue #49) ---------------------------- */
 
-/* The same tree, with one "Elegir" per selectable row. Unselected it is the
-   outlined micro-label control the theme toggle already is - what a small,
-   repeated, optional control looks like in this system. Selected it becomes
-   the ink-filled primary, which is how the system says "this one is
+/* The same tree, with one "Elegir" per selectable row - a label around a
+   checkbox since a selection may hold several rows (issue #62). Unticked it
+   is the outlined micro-label control the theme toggle already is - what a
+   small, repeated, optional control looks like in this system. Ticked it
+   becomes the ink-filled primary, which is how the system says "this one is
    chosen", so the marking needs no colour of its own and survives the dark
    theme, where `--btn-bg` is the accent rather than the ink. */
 .pick {
+  display: inline-flex;
   flex: none;
+  align-items: center;
+  gap: 7px;
   min-height: 0;
   padding: 6px 13px;
   font: 10px/1.6 var(--mono);
@@ -824,17 +828,29 @@ details[open] > .tree-row::before { transform: rotate(90deg); }
   background: none;
   border: 1px solid var(--line);
   border-radius: var(--radius-full);
+  cursor: pointer;
 }
 
-.pick:hover:not(:disabled) { color: var(--ink); background: var(--sky); border-color: var(--accent); }
+.pick:hover { color: var(--ink); background: var(--sky); border-color: var(--accent); }
 
-.pick[aria-pressed="true"] {
+/* The tick itself is the browser's own, tinted through the accent token: the
+   system draws its marks in CSS and owns no glyph, and a native box is also
+   what tells a screen reader that several of these may be on at once. */
+.pick-check {
+  flex: none;
+  width: 11px;
+  height: 11px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.pick:has(.pick-check:checked) {
   color: var(--btn-fg);
   background: var(--btn-bg);
   border-color: var(--btn-bg);
 }
 
-.pick[aria-pressed="true"]:hover:not(:disabled) {
+.pick:has(.pick-check:checked):hover {
   color: var(--btn-fg);
   background: var(--btn-bg-hover);
   border-color: var(--btn-bg-hover);

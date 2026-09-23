@@ -150,7 +150,14 @@ def _pick_question(questions: list[Question], total_attempts: int) -> Question:
     return questions[total_attempts % len(questions)]
 
 
-def _describe_scope(domain: str | None, objective_id: str | None) -> str | None:
+def _count_of(noun: str, values: list[str]) -> str | None:
+    """``2 domains``, ``1 objective``, or ``None`` for none of them."""
+    if not values:
+        return None
+    return f"{len(values)} {noun}{'s' if len(values) > 1 else ''}"
+
+
+def _describe_scope(domains: list[str], objective_ids: list[str]) -> str | None:
     """How a scope is named in a 404 detail, or ``None`` when unscoped.
 
     The wording is part of the contract: ``webui/js/format.js`` tells the
@@ -159,18 +166,38 @@ def _describe_scope(domain: str | None, objective_id: str | None) -> str | None:
     Every scoped detail is built from this one function so that the scope
     reads the same way in all three of them, and so that a reword touches
     one place rather than three.
+
+    A selection of exactly one thing keeps the wording it had before
+    selections existed (``domain D1``, ``objective D3.2.a``) down to the
+    byte, because that is the shape the front end's own single-scope
+    messages match on. Anything larger is named by *how many* of each it
+    holds rather than by listing them: a selection may hold sixteen
+    objectives, and a detail that spelled them all out would be a paragraph
+    where a person wanted a reason (issue #62).
     """
-    if objective_id is not None:
-        return f"objective {objective_id}"
-    if domain is not None:
-        return f"domain {domain}"
-    return None
+    if not domains and len(objective_ids) == 1:
+        return f"objective {objective_ids[0]}"
+    if not objective_ids and len(domains) == 1:
+        return f"domain {domains[0]}"
+    parts = [
+        part
+        for part in (_count_of("domain", domains), _count_of("objective", objective_ids))
+        if part is not None
+    ]
+    return " and ".join(parts) if parts else None
 
 
 def _objectives_in_scope(
-    resources: Resources, topic_id: str, domain: str | None, objective_id: str | None
+    resources: Resources, topic_id: str, domains: list[str], objective_ids: list[str]
 ) -> set[str]:
     """The objective ids a scope selects, read from the topic's own objectives.
+
+    A scope is a *set*: the domains and the objective ids the caller sent are
+    resolved independently and unioned, so asking for two units plus one
+    loose objective selects everything those three name, with no precedence
+    between them (issue #62). Union, not intersection: the caller ticked
+    three boxes meaning "any of these", and an intersection of a domain with
+    an objective outside it would answer with nothing at all.
 
     ``domain`` is free text on the objective (SPEC section 1.2), so it is
     matched exactly and never normalised: a case-folding or trimming rule
@@ -184,20 +211,23 @@ def _objectives_in_scope(
     tell them apart.
     """
     profile = resources.profiles.get_profile(topic_id)
-    if objective_id is not None:
-        return {objective_id} if objective_id in profile.objectives else set()
-    return {
+    wanted_domains = set(domains)
+    selected = {
+        objective_id for objective_id in objective_ids if objective_id in profile.objectives
+    }
+    selected |= {
         candidate.objective_id
         for candidate in profile.objectives.values()
-        if candidate.domain == domain
+        if candidate.domain in wanted_domains
     }
+    return selected
 
 
 @router.get("/next", response_model=NextQuestionOut)
 def next_question(
     topic_id: str,
-    domain: str | None = Query(default=None),
-    objective_id: str | None = Query(default=None),
+    domain: list[str] | None = Query(default=None),
+    objective_id: list[str] | None = Query(default=None),
     resources: Resources = Depends(get_resources),
 ) -> NextQuestionOut:
     """Picks the objective the engine says is most urgent, then a question for it.
@@ -217,9 +247,10 @@ def next_question(
     unstarted objective has a question, fails with a named 404 rather than
     an empty success that would look like there is nothing left to study.
 
-    **Scope (issue #48).** ``domain`` or ``objective_id`` narrow the walk to
-    the objectives the caller asked for -- the practice tab lets a row of
-    the topic tree be selected, and that selection has to reach the engine.
+    **Scope (issue #48, widened to a selection in issue #62).** ``domain``
+    and ``objective_id`` narrow the walk to the objectives the caller asked
+    for -- the practice tab lets rows of the topic tree be selected, and
+    that selection has to reach the engine.
     The narrowing is a filter over the list the engine already ordered, so
     the priority inside a scope is the engine's unchanged: due first, most
     overdue first, then unstarted. It is deliberately not a call to
@@ -228,17 +259,23 @@ def next_question(
     first, which is the divergence the engine exists to prevent (there is a
     note about this in ``webui/js/tree.js``).
 
-    Giving both parameters is a 400, not a silent precedence rule:
-    ``objective_id`` would always win, and a caller who sent a ``domain``
-    that disagrees with it has a bug this endpoint should not hide.
-    Neither parameter given is the unscoped behaviour, unchanged down to the
-    wording of its 404s.
+    Both parameters repeat, and they combine: ``?domain=D1&domain=D2`` and
+    ``?domain=D1&objective_id=D3.2.a`` are a single request for the *union*
+    of what they name (``_objectives_in_scope``). Studying rarely lines up
+    with one unit, and the shape stays one a browser can build and a person
+    can read in the address bar -- repeated parameters, not an encoded blob,
+    so a practice session is a URL somebody can keep. This is where issue
+    #48's "either domain or objective_id, not both" 400 went: the pair it
+    rejected was a caller contradicting itself only while a scope was a
+    single thing. With a selection, the pair is the ordinary mixed case the
+    tree produces, and the priority order it resolves to is still the
+    engine's one list, filtered once.
+
+    A selection of one, and no selection at all, behave exactly as they did
+    before this parameter could repeat, down to the wording of the 404s.
     """
-    if domain is not None and objective_id is not None:
-        raise HTTPException(
-            status_code=400,
-            detail="scope is either domain or objective_id, not both",
-        )
+    domains = domain or []
+    objective_ids = objective_id or []
     tracker = resources.tracker_for(topic_id)
     moment = resources.clock.now()
     try:
@@ -247,12 +284,12 @@ def next_question(
     except UnknownProfileError as exc:
         raise HTTPException(status_code=404, detail=f"unknown topic: {topic_id}") from exc
 
-    scope = _describe_scope(domain, objective_id)
+    scope = _describe_scope(domains, objective_ids)
     if scope is not None:
         # Filtering here, after the engine produced the order, is the whole
         # point: ``in_scope`` is a membership test, so the surviving states
         # keep the relative order ``get_due``/``get_unstarted`` gave them.
-        in_scope = _objectives_in_scope(resources, topic_id, domain, objective_id)
+        in_scope = _objectives_in_scope(resources, topic_id, domains, objective_ids)
         if not in_scope:
             raise HTTPException(
                 status_code=404,

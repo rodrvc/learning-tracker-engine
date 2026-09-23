@@ -1,7 +1,7 @@
 "use strict";
 
 import { authHeaders } from "./auth.js";
-import { scopeQuery } from "./practice-scope.js";
+import { selectionQuery } from "./practice-scope.js";
 
 // Single place the API's base URL lives, so moving the front end to its own
 // repository later is a one-line change here, not a hunt through every view.
@@ -96,13 +96,14 @@ export const api = {
   // No `correct_key`, no `explanation` in the response - the practice
   // endpoint withholds the solution on purpose (see web/routers/practice.py).
   //
-  // `scope` is the practice tab's selection (issue #49): a unit sends
-  // `?domain=`, a topic `?objective_id=`, and a goal - or no selection at
-  // all - sends neither, which is the unscoped call this has always made.
-  // The query is built by `scopeQuery` rather than here so that "a scope is
-  // one parameter, never both" is a tested rule and not a convention.
-  nextQuestion: (topicId, scope) =>
-    request(`/topics/${encodeURIComponent(topicId)}/practice/next${scopeQuery(scope)}`),
+  // `selection` is what the practice tab ticked (issue #49, several rows at
+  // once since #62): each unit adds a `domain=`, each objective an
+  // `objective_id=`, repeated, and the goal - or no selection at all - sends
+  // neither, which is the unscoped call this has always made. The query is
+  // built by `selectionQuery` rather than here so that the parameter shape
+  // the endpoint resolves to a union is a tested rule, not a convention.
+  nextQuestion: (topicId, selection) =>
+    request(`/topics/${encodeURIComponent(topicId)}/practice/next${selectionQuery(selection)}`),
   answerQuestion: (topicId, { question_id, attempt_id, selected_key }) =>
     request(`/topics/${encodeURIComponent(topicId)}/practice/answer`, {
       method: "POST",

@@ -2,7 +2,12 @@
 
 import { ApiError } from "../api.js";
 import { buildTree, goalView, summaryProgress, unitsView } from "../tree.js";
-import { practiceButtonLabel, sameScope, scopeFromPick } from "../practice-scope.js";
+import {
+  emptySelection,
+  isRowSelected,
+  practiceButtonLabel,
+  toggleRow,
+} from "../practice-scope.js";
 import { renderPracticeSession } from "./practice.js";
 
 // The practice tab (issue #49): the same tree the learning tab draws, in
@@ -17,8 +22,9 @@ import { renderPracticeSession } from "./practice.js";
 // tabs would have to parameterise by mode, title, actions and empty text.
 //
 // The session replaces this screen inside the same container rather than
-// navigating: a selection is not representable in a hash (see practice.js),
-// so a route would have to forget it.
+// navigating: the hash holds a goal (`#/practice/<id>`) and not the rows
+// ticked inside it, so a route would have to forget the selection (see
+// practice.js).
 export async function renderPractice(container, api, topicId, initialSelection = null) {
   // Handed back in when a session returns here: the picker re-renders from
   // scratch, so the selection travels as a value and is re-marked by
@@ -27,7 +33,7 @@ export async function renderPractice(container, api, topicId, initialSelection =
 
   container.innerHTML = `
     <h2>Practicar</h2>
-    <p class="pick-help">Elegí una meta, una unidad o un objetivo. Sin elegir nada más fino, practicás lo que el motor diga que toca.</p>
+    <p class="pick-help">Marcá las unidades y los objetivos que quieras practicar: podés mezclarlos y elegir varios. Marcando sólo la meta, practicás lo que el motor diga que toca.</p>
     <button type="button" id="practice-start" disabled>${practiceButtonLabel(null)}</button>
     <div id="goals"><p class="empty">Cargando...</p></div>
     <div id="pick-feedback" role="alert"></div>
@@ -41,34 +47,34 @@ export async function renderPractice(container, api, topicId, initialSelection =
     startButton.disabled = !selection;
   }
 
-  // By value, over every button currently in the tree: a goal's units
-  // arrive after its first open, so the selected one may not have existed
-  // when it was picked (it does when the selection is restored on return).
+  // By value, over every checkbox currently in the tree: a goal's units
+  // arrive after its first open, so a ticked row may not have existed when
+  // it was ticked (it does when the selection is restored on return). This
+  // also un-ticks - ticking the goal drops every finer row, and the boxes
+  // have to show that (see `toggleRow`).
   function markSelection() {
-    goals.querySelectorAll(".pick").forEach((button) => {
-      button.setAttribute("aria-pressed", String(sameScope(selection, scopeOf(button))));
+    goals.querySelectorAll(".pick-check").forEach((input) => {
+      input.checked = isRowSelected(selection, rowOf(input));
+      wire(input);
     });
   }
 
-  function select(button) {
-    const scope = scopeOf(button);
-    if (!scope) return;
-    // A second click on the chosen row clears it: with no way to unselect,
-    // the only way back to "the engine picks" would be reloading the tab.
-    selection = sameScope(selection, scope) ? null : scope;
-    markSelection();
-    paintAction();
+  // Per checkbox, not delegated on `goals`, for one reason: these sit inside
+  // a `<summary>`, and a delegated listener on an ancestor only runs after
+  // the summary has already folded its row shut. A listener on the input
+  // itself runs first, so stopping the click there keeps the fold from
+  // happening at all - the same job the old button's `preventDefault` did,
+  // which a checkbox cannot use without also cancelling its own tick.
+  function wire(input) {
+    if (input.dataset.wired) return;
+    input.dataset.wired = "1";
+    input.addEventListener("click", (event) => event.stopPropagation());
+    input.addEventListener("change", () => {
+      selection = toggleRow(selection, rowOf(input));
+      markSelection();
+      paintAction();
+    });
   }
-
-  goals.addEventListener("click", (event) => {
-    const button = event.target instanceof Element ? event.target.closest(".pick") : null;
-    if (!button) return;
-    // Inside a <summary>: without this, choosing a goal or a unit would
-    // also fold the row shut, which reads as the click having done
-    // something else entirely.
-    event.preventDefault();
-    select(button);
-  });
 
   startButton.addEventListener("click", () => {
     if (!selection) return;
@@ -117,7 +123,7 @@ export async function renderPractice(container, api, topicId, initialSelection =
     // unscoped practice the tab has always had ("lo que toca") instead of
     // demanding a choice before anything can be practised at all.
     if (!selection && opened) {
-      selection = scopeFromPick("goal", { topicId: opened.topic_id, label: opened.name });
+      selection = emptySelection(opened.topic_id, opened.name);
     }
     goals.querySelectorAll(".tree-goal").forEach((node) => {
       node.addEventListener("toggle", () => {
@@ -132,20 +138,27 @@ export async function renderPractice(container, api, topicId, initialSelection =
   await load();
 }
 
-/** The scope one pick button stands for, read off the row it sits in: the
- * tree already labels every ancestor (`data-topic-id`, `data-domain`,
- * `data-objective-id`), so this is a lookup, and every rule about what may
- * be combined lives in `scopeFromPick`. */
-function scopeOf(button) {
-  const goal = button.closest(".tree-goal");
-  const unit = button.closest(".tree-unit");
-  const topic = button.closest(".tree-topic");
-  return scopeFromPick(button.dataset.pick, {
-    topicId: goal && goal.dataset.topicId,
+/** The row one checkbox sits in, described for `practice-scope.js`: the tree
+ * already labels every ancestor (`data-topic-id`, `data-domain`,
+ * `data-objective-id`), so this is a lookup. It decides nothing - every rule
+ * about what a tick means, and about what may be combined with what, lives
+ * in `toggleRow`. The goal's own checkbox is where the goal's name is read
+ * from, so a selection can name its goal ("lo que toca en AI-103") without
+ * the tree growing an attribute for it. */
+function rowOf(input) {
+  const goal = input.closest(".tree-goal");
+  const unit = input.closest(".tree-unit");
+  const topic = input.closest(".tree-topic");
+  const goalPick = goal && goal.querySelector('.pick-check[data-pick="goal"]');
+  const topicId = goal && goal.dataset.topicId;
+  return {
+    kind: input.dataset.pick,
+    topicId,
+    goalLabel: (goalPick && goalPick.dataset.pickLabel) || topicId,
     domain: unit && unit.dataset.domain,
     objectiveId: topic && topic.dataset.objectiveId,
-    label: button.dataset.pickLabel,
-  });
+    label: input.dataset.pickLabel,
+  };
 }
 
 // Once per goal per render, same contract as learning.js's: `dataset.loaded`

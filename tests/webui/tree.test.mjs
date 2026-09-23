@@ -86,13 +86,17 @@ test("an unimplemented mode throws instead of rendering the read one", () => {
 
 // --- Pick mode (issue #49, the practice tab) ---
 
-test("pick mode offers one button per selectable row, labelled in Spanish", () => {
+test("pick mode offers one checkbox per selectable row, labelled in Spanish", () => {
   const html = treeView(buildTree(topic, states, summary), { mode: "pick" });
   assert.match(html, /data-pick="goal"\s+data-pick-label="AI-103"/);
   assert.match(html, /data-pick="unit"\s+data-pick-label="D1 - Planificar/);
   assert.match(html, /data-pick="topic"\s+data-pick-label="D1\.1\.a - Elegir un modelo"/);
-  // Nothing starts selected: the view marks the chosen row itself.
-  assert.doesNotMatch(html, /aria-pressed="true"/);
+  // A checkbox, because several rows may be ticked at once (issue #62) - not
+  // the single-choice button this was.
+  assert.equal(html.match(/type="checkbox"/g).length, 5);
+  // Nothing starts ticked: the view marks what is selected itself, since a
+  // selection outlives the markup a re-render throws away.
+  assert.doesNotMatch(html, /checked/);
 });
 
 // The two rows that must not be selectable, for the same reason in both
@@ -103,7 +107,7 @@ test("a topic with no question and the unnamed bucket offer no way to practise t
   assert.match(html, /Sin preguntas/);
   assert.doesNotMatch(html, /data-pick-label="D1\.2\.a/);
   assert.doesNotMatch(html, /data-pick-label="null/);
-  // One unit button per named unit (D1, D2), none for "Sin unidad".
+  // One unit checkbox per named unit (D1, D2), none for "Sin unidad".
   assert.equal(html.match(/data-pick="unit"/g).length, 2);
 });
 

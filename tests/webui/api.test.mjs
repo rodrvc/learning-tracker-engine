@@ -156,19 +156,29 @@ test("api.nextQuestion requests the topic's next practice question with GET, enc
   });
 });
 
-// A scope reaches the endpoint as exactly one query parameter (issue #49):
-// a unit's domain or a topic's objective, never both, and never one for a
-// goal - which is the unscoped call above.
-test("api.nextQuestion sends a selection as its single scope parameter, encoded", async () => {
+// A selection reaches the endpoint as repeated query parameters (issue #49,
+// widened in #62): one `domain` per ticked unit, one `objective_id` per
+// ticked objective, and neither for the goal - which is the unscoped call
+// above.
+test("api.nextQuestion sends a selection as repeated scope parameters, encoded", async () => {
   await withStubbedFetch({}, async (fetchImpl) => {
-    await api.nextQuestion("t1", { kind: "unit", topicId: "t1", domain: "D 3" });
-    await api.nextQuestion("t1", { kind: "topic", topicId: "t1", objectiveId: "D3.2.a" });
-    await api.nextQuestion("t1", { kind: "goal", topicId: "t1" });
+    const selection = (items) => ({ topicId: "t1", goalLabel: "T1", items });
+    await api.nextQuestion("t1", selection([{ kind: "unit", value: "D 3", label: "D 3" }]));
+    await api.nextQuestion("t1", selection([{ kind: "topic", value: "D3.2.a", label: "x" }]));
+    await api.nextQuestion(
+      "t1",
+      selection([
+        { kind: "unit", value: "D1", label: "D1" },
+        { kind: "topic", value: "D3.2.a", label: "x" },
+      ]),
+    );
+    await api.nextQuestion("t1", selection([]));
     assert.deepEqual(
       fetchImpl.calls.map((call) => call.url),
       [
         "/topics/t1/practice/next?domain=D%203",
         "/topics/t1/practice/next?objective_id=D3.2.a",
+        "/topics/t1/practice/next?domain=D1&objective_id=D3.2.a",
         "/topics/t1/practice/next",
       ],
     );

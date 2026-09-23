@@ -1076,17 +1076,111 @@ def test_scope_with_nothing_due_or_unstarted_says_so(
     )
 
 
-@pytest.mark.edge
-def test_both_scope_parameters_are_rejected(client: TestClient, practice_topic: str) -> None:
-    """``objective_id`` would always win over ``domain``; a caller sending a
-    pair that disagrees has a bug, and hiding it under a precedence rule
-    would make the endpoint answer a question nobody asked."""
+# ------------------------------------------------- issue #62: a selection of scopes
+
+
+@pytest.mark.spec
+def test_a_selection_of_domains_is_their_union_in_the_engines_order(
+    client: TestClient, practice_topic: str
+) -> None:
+    """Several domains at once, and the same rule as one: the union is only a
+    candidate set, the order over it is the engine's. The most overdue
+    objective of the topic sits in D3, outside the selection, so it must not
+    come out; inside D1 + D2 the most overdue is the D2 one. A layer that
+    re-ranked instead of filtering could return either selected one."""
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        _insert_objective(conn, "obj-d3-outside", domain="D3")
+        _insert_objective(conn, "obj-d1-recent", domain="D1")
+        _insert_objective(conn, "obj-d2-older", domain="D2")
+        now = datetime.now(timezone.utc)
+        _insert_attempt(conn, "obj-d3-outside", now - timedelta(days=40), correct=False)
+        _insert_attempt(conn, "obj-d1-recent", now - timedelta(days=3), correct=False)
+        _insert_attempt(conn, "obj-d2-older", now - timedelta(days=15), correct=False)
+        for objective_id in ("obj-d3-outside", "obj-d1-recent", "obj-d2-older"):
+            _insert_question(conn, f"q-{objective_id}", objective_id)
+        conn.commit()
+
+    response = client.get(
+        f"/topics/{practice_topic}/practice/next", params={"domain": ["D1", "D2"]}
+    )
+    assert response.status_code == 200
+    assert response.json()["objective_id"] == "obj-d2-older"
+
+
+@pytest.mark.spec
+def test_a_selection_may_mix_domains_and_objectives(
+    client: TestClient, practice_topic: str
+) -> None:
+    """A unit plus a loose objective is the ordinary mixed selection the
+    practice tree produces, so the pair of parameters is a union and not the
+    400 it was while a scope could only be one thing (issue #48). The
+    objective named on its own lives in a domain that is *not* selected,
+    which is what makes this a union: an intersection would answer with
+    nothing, and a precedence rule would drop half of what was ticked."""
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        _insert_objective(conn, "obj-d1-in-unit", domain="D1")
+        _insert_objective(conn, "obj-d2-picked", domain="D2")
+        _insert_objective(conn, "obj-d2-ignored", domain="D2")
+        now = datetime.now(timezone.utc)
+        _insert_attempt(conn, "obj-d1-in-unit", now - timedelta(days=2), correct=False)
+        _insert_attempt(conn, "obj-d2-picked", now - timedelta(days=9), correct=False)
+        _insert_attempt(conn, "obj-d2-ignored", now - timedelta(days=30), correct=False)
+        for objective_id in ("obj-d1-in-unit", "obj-d2-picked", "obj-d2-ignored"):
+            _insert_question(conn, f"q-{objective_id}", objective_id)
+        conn.commit()
+
     response = client.get(
         f"/topics/{practice_topic}/practice/next",
-        params={"domain": "D1", "objective_id": "obj-anything"},
+        params={"domain": "D1", "objective_id": "obj-d2-picked"},
     )
-    assert response.status_code == 400
-    assert response.json()["detail"] == "scope is either domain or objective_id, not both"
+    assert response.status_code == 200
+    assert response.json()["objective_id"] == "obj-d2-picked"
+
+
+@pytest.mark.edge
+def test_a_selection_of_objectives_keeps_the_due_before_unstarted_order(
+    client: TestClient, practice_topic: str
+) -> None:
+    """Objectives ticked one by one, from two units: still due first, then
+    unstarted, because the filter runs over the two lists the engine built."""
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        _insert_objective(conn, "obj-a-new", domain="D1")
+        _insert_objective(conn, "obj-b-due", domain="D2")
+        _insert_attempt(
+            conn, "obj-b-due", datetime.now(timezone.utc) - timedelta(days=4), correct=False
+        )
+        _insert_question(conn, "q-a-new", "obj-a-new")
+        _insert_question(conn, "q-b-due", "obj-b-due")
+        conn.commit()
+
+    response = client.get(
+        f"/topics/{practice_topic}/practice/next",
+        params={"objective_id": ["obj-a-new", "obj-b-due"]},
+    )
+    assert response.status_code == 200
+    assert response.json()["objective_id"] == "obj-b-due"
+
+
+@pytest.mark.edge
+def test_a_selection_matching_nothing_is_named_by_its_size(
+    client: TestClient, practice_topic: str
+) -> None:
+    """The named 404s carry over to a selection, and a selection of many is
+    named by how many of each it holds: listing sixteen objective ids in a
+    detail would be a paragraph where a person wanted a reason."""
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        _insert_objective(conn, "obj-real", domain="D1")
+        _insert_question(conn, "q-real", "obj-real")
+        conn.commit()
+
+    response = client.get(
+        f"/topics/{practice_topic}/practice/next",
+        params={"domain": ["D8", "D9"], "objective_id": "obj-ghost"},
+    )
+    assert response.status_code == 404
+    assert response.json()["detail"] == (
+        f"topic {practice_topic} has no objective matching 2 domains and 1 objective"
+    )
 
 
 @pytest.mark.spec
