@@ -1451,7 +1451,7 @@ def test_missing_credential_fails_only_generation(client: TestClient, material_t
     from generate.errors import MissingCredentialsError
 
     class NoCredentials:
-        def generate(self, material, existing_objectives, existing_domains=(), *, now):
+        def generate(self, material, existing, domains=(), *, uncovered_objectives=(), now):
             raise MissingCredentialsError("OPENAI_API_KEY is not set")
 
     client.app.state.resources.generator = NoCredentials()
@@ -1490,7 +1490,7 @@ def test_generation_failure_is_502_not_a_crash(client: TestClient, material_topi
     from generate.errors import GenerationError
 
     class Failing:
-        def generate(self, material, existing_objectives, existing_domains=(), *, now):
+        def generate(self, material, existing, domains=(), *, uncovered_objectives=(), now):
             raise GenerationError("the model produced no structured output")
 
     client.app.state.resources.generator = Failing()
@@ -1538,8 +1538,8 @@ def test_generation_is_told_the_units_the_goal_already_has(
         def __init__(self) -> None:
             self.domains: tuple[str, ...] | None = None
 
-        def generate(self, material, existing_objectives, existing_domains=(), *, now):
-            self.domains = tuple(existing_domains)
+        def generate(self, material, existing, domains=(), *, uncovered_objectives=(), now):
+            self.domains = tuple(domains)
             return GenerationResult(objectives=(), questions=())
 
     recording = Recording()
@@ -1550,6 +1550,180 @@ def test_generation_is_told_the_units_the_goal_already_has(
         f"/topics/{material_topic}/material/{material_id}/generate"
     ).status_code == 200
     assert recording.domains == ("D1", "D2")
+
+
+# ============================== coverage run over stored material (LEARN #63)
+
+
+_BLOB_NOTES = (
+    "Blob storage is optimized for unstructured object data. "
+    "A container groups blobs inside a storage account."
+)
+
+
+def _questions_per_objective(topic_id: str) -> dict[str, int]:
+    """How many stored questions each objective of a topic has.
+
+    Read straight out of Postgres because that is the claim worth checking: a
+    coverage run's report is only trustworthy if it agrees with what was
+    written, and an endpoint reporting on its own writes cannot testify to that.
+    """
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        rows = conn.execute(
+            f"SELECT objective_id, COUNT(*) FROM {POSTGRES_SCHEMA}.questions "
+            "WHERE topic_id = %s GROUP BY objective_id",
+            (topic_id,),
+        ).fetchall()
+    return {objective_id: count for objective_id, count in rows}
+
+
+def _register(client: TestClient, topic_id: str, objectives: list[dict]) -> None:
+    response = client.post(f"/topics/{topic_id}/objectives", json={"objectives": objectives})
+    assert response.status_code == 201
+
+
+@pytest.mark.spec
+def test_coverage_run_covers_what_it_can_and_reports_the_rest(
+    client: TestClient, material_topic: str
+) -> None:
+    """The endpoint's whole reason to exist, in one run.
+
+    It is asked for per topic, with no material id: it finds the objectives
+    without questions and picks the page itself. The notes cover the first
+    objective and say nothing about the second, so the honest answer is one gap
+    closed and one gap named, with the coverage number staying where it was. A
+    question invented to close the second would be worse than the gap: a
+    reported gap gets notes uploaded for it, a fabricated question gets studied.
+    """
+    _register(
+        client,
+        material_topic,
+        [
+            {"objective_id": "D1.1", "title": "Blob containers", "domain": "D1"},
+            {"objective_id": "D3.1", "title": "Conversational intents", "domain": "D3"},
+        ],
+    )
+    _upload(client, material_topic, title="Blob storage", body=_BLOB_NOTES)
+
+    response = client.post(f"/topics/{material_topic}/material/cover-uncovered")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["objectives_targeted"] == 2
+    assert body["objectives_covered"] == 1
+    assert body["objectives_still_uncovered"] == 1
+    assert body["questions_written"] > 0
+    assert len(body["materials_used"]) == 1
+
+    covered = next(row for row in body["report"] if row["objective_id"] == "D1.1")
+    assert covered["covered"] is True
+    assert covered["material_id"] == body["materials_used"][0]
+    assert covered["reason"] is None
+
+    gap = next(row for row in body["report"] if row["objective_id"] == "D3.1")
+    assert gap["covered"] is False
+    assert gap["questions_written"] == 0
+    assert gap["material_id"] is None
+    assert gap["reason"]
+
+    # The gap is still a gap in storage, not only in the report, and the
+    # report's count of what was covered is the count that was written.
+    stored = _questions_per_objective(material_topic)
+    assert "D3.1" not in stored
+    assert stored["D1.1"] == covered["questions_written"]
+
+
+@pytest.mark.spec
+def test_coverage_run_cannot_be_talked_into_coverage_it_did_not_write(
+    client: TestClient, material_topic: str
+) -> None:
+    """A generator claiming the world is covered changes nothing.
+
+    Coverage is counted from the questions the run actually wrote per objective,
+    so a fabricating - or merely buggy - generator moves the report by exactly
+    zero. This is the last of the three defences the endpoint's docstring names,
+    and the one that holds when the other two do not.
+    """
+    from generate.generator import GenerationResult
+
+    class Liar:
+        def generate(self, material, existing, domains=(), *, uncovered_objectives=(), now):
+            return GenerationResult(objectives=(), questions=(), uncovered=())
+
+    _register(
+        client,
+        material_topic,
+        [{"objective_id": "D1.1", "title": "Blob containers", "domain": "D1"}],
+    )
+    _upload(client, material_topic, title="Blob storage", body=_BLOB_NOTES)
+    client.app.state.resources.generator = Liar()
+
+    body = client.post(f"/topics/{material_topic}/material/cover-uncovered").json()
+    assert body["objectives_covered"] == 0
+    assert body["questions_written"] == 0
+    assert body["report"][0]["covered"] is False
+    assert body["report"][0]["reason"]
+    assert _questions_per_objective(material_topic) == {}
+
+
+@pytest.mark.spec
+def test_coverage_run_adds_questions_without_dropping_the_pages_own_set(
+    client: TestClient, material_topic: str
+) -> None:
+    """``replace_for_material`` would close one gap by opening several: the pages
+    a coverage run reads already carry questions for other objectives."""
+    _register(
+        client,
+        material_topic,
+        [
+            {"objective_id": "D1.1", "title": "Blob containers", "domain": "D1"},
+            {"objective_id": "D2.1", "title": "Search skillsets", "domain": "D2"},
+        ],
+    )
+    material_id = _upload(
+        client,
+        material_topic,
+        title="Blob storage",
+        body=f"{_BLOB_NOTES} A skillset enriches documents during indexing.",
+    ).json()["material_id"]
+    # A per-page run first: the stub attaches everything to D1.1, the topic's
+    # first objective.
+    client.post(f"/topics/{material_topic}/material/{material_id}/generate")
+    before = _questions_per_objective(material_topic)
+    assert set(before) == {"D1.1"}
+
+    body = client.post(f"/topics/{material_topic}/material/cover-uncovered").json()
+    assert body["objectives_covered"] == 1
+
+    after = _questions_per_objective(material_topic)
+    assert after["D1.1"] == before["D1.1"]
+    assert after["D2.1"] > 0
+
+
+@pytest.mark.edge
+def test_coverage_run_with_nothing_left_to_cover_reads_no_page(
+    client: TestClient, material_topic: str
+) -> None:
+    _register(
+        client,
+        material_topic,
+        [{"objective_id": "D1.1", "title": "Blob containers", "domain": "D1"}],
+    )
+    _upload(client, material_topic, title="Blob storage", body=_BLOB_NOTES)
+    client.post(f"/topics/{material_topic}/material/cover-uncovered")
+
+    again = client.post(f"/topics/{material_topic}/material/cover-uncovered").json()
+    assert again["objectives_targeted"] == 0
+    assert again["materials_used"] == []
+    assert again["report"] == []
+
+
+@pytest.mark.edge
+def test_coverage_run_on_an_unknown_topic_is_a_named_404(client: TestClient) -> None:
+    response = client.post("/topics/nope/material/cover-uncovered")
+    assert response.status_code == 404
+    assert "nope" in response.json()["detail"]
+
+
 # ============================================================= ingest (ACU-268)
 
 
