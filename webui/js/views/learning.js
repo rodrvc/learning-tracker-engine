@@ -6,7 +6,7 @@ import {
   dueActionLabel,
   emptySelection,
   isRowSelected,
-  practiceButtonLabel,
+  selectedActionLabel,
   toggleRow,
 } from "../practice-scope.js";
 import { renderPracticeSession } from "./practice.js";
@@ -18,7 +18,16 @@ import { renderPracticeSession } from "./practice.js";
 // places here" was never true: there is one place, and practising is
 // something done to it.
 //
-// **Practising is a mode, not a location.** A "Practicar" button hands the
+// **Two actions, above the tree, never merged** (issue #71). "Practicar lo
+// que toca" is unscoped and always there; "Practicar lo marcado" appears
+// only once something is ticked. Two buttons on purpose: the screen briefly
+// had one that relabelled itself with the selection, and that took the
+// suggested path away the moment a row was ticked - and that path is the one
+// most people want most days. The rows carry no action of their own any
+// more, only a checkbox, so there is exactly one way to say "these" and
+// exactly one way to say "whatever is due".
+//
+// **Practising is a mode, not a location.** Either action hands the
 // container to `renderPracticeSession`, which hands it back by calling a
 // callback that renders this screen afresh. Fresh, not restored: the bar
 // that just moved is the payoff of answering, and it only moves if the
@@ -38,16 +47,15 @@ export async function renderLearning(container, api, topicId, resume = {}) {
   // What a returning session hands back, all by value: this render throws
   // away every node the last one made, so a selection or an unfolded unit
   // survives as something to re-apply, never as a node to reuse.
-  let selecting = Boolean(resume.selecting);
   let selection = resume.selection || null;
   const openUnits = new Set(resume.openUnits || []);
 
   container.innerHTML = `
     <h2>Aprendiendo</h2>
-    <button type="button" id="practice-start">${dueActionLabel(null)}</button>
-    <p class="tree-modes">
-      <button type="button" id="select-many" class="back-link" aria-pressed="${selecting}">Elegir varios</button>
-    </p>
+    <div class="practice-actions">
+      <button type="button" id="practice-start">${dueActionLabel(null)}</button>
+      <button type="button" id="practice-selected" class="practice-selected" hidden></button>
+    </div>
     <div id="goals"><p class="empty">Cargando...</p></div>
     <details class="goal-create">
       <summary>Crear meta</summary>
@@ -63,7 +71,7 @@ export async function renderLearning(container, api, topicId, resume = {}) {
   const feedback = container.querySelector("#goals-feedback");
   const form = container.querySelector("#create-topic-form");
   const startButton = container.querySelector("#practice-start");
-  const selectButton = container.querySelector("#select-many");
+  const selectedButton = container.querySelector("#practice-selected");
   // The goal the top button practises and the one rendered unfolded. Set by
   // `load`, the only place that knows what goals exist.
   let openGoal = null;
@@ -82,45 +90,32 @@ export async function renderLearning(container, api, topicId, resume = {}) {
       .map((node) => node.dataset.domain)
       .filter(Boolean);
     renderPracticeSession(container, api, chosen.topicId, chosen, () => {
-      renderLearning(container, api, chosen.topicId, {
-        selecting,
-        selection: selecting ? selection : null,
-        openUnits: units,
-      });
+      renderLearning(container, api, chosen.topicId, { selection, openUnits: units });
     });
   }
 
-  // The default action, and the biggest thing on the page: no scope, so the
-  // engine chooses (SPEC section 5.2). In selection mode the same button
-  // becomes the selection's, because two primary buttons competing for the
-  // same press is how the easy path gets lost.
+  // Both actions, painted together because the only thing that separates
+  // them is whether anything is ticked. The first never changes what it
+  // offers: no scope, so the engine chooses (SPEC section 5.2). The second
+  // is `hidden` rather than disabled while nothing is - a dead button is a
+  // promise with no way to collect it, and a pair where one is always greyed
+  // out reads as one control with two states, which is the thing issue #71
+  // undid.
   function paintAction() {
-    if (selecting) {
-      startButton.textContent = practiceButtonLabel(selection);
-      startButton.disabled = !selection;
-      return;
-    }
     const many = goals.querySelectorAll(".tree-goal").length > 1;
     startButton.textContent = openGoal
       ? dueActionLabel(openGoal.due, many ? openGoal.name : null)
       : dueActionLabel(null);
     startButton.disabled = !openGoal;
+    selectedButton.hidden = !selection;
+    selectedButton.textContent = selectedActionLabel(selection) || "";
   }
 
   startButton.addEventListener("click", () => {
-    if (selecting) return startSession(selection);
     if (openGoal) startSession(emptySelection(openGoal.topicId, openGoal.name));
   });
 
-  // Turning selection on re-renders the tree in pick mode, which is the
-  // whole cost of the feature now: sixty checkboxes are drawn when they are
-  // asked for and not before (issue #69).
-  selectButton.addEventListener("click", () => {
-    selecting = !selecting;
-    selectButton.setAttribute("aria-pressed", String(selecting));
-    if (!selecting) selection = null;
-    load();
-  });
+  selectedButton.addEventListener("click", () => startSession(selection));
 
   async function load() {
     feedback.textContent = "";
@@ -163,45 +158,31 @@ export async function renderLearning(container, api, topicId, resume = {}) {
         goalView(
           { topicId: topic.topic_id, name: topic.name, progress: summaryProgress(summaries[i]) },
           '<p class="empty">Cargando...</p>',
-          { mode: selecting ? "pick" : "play", open: i === openIndex },
+          { open: i === openIndex },
         ),
       )
       .join("");
-    // Preselected rather than left empty, so selection mode opens offering
-    // the unscoped practice ("lo que toca") instead of demanding a choice
-    // before anything can be practised at all.
-    if (selecting && !selection && openGoal) {
-      selection = emptySelection(openGoal.topicId, openGoal.name);
-    }
+    // Nothing is preselected on arrival. The unscoped call has a button of
+    // its own now, so ticking the goal for the visitor would put a second
+    // button on screen offering the same thing under another name.
     goals.querySelectorAll(".tree-goal").forEach((node) => {
       // "toggle", not a click on the summary: `<details>` opens by keyboard
       // too, and those users would be left staring at "Cargando...".
       node.addEventListener("toggle", () => {
-        if (node.open) fillGoal(node, api, selecting, openUnits, wireRow);
+        if (node.open) fillGoal(node, api, openUnits, wireRow);
       });
-      if (node.open) fillGoal(node, api, selecting, openUnits, wireRow);
+      if (node.open) fillGoal(node, api, openUnits, wireRow);
     });
     wireRow();
     paintAction();
   }
 
-  // Every control the tree currently shows, wired and - in selection mode -
-  // marked. Called again after each lazy fill, because a goal's units only
-  // exist once it has been opened. Per control, not delegated on `goals`,
-  // for one reason: these sit inside a `<summary>`, and a delegated listener
-  // on an ancestor only runs after the summary folded the row shut.
+  // Every checkbox the tree currently shows, wired and marked. Called again
+  // after each lazy fill, because a goal's units only exist once it has been
+  // opened. Per checkbox, not delegated on `goals`, for one reason: these sit
+  // inside a `<summary>`, and a delegated listener on an ancestor only runs
+  // after the summary folded the row shut.
   function wireRow() {
-    goals.querySelectorAll(".play").forEach((button) => {
-      if (!button.dataset.wired) {
-        button.dataset.wired = "1";
-        button.addEventListener("click", (event) => {
-          // Cancels the fold the summary would do - the whole reason this
-          // is a listener per button and not a delegate.
-          event.preventDefault();
-          startSession(toggleRow(null, rowOf(button)));
-        });
-      }
-    });
     goals.querySelectorAll(".pick-check").forEach((input) => {
       // By value, over every checkbox in the tree: ticking the goal drops
       // every finer row, and the boxes have to show that (`toggleRow`).
@@ -237,7 +218,7 @@ export async function renderLearning(container, api, topicId, resume = {}) {
   await load();
 }
 
-/** The row one control sits in, described for `practice-scope.js`: the tree
+/** The row one checkbox sits in, described for `practice-scope.js`: the tree
  * already labels every ancestor (`data-topic-id`, `data-goal-label`,
  * `data-domain`, `data-objective-id`), so this is a lookup. It decides
  * nothing - every rule about what a row stands for, and about what may be
@@ -248,12 +229,12 @@ function rowOf(control) {
   const topic = control.closest(".tree-topic");
   const topicId = goal && goal.dataset.topicId;
   return {
-    kind: control.dataset.pick || control.dataset.play,
+    kind: control.dataset.pick,
     topicId,
     goalLabel: (goal && goal.dataset.goalLabel) || topicId,
     domain: unit && unit.dataset.domain,
     objectiveId: topic && topic.dataset.objectiveId,
-    label: control.dataset.pickLabel || control.dataset.playLabel,
+    label: control.dataset.pickLabel,
   };
 }
 
@@ -261,8 +242,8 @@ function rowOf(control) {
 // from firing the same two calls. The material link lives here, inside the
 // goal, which is the whole of "material stops being a top-level tab": it is
 // something one does to a goal, not a place to go. Practising is not beside
-// it any more: it is on every row underneath (issue #69).
-async function fillGoal(node, api, selecting, openUnits, onFilled) {
+// it: it is the pair of actions at the top, fed by the checkboxes below.
+async function fillGoal(node, api, openUnits, onFilled) {
   if (node.dataset.loaded) return;
   node.dataset.loaded = "1";
   const body = node.querySelector(".goal-body");
@@ -273,7 +254,7 @@ async function fillGoal(node, api, selecting, openUnits, onFilled) {
       <p class="goal-actions">
         <a href="#/material/${encodeURIComponent(goalId)}">Material</a>
       </p>
-      ${unitsView(buildTree(topic, states, null).units, { mode: selecting ? "pick" : "play" })}
+      ${unitsView(buildTree(topic, states, null).units)}
     `;
     // Re-unfolded by domain, not by position: coming back from a session
     // lands on the unit whose bar just moved, already open, and a unit that
