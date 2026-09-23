@@ -147,6 +147,29 @@ export function practiceButtonLabel(selection) {
   return `Practicar ${selectionLabel(selection)}`;
 }
 
+/**
+ * What the default action says: the unscoped call, with how much is due
+ * behind it (issue #69).
+ *
+ * This is the one button the screen is built around - "just practise, stop
+ * asking me" - so it states the size of the backlog rather than making
+ * anyone open the tree to find out. The count is the engine's own
+ * `due_objectives` off `/summary`, never counted here; unknown (a summary
+ * that failed) drops the number instead of printing a zero that would read
+ * as "nothing to do".
+ *
+ * It never disables at zero, which is why the count is parenthetical and
+ * not the subject: nothing due still leaves everything never practised, and
+ * which of the two the endpoint serves is the engine's call (SPEC section
+ * 5.2), not this label's. The goal is named only when there is more than
+ * one to confuse it with.
+ */
+export function dueActionLabel(dueCount, goalLabel) {
+  const where = goalLabel ? ` en ${goalLabel}` : "";
+  const count = Number.isInteger(dueCount) ? ` (${dueCount})` : "";
+  return `Practicar lo que toca${where}${count}`;
+}
+
 /** The line shown while drilling, so what is being practised is never a
  * guess. The goal says whose choice the questions are. */
 export function practicingLabel(selection) {

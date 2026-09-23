@@ -801,19 +801,25 @@ details[open] > .tree-row::before { transform: rotate(90deg); }
 
 @media (max-width: 34rem) {
   .goal-body { padding-left: 12px; }
-  .tree-row { gap: 10px; }
+  /* Wrapping, not shrinking: at ~400px the name, the bar, its count and the
+     row's own control do not fit on one line, and a flex row that refuses to
+     wrap squeezes the name to a couple of characters instead. */
+  .tree-row { gap: 6px 10px; flex-wrap: wrap; }
+  .tree-name { flex-basis: 100%; }
 }
 
-/* --- Pick mode: the practice tab (issue #49) ---------------------------- */
+/* --- The controls on a row (issues #49 and #69) ------------------------- */
 
-/* The same tree, with one "Elegir" per selectable row - a label around a
-   checkbox since a selection may hold several rows (issue #62). Unticked it
-   is the outlined micro-label control the theme toggle already is - what a
-   small, repeated, optional control looks like in this system. Ticked it
-   becomes the ink-filled primary, which is how the system says "this one is
+/* One control per practisable row: "Practicar" by default, "Elegir" while
+   choosing several (issue #62). Both wear the same pill - the outlined
+   micro-label control the theme toggle already is, what a small, repeated,
+   optional control looks like in this system. Ticked, the checkbox becomes
+   the ink-filled primary, which is how the system says "this one is
    chosen", so the marking needs no colour of its own and survives the dark
-   theme, where `--btn-bg` is the accent rather than the ink. */
-.pick {
+   theme, where `--btn-bg` is the accent rather than the ink. The play
+   control says the word and draws no triangle: the disclosure triangle sits
+   on the very same row, and that mark already means "unfold" here. */
+.pick, .play {
   display: inline-flex;
   flex: none;
   align-items: center;
@@ -831,7 +837,14 @@ details[open] > .tree-row::before { transform: rotate(90deg); }
   cursor: pointer;
 }
 
-.pick:hover { color: var(--ink); background: var(--sky); border-color: var(--accent); }
+/* `:not(:disabled)` only so this outranks the filled `button:hover` the
+   play control inherits as a real <button>; the pill has no disabled
+   state. */
+.pick:hover, .play:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--sky);
+  border-color: var(--accent);
+}
 
 /* The tick itself is the browser's own, tinted through the accent token: the
    system draws its marks in CSS and owns no glyph, and a native box is also
@@ -873,11 +886,23 @@ details[open] > .tree-row::before { transform: rotate(90deg); }
   white-space: nowrap;
 }
 
-/* The action: the primary button of this screen, full width the way the
-   practice view's own submit is. */
-#practice-start { width: 100%; margin-bottom: 40px; }
+/* The default action, and deliberately the biggest thing on the page: the
+   screen exists so that "just practise, stop asking me" costs one press,
+   and every finer scope below it is the exception. Full width and a step
+   taller than the system's button. */
+#practice-start {
+  width: 100%;
+  min-height: 62px;
+  font-size: 15px;
+  margin-bottom: 14px;
+}
 
-.pick-help { margin: -16px 0 24px; font-size: 15px; color: var(--muted); }
+/* Turning multi-selection on is the opposite weight: a text link, off to
+   the side, in the muted register - it is the occasional case (issue #69).
+   Pressed, it takes the accent underline the active nav tab takes. */
+.tree-modes { display: flex; justify-content: flex-end; margin: 0 0 28px; }
+
+#select-many[aria-pressed="true"] { color: var(--ink); border-bottom-color: var(--accent); }
 
 /* --- The scope while practising ---------------------------------------- */
 

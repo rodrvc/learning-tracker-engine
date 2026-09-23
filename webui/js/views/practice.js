@@ -21,10 +21,12 @@ import {
 
 // Renders one practice session: one question at a time, answer it, see
 // immediately whether it was right with the explanation, carry on
-// (ACU-267). Reached from the picker (views/practice-picker.js), never from
-// a route of its own, because a session is about a *selection* and a hash
-// cannot hold one honestly: `#/practice/<goal>` names a goal, not the units
-// and objectives that were ticked inside it.
+// (ACU-267). Reached from the tree (views/learning.js), never from a route
+// of its own, because a session is about a *selection* and a hash cannot
+// hold one honestly: `#/practice/<goal>` names a goal, not the row that was
+// pressed inside it. Since issue #69 it takes over the screen and hands it
+// back on the way out - `onChangeScope` is what re-renders the tree, which
+// is how the bar that just moved is the first thing seen on return.
 //
 // **The selection is a parameter, not state.** Every `next` call in this
 // render carries the same one (issue #49, a set of rows rather than a single
@@ -43,7 +45,7 @@ import {
 export async function renderPracticeSession(container, api, topicId, selection, onChangeScope) {
   container.innerHTML = `
     <p class="practice-scope">
-      <button type="button" id="change-scope" class="back-link">Elegir otra cosa</button>
+      <button type="button" id="change-scope" class="back-link">Volver al temario</button>
       <span class="practice-scope-name">${escapeHtml(practicingLabel(selection))}</span>
     </p>
     <div id="practice-area"><p class="empty-view">Cargando...</p></div>

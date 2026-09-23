@@ -23,24 +23,26 @@ test("parseHash falls back to learning for an unrecognised view", () => {
   assert.deepEqual(parseHash("#/whatever"), { view: "learning", param: null });
 });
 
-// The views issue #49 folded into the tree still resolve, parameter and all,
-// so every #/topics/<id> and #/progress/<id> already written - in a bookmark,
-// or in practice.js's own back link - opens that goal. Material keeps its
-// route without keeping its tab: it is an action inside a goal now.
+// The views folded into the tree still resolve, parameter and all, so every
+// #/topics/<id>, #/progress/<id> and #/practice/<id> already written - in a
+// bookmark, or in material.js's back link - opens that goal. Material keeps
+// its route without keeping its tab: it is an action inside a goal now.
 test("the retired views redirect, and material routes without a tab", () => {
   assert.deepEqual(parseHash("#/topics"), { view: "learning", param: null });
   assert.deepEqual(parseHash("#/topics/ai-103"), { view: "learning", param: "ai-103" });
   assert.deepEqual(parseHash("#/progress/ai-103"), { view: "learning", param: "ai-103" });
+  assert.deepEqual(parseHash("#/practice/ai-103"), { view: "learning", param: "ai-103" });
   assert.deepEqual(parseHash("#/material/ai-103"), { view: "material", param: "ai-103" });
   assert.equal(NAV_VIEWS.includes("material"), false);
 });
 
 // Literal, not derived: looping over the list to assert each entry parses to
 // itself is tautological - deleting one would still pass, even though the nav
-// still links to it.
-test("the tabs are exactly the two of issue #49, in nav order", () => {
-  assert.deepEqual(NAV_VIEWS, ["learning", "practice"]);
-  assert.deepEqual(VIEWS, ["learning", "practice", "material"]);
+// still links to it. One entry, since issue #69: practising is a mode of the
+// tree, so it is not a place the header can send anyone to.
+test("the nav is the one tab of issue #69", () => {
+  assert.deepEqual(NAV_VIEWS, ["learning"]);
+  assert.deepEqual(VIEWS, ["learning", "material"]);
 });
 
 test("every NAV_VIEWS entry has a nav link in index.html, and nothing else does", () => {
