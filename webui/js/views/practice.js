@@ -7,7 +7,11 @@ import {
   practiceResultView,
   practiceAlreadyRecordedView,
 } from "../format.js";
-import { describeScopedUnavailable, practicingLabel } from "../practice-scope.js";
+import {
+  describeScopedUnavailable,
+  practicingLabel,
+  selectionSize,
+} from "../practice-scope.js";
 import {
   resolveKeyAction,
   targetOwnsKey,
@@ -19,14 +23,15 @@ import {
 // immediately whether it was right with the explanation, carry on
 // (ACU-267). Reached from the picker (views/practice-picker.js), never from
 // a route of its own, because a session is about a *selection* and a hash
-// cannot hold one honestly: `#/practice/<goal>` names a goal, not the unit
-// or the topic that was picked inside it.
+// cannot hold one honestly: `#/practice/<goal>` names a goal, not the units
+// and objectives that were ticked inside it.
 //
-// **The scope is a parameter, not state.** Every `next` call in this render
-// carries the same one (issue #49), so "siguiente" after an answer stays
-// inside what was chosen instead of quietly widening back to the whole
-// goal, and the header says which scope that is for as long as the session
-// lasts.
+// **The selection is a parameter, not state.** Every `next` call in this
+// render carries the same one (issue #49, a set of rows rather than a single
+// one since issue #62), so "siguiente" after an answer stays inside what was
+// chosen instead of quietly widening back to the whole goal, and the header
+// says what that selection is - by count once it is more than one thing
+// (practice-scope.js) - for as long as the session lasts.
 //
 // State here (the current question, the selection, `phase`) is deliberately
 // local to this call, not a module like material-state.js's generation
@@ -35,11 +40,11 @@ import {
 // duplicate fire lands as the engine's own 409 ("already recorded" below),
 // not a double-counted attempt. Unlike the material view's paid, slow
 // generation call, so the same cross-render treatment does not apply here.
-export async function renderPracticeSession(container, api, topicId, scope, onChangeScope) {
+export async function renderPracticeSession(container, api, topicId, selection, onChangeScope) {
   container.innerHTML = `
     <p class="practice-scope">
       <button type="button" id="change-scope" class="back-link">Elegir otra cosa</button>
-      <span class="practice-scope-name">${escapeHtml(practicingLabel(scope))}</span>
+      <span class="practice-scope-name">${escapeHtml(practicingLabel(selection))}</span>
     </p>
     <div id="practice-area"><p class="empty-view">Cargando...</p></div>
   `;
@@ -157,7 +162,7 @@ export async function renderPracticeSession(container, api, topicId, scope, onCh
     phase = "loading";
     area.innerHTML = '<p class="empty-view">Cargando...</p>';
     try {
-      question = await api.nextQuestion(topicId, scope);
+      question = await api.nextQuestion(topicId, selection);
       selectedKey = null;
       const crypto = globalThis.crypto;
       attemptId = makeAttemptId(crypto && crypto.randomUUID && crypto.randomUUID.bind(crypto));
@@ -173,10 +178,10 @@ export async function renderPracticeSession(container, api, topicId, scope, onCh
     // The extra lookup only resolves the ambiguous 404 (see format.js);
     // skip it on an unknown topic (would just 404 again) and on a network
     // outage (status 0) - pointless in both, per review. Also skipped on a
-    // narrowed scope, where the endpoint's own three 404s already say which
-    // case it is (see practice-scope.js).
+    // narrowed selection, where the endpoint's own three 404s already say
+    // which case it is (see practice-scope.js).
     let objectiveCount;
-    const narrowed = Boolean(scope) && scope.kind !== "goal";
+    const narrowed = selectionSize(selection) > 0;
     const isUnknownTopic = err instanceof ApiError && err.message.startsWith("unknown topic:");
     if (!narrowed && err instanceof ApiError && err.status === 404 && !isUnknownTopic) {
       try {
@@ -188,7 +193,7 @@ export async function renderPracticeSession(container, api, topicId, scope, onCh
     area.innerHTML = "";
     const p = document.createElement("p");
     p.className = "empty-view";
-    p.textContent = describeScopedUnavailable(err, { scope, objectiveCount, topicId });
+    p.textContent = describeScopedUnavailable(err, { selection, objectiveCount, topicId });
     area.appendChild(p);
   }
 

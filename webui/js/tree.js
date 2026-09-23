@@ -15,10 +15,14 @@ import { escapeHtml, levelLabel } from "./format.js";
 //     stands - a bar for the goal and each unit, a level and a due marker
 //     for each topic - and nothing is clickable but the triangles.
 //   - `"pick"` (implemented, the practice tab): the same tree, plus one
-//     "Elegir" button per selectable row, feeding the scoped
-//     `GET /topics/{id}/practice/next?domain=&objective_id=`. Any other
-//     mode still throws rather than quietly rendering the read one: a tree
-//     that looks selectable and is not is worse than an error.
+//     "Elegir" checkbox per selectable row, feeding the scoped
+//     `GET /topics/{id}/practice/next?domain=&objective_id=`. Several may
+//     be ticked at once, at any level and mixed (issue #62), which is why
+//     the control is a checkbox and not the single-choice button it was:
+//     the shape of the control is the honest statement of what may be
+//     chosen. Any other mode still throws rather than quietly rendering the
+//     read one: a tree that looks selectable and is not is worse than an
+//     error.
 // Pick mode stayed a selection control plus a click delegate, not a
 // rewrite: every row already carried `data-scope` and what that scope needs
 // - `data-topic-id` on the goal, `data-domain` on the unit (absent on the
@@ -29,7 +33,7 @@ import { escapeHtml, levelLabel } from "./format.js";
 // one would promise what the engine cannot deliver, and the row says "Sin
 // preguntas" instead.
 //
-// The button carries `data-pick` (the kind) and `data-pick-label` (what the
+// The checkbox carries `data-pick` (the kind) and `data-pick-label` (what the
 // selection is called in Spanish, e.g. "D3 - Visión"). Building that label
 // here rather than in the view is deliberate: this file is the one that
 // knows a unit by both its code and its name, which leaves the view thin
@@ -120,13 +124,24 @@ export function progressBarView(progress) {
     ><span class="bar-count">${escapeHtml(progress.assessed)}/${escapeHtml(progress.total)}</span>`;
 }
 
-/** The "Elegir" button, rendered in pick mode on a selectable row only.
- * `aria-pressed` carries the selected state - exactly one button in the
- * tree says `true` - which is a radio group written with the control that
- * already reads as a target on a phone. */
+/** The "Elegir" checkbox, rendered in pick mode on a selectable row only.
+ *
+ * A checkbox, not the `aria-pressed` button this was while a selection could
+ * hold exactly one row (issue #49): rows at several levels may be ticked
+ * together now, and a native checkbox states that by itself - to the eye, to
+ * a screen reader and to the keyboard alike, with no role invented here. It
+ * is always rendered unticked: which ones are ticked is the picker's to set,
+ * because this file is pure and a selection outlives the markup a re-render
+ * throws away.
+ *
+ * The `<label>` wrapping it makes the whole control, word included, the
+ * target - the reach the button had on a phone, kept. The visible word stays
+ * "Elegir" for the eye, which has the row next to it; `aria-label` names the
+ * row, because a screen reader reading sixty checkboxes all called "Elegir"
+ * cannot tell which one it is on. */
 export function pickView(kind, label) {
-  return `<button type="button" class="pick" data-pick="${escapeHtml(kind)}"
-      data-pick-label="${escapeHtml(label)}" aria-pressed="false">Elegir</button>`;
+  return `<label class="pick"><input type="checkbox" class="pick-check" data-pick="${escapeHtml(kind)}"
+      data-pick-label="${escapeHtml(label)}" aria-label="Elegir ${escapeHtml(label)}"><span>Elegir</span></label>`;
 }
 
 export function topicRowView(topic, options = {}) {
