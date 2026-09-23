@@ -6,6 +6,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   describeScopedUnavailable,
+  dueActionLabel,
   emptySelection,
   isRowSelected,
   practiceButtonLabel,
@@ -121,6 +122,23 @@ test("the button says when the engine is the one choosing", () => {
 
 // Counted, never a list cut off at the width of the screen: a person can
 // check "2 unidades y 1 objetivo" against what they ticked.
+// The default action of the whole screen (issue #69): the backlog's size is
+// on the button, so nobody has to open the tree to find out how much there
+// is. Zero is printed rather than hidden - and does not disable it, because
+// never-practised objectives are not due and the endpoint serves them too.
+test("the default action carries the engine's due count", () => {
+  assert.equal(dueActionLabel(8), "Practicar lo que toca (8)");
+  assert.equal(dueActionLabel(0), "Practicar lo que toca (0)");
+  // No count known (a summary that failed) drops the number instead of
+  // printing a zero that would read as "nothing to do".
+  assert.equal(dueActionLabel(null), "Practicar lo que toca");
+  assert.equal(dueActionLabel(undefined), "Practicar lo que toca");
+  // The goal is named only when there is more than one to confuse it with,
+  // which is the caller's call: several goals, and the button has to say
+  // which syllabus it would drill.
+  assert.equal(dueActionLabel(3, "AI-103"), "Practicar lo que toca en AI-103 (3)");
+});
+
 test("a selection of several is named by how many of each it holds", () => {
   assert.equal(selectionLabel(mixed), "2 unidades y 1 objetivo");
   assert.equal(practicingLabel(mixed), "Practicando 2 unidades y 1 objetivo");

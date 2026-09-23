@@ -2,42 +2,45 @@
 
 import { escapeHtml, levelLabel } from "./format.js";
 
-// The Goal > Unit > Topic tree, shared by both tabs (issue #49): goal ->
+// The Goal > Unit > Topic tree, which since issue #69 is the screen: goal ->
 // topic/profile, unit -> objective.domain (D1..D5), topic -> objective.
 // Everything here is pure - a model in, markup out. Expansion is
-// `<details>`/`<summary>`, so the read mode needs no listener at all: a row
+// `<details>`/`<summary>`, so unfolding needs no listener at all: a row
 // opens in place, keyboard included, and this module owns no DOM state a
 // re-render could lose.
 //
-// **THE MODE CONTRACT** (`treeView(model, { mode })`), so the practice tab
-// is built on this file rather than beside it:
-//   - `"read"` (implemented, the learning tab): every row reports where it
-//     stands - a bar for the goal and each unit, a level and a due marker
-//     for each topic - and nothing is clickable but the triangles.
-//   - `"pick"` (implemented, the practice tab): the same tree, plus one
-//     "Elegir" checkbox per selectable row, feeding the scoped
+// **THE MODE CONTRACT** (`treeView(model, { mode })`). Both modes draw the
+// same tree - every row reports where it stands, a bar for the goal and each
+// unit, a level and a due marker for each topic - and differ only in the
+// control they hang off a row:
+//   - `"play"` (the default): a "Practicar" button per practisable row,
+//     which drills exactly that scope. Nothing to confirm, because the row
+//     the button sits on *is* the choice.
+//   - `"pick"` (behind "Elegir varios"): an "Elegir" checkbox instead,
+//     feeding the scoped
 //     `GET /topics/{id}/practice/next?domain=&objective_id=`. Several may
 //     be ticked at once, at any level and mixed (issue #62), which is why
 //     the control is a checkbox and not the single-choice button it was:
 //     the shape of the control is the honest statement of what may be
-//     chosen. Any other mode still throws rather than quietly rendering the
-//     read one: a tree that looks selectable and is not is worse than an
-//     error.
-// Pick mode stayed a selection control plus a click delegate, not a
-// rewrite: every row already carried `data-scope` and what that scope needs
-// - `data-topic-id` on the goal, `data-domain` on the unit (absent on the
+//     chosen. It is the occasional case, so it is not what every visit
+//     pays for (issue #69). Any other mode still throws rather than
+//     quietly rendering a tree with no controls: one that looks selectable
+//     and is not is worse than an error.
+// Either control is an addition, not a rewrite: every row already carried
+// `data-scope` and what that scope needs - `data-topic-id` and
+// `data-goal-label` on the goal, `data-domain` on the unit (absent on the
 // fallback bucket, which has no domain to scope by), `data-objective-id`
-// and `data-has-questions` on the topic. Which is why the pick button is
-// absent from that bucket and from a `has_questions === false` topic: the
-// practice endpoint skips objectives with no stored question, so offering
-// one would promise what the engine cannot deliver, and the row says "Sin
-// preguntas" instead.
+// and `data-has-questions` on the topic. Which is why neither is rendered
+// on that bucket or on a `has_questions === false` topic: the practice
+// endpoint skips objectives with no stored question, so offering one would
+// promise what the engine cannot deliver, and the row says "Sin preguntas"
+// instead.
 //
-// The checkbox carries `data-pick` (the kind) and `data-pick-label` (what the
-// selection is called in Spanish, e.g. "D3 - Visión"). Building that label
-// here rather than in the view is deliberate: this file is the one that
-// knows a unit by both its code and its name, which leaves the view thin
-// enough to be a click handler.
+// A control carries `data-pick`/`data-play` (the kind) and its label twin
+// (what the selection is called in Spanish, e.g. "D3 - Visión"). Building
+// that label here rather than in the view is deliberate: this file is the
+// one that knows a unit by both its code and its name, which leaves the
+// view thin enough to be a click handler.
 
 // Bare codes say nothing in a tree. These names are read off the objectives
 // each code actually holds in `ai-103-oficial` (D1 is all choose / deploy /
@@ -144,29 +147,51 @@ export function pickView(kind, label) {
       data-pick-label="${escapeHtml(label)}" aria-label="Elegir ${escapeHtml(label)}"><span>Elegir</span></label>`;
 }
 
+/** The "Practicar" button play mode hangs off a practisable row (issue #69).
+ *
+ * It wears the same pill the checkbox wears and says the word rather than
+ * drawing a play triangle: the disclosure triangle sits two elements to its
+ * left on the very same row, and in this system that mark already means
+ * "unfold". Two identical triangles meaning two different things on one row
+ * is not a saving. The visible word is the same on all sixty of them, so
+ * `aria-label` names the row - a screen reader has no row to read it next
+ * to. */
+export function playView(kind, label) {
+  return `<button type="button" class="play" data-play="${escapeHtml(kind)}"
+      data-play-label="${escapeHtml(label)}" aria-label="Practicar ${escapeHtml(label)}">Practicar</button>`;
+}
+
+/** The control one practisable row carries, by mode. Kept in one place so
+ * "which rows may be practised" is decided once and the two modes cannot
+ * drift into disagreeing about it. */
+function actionView(mode, kind, label) {
+  if (mode === "pick") return pickView(kind, label);
+  if (mode === "play") return playView(kind, label);
+  return "";
+}
+
 export function topicRowView(topic, options = {}) {
   const id = `data-objective-id="${escapeHtml(topic.objectiveId)}" data-has-questions="${topic.hasQuestions}"`;
   const chip = `<span class="level-chip" data-level="${escapeHtml(topic.level)}">${escapeHtml(levelLabel(topic.level))}</span>`;
-  const picking = options.mode === "pick";
-  const pick = !picking
+  const acting = options.mode === "pick" || options.mode === "play";
+  const action = !acting
     ? ""
     : topic.hasQuestions
-      ? pickView("topic", `${topic.objectiveId} - ${topic.title}`)
+      ? actionView(options.mode, "topic", `${topic.objectiveId} - ${topic.title}`)
       : '<span class="no-questions">Sin preguntas</span>';
   // `aria-disabled`, not a hidden row: its level and its due marker are the
   // reason to go generate questions for it. It just offers no way to
   // practise it, because the endpoint has nothing to serve.
-  const disabled = picking && !topic.hasQuestions ? ' aria-disabled="true"' : "";
+  const disabled = acting && !topic.hasQuestions ? ' aria-disabled="true"' : "";
   return `<li class="tree-topic" data-scope="topic" ${id}${disabled}>
       <span class="tree-topic-title">${escapeHtml(topic.title)}</span>
-      ${chip}${topic.isDue ? '<span class="due-marker">Vencido</span>' : ""}${pick}
+      ${chip}${topic.isDue ? '<span class="due-marker">Vencido</span>' : ""}${action}
     </li>`;
 }
 
 export function unitView(unit, options = {}) {
   const domain = unit.code ? ` data-domain="${escapeHtml(unit.code)}"` : "";
-  const pick =
-    options.mode === "pick" && unit.code ? pickView("unit", `${unit.code} - ${unit.name}`) : "";
+  const pick = unit.code ? actionView(options.mode, "unit", `${unit.code} - ${unit.name}`) : "";
   const head = `<span class="tree-name">${escapeHtml(unit.name)}</span>${progressBarView(unit.progress)}${pick}`;
   return `<li><details class="tree-unit" data-scope="unit"${domain}>
       <summary class="tree-row">${head}</summary>
@@ -188,9 +213,13 @@ export function unitsView(units, options = {}) {
 export function goalView(model, body, options = {}) {
   assertMode(options.mode);
   const bar = model.progress ? progressBarView(model.progress) : "";
-  const pick = options.mode === "pick" ? pickView("goal", model.name) : "";
+  const pick = actionView(options.mode, "goal", model.name);
   const head = `<span class="tree-name">${escapeHtml(model.name)}</span>${bar}${pick}`;
-  return `<details class="tree-goal" data-scope="goal" data-topic-id="${escapeHtml(model.topicId)}"${options.open ? " open" : ""}>
+  // `data-goal-label` so a control anywhere inside can name its goal ("lo
+  // que toca en AI-103") by looking up, without the view having to hold a
+  // second copy of the goal list to look the name up in.
+  return `<details class="tree-goal" data-scope="goal" data-topic-id="${escapeHtml(model.topicId)}"
+      data-goal-label="${escapeHtml(model.name)}"${options.open ? " open" : ""}>
       <summary class="tree-row">${head}</summary>
       <div class="goal-body">${body}</div>
     </details>`;
@@ -202,7 +231,7 @@ export function treeView(model, options = {}) {
 }
 
 function assertMode(mode) {
-  if (mode !== undefined && mode !== "read" && mode !== "pick") {
+  if (mode !== undefined && mode !== "play" && mode !== "pick") {
     throw new Error(`tree mode not implemented: ${mode}`);
   }
 }
