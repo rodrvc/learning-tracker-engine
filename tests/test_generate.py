@@ -20,10 +20,10 @@ from pydantic import ValidationError
 from content.models import Material
 from core.clock import FixedClock
 from core.models import Objective
-from generate import prompting
+from generate import prompting, targeting
 from generate.openai_backend import OpenAIGenerator
 from generate.errors import GenerationError, MissingCredentialsError
-from generate.generator import domains_of
+from generate.generator import UncoveredObjective, domains_of
 from generate.stub import StubGenerator
 
 UTC = timezone.utc
@@ -167,7 +167,9 @@ def _question(**overrides: object) -> "prompting._ProposedQuestion":
 
 
 def _parsed(
-    objectives: list | None = None, questions: list | None = None
+    objectives: list | None = None,
+    questions: list | None = None,
+    uncovered: list | None = None,
 ) -> "prompting._GenerationSchema":
     return prompting._GenerationSchema(
         objectives=(
@@ -176,6 +178,7 @@ def _parsed(
             else objectives
         ),
         questions=[_question()] if questions is None else questions,
+        uncovered=uncovered or [],
     )
 
 
@@ -311,10 +314,19 @@ class TestResponseSchemaEnforcement:
         with pytest.raises(ValidationError):
             _question(options=options, correct_key="A")
 
-    def test_a_response_with_no_questions_is_rejected(self):
-        """An empty run is a failure to report, not a result to store."""
-        with pytest.raises(ValidationError):
-            _parsed(questions=[])
+    def test_a_plain_run_with_no_questions_is_rejected(self):
+        """An empty run is a failure to report, not a result to store.
+
+        The rule now lives in ``build_result`` rather than in the schema,
+        because an aimed run (LEARN #63) may legitimately come back with no
+        questions and a page of reported gaps: a schema requiring one question
+        would have made "invent something" the only valid answer there. The
+        rule itself did not move - a page asked for practice and yielding none
+        is still an error.
+        """
+        gen = OpenAIGenerator(client=_FakeClient(_response(_parsed(questions=[]))))
+        with pytest.raises(GenerationError, match="no questions"):
+            gen.generate(MATERIAL, existing_objectives=[], now=FixedClock(T0))
 
     def test_a_response_of_more_than_eight_questions_is_rejected(self):
         with pytest.raises(ValidationError):
@@ -436,3 +448,116 @@ class TestUnitsOfAnExistingGoal:
             MATERIAL, existing_objectives=[], existing_domains=["D1"], now=FixedClock(T0)
         )
         assert result.objectives[0].domain is None
+
+
+class TestAimedAtUncoveredObjectives:
+    """A run aimed at the objectives with no question (LEARN #63).
+
+    One rule, asserted several ways because it is enforced in several places:
+    **an objective the material does not cover comes back reported, never
+    answered.** The counter-example is not hypothetical, it is the easiest way
+    to make this feature look successful: twenty-four of the owner's objectives
+    have no notes uploaded at all, and a generator willing to write a question
+    from general knowledge would close every one of them, raise the coverage
+    number, and leave him practising invented material while the missing notes
+    stayed missing.
+    """
+
+    BLOB = Objective(objective_id="D1.1", title="Blob storage", domain="D1")
+    ABSENT = Objective(objective_id="D3.1", title="Conversational intents", domain="D3")
+
+    def _aimed(self, targets, existing=None):
+        return StubGenerator().generate(
+            MATERIAL,
+            existing_objectives=list(targets) if existing is None else existing,
+            uncovered_objectives=targets,
+            now=FixedClock(T0),
+        )
+
+    def test_terms_carry_across_a_plural_and_drop_the_noise(self):
+        """What "this page mentions that objective" means, and the one piece of
+        morphology behind it: "Search skillsets" against a page writing "a
+        skillset enriches documents" must not read as no mention at all."""
+        assert "skillset" in targeting.terms("Search skillsets")
+        assert targeting.terms("the and for a 12") == frozenset()
+
+    def test_stub_covers_an_objective_the_material_supports(self):
+        result = self._aimed([self.BLOB])
+        assert [q.objective_id for q in result.questions] == ["D1.1"]
+        assert result.uncovered == ()
+        # Grounded: the correct option is a sentence of the page itself, not
+        # prose written to fill the slot.
+        question = result.questions[0]
+        assert dict(question.options)[question.correct_key] in MATERIAL.body
+
+    def test_stub_reports_an_objective_the_material_does_not_cover(self):
+        """The line this feature must not cross, in the generator the suite runs
+        against: asked about something the page never mentions, it answers with
+        the gap and a reason instead of with a question. It proposes no
+        objective either - one invented beside a target is coverage of
+        nothing."""
+        result = self._aimed([self.BLOB, self.ABSENT])
+        assert [q.objective_id for q in result.questions] == ["D1.1"]
+        assert [entry.objective_id for entry in result.uncovered] == ["D3.1"]
+        assert result.uncovered[0].reason
+        assert result.objectives == ()
+
+    def test_the_prompt_names_the_uncovered_objectives_and_the_rule(self):
+        client = _FakeClient(_response(_parsed()))
+        OpenAIGenerator(client=client).generate(
+            MATERIAL,
+            existing_objectives=[self.ABSENT],
+            uncovered_objectives=[self.ABSENT],
+            now=FixedClock(T0),
+        )
+        sent = str(client.responses.calls[0]["input"])
+        assert "aimed at" in sent
+        assert "D3.1: Conversational intents" in sent
+        assert "report the rest as uncovered" in sent
+        # A fixed question count would be an instruction to reach it, which in
+        # an aimed run means inventing what the page does not hold.
+        assert "Produce" not in sent
+        assert "uncovered" in str(client.responses.calls[0]["instructions"])
+
+    def test_the_model_cannot_claim_coverage_it_did_not_produce(self):
+        """It writes no question for the target and says nothing about it.
+        Coverage is derived from the questions that were built, so silence is
+        read as a gap - with a stated reason - and never as success."""
+        gen = OpenAIGenerator(client=_FakeClient(_response(_parsed(questions=[]))))
+        result = gen.generate(
+            MATERIAL,
+            existing_objectives=[self.ABSENT],
+            uncovered_objectives=[self.ABSENT],
+            now=FixedClock(T0),
+        )
+        assert result.questions == ()
+        assert result.uncovered == (
+            UncoveredObjective(
+                objective_id="D3.1", reason=prompting.DEFAULT_UNCOVERED_REASON
+            ),
+        )
+
+    def test_an_aimed_run_reports_the_models_reason_and_drops_its_asides(self):
+        """The reason travels; a question written for a well-served objective
+        does not, because it is not evidence about the target."""
+        parsed = _parsed(
+            questions=[_question(objective_id="blob-basics")],
+            uncovered=[
+                prompting._UncoveredObjective(
+                    objective_id="D3.1", reason="the page never mentions intents"
+                )
+            ],
+        )
+        gen = OpenAIGenerator(client=_FakeClient(_response(parsed)))
+        result = gen.generate(
+            MATERIAL,
+            existing_objectives=[
+                Objective(objective_id="blob-basics", title="Blob basics"),
+                self.ABSENT,
+            ],
+            uncovered_objectives=[self.ABSENT],
+            now=FixedClock(T0),
+        )
+        assert result.questions == ()
+        assert result.objectives == ()
+        assert result.uncovered[0].reason == "the page never mentions intents"
