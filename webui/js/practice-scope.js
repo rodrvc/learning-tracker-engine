@@ -138,13 +138,31 @@ function plural(count, one, many) {
   return `${count} ${count === 1 ? one : many}`;
 }
 
-/** What the action button says, which is the only place the difference
- * between scoped and unscoped is explained to the person: with the goal
- * ticked the wording says out loud that the engine is choosing ("lo que
- * toca"), which a button reading "Practicar AI-103" would hide. */
-export function practiceButtonLabel(selection) {
-  if (!selection) return "Elegí una meta para practicar";
-  return `Practicar ${selectionLabel(selection)}`;
+/**
+ * What the selection's own action says (issue #71).
+ *
+ * It is the second of two buttons and never a relabelling of the first:
+ * "Practicar lo que toca" stays on screen beside it, because the suggested
+ * path is what most days want and a selection is the detour. That is the
+ * whole reason this label exists separately from `dueActionLabel` - a single
+ * button whose wording changed with the selection took the suggested path
+ * away the moment a row was ticked.
+ *
+ * So the two have to be impossible to confuse at a glance: this one says
+ * "lo marcado" and names what is marked, the other says "lo que toca" and
+ * leaves the choice to the engine. The goal row marked is the one case with
+ * nothing narrowed, and it is named by the goal rather than by
+ * `selectionLabel`'s "lo que toca en AI-103" - that is the other button's
+ * sentence, and borrowing it here would undo the distinction.
+ *
+ * Null with no selection: there is no button to label. A disabled one
+ * standing there waiting is how this screen ended up with two mechanisms
+ * for one idea the first time.
+ */
+export function selectedActionLabel(selection) {
+  if (!selection) return null;
+  const what = selection.items.length ? selectionLabel(selection) : selection.goalLabel;
+  return `Practicar lo marcado (${what})`;
 }
 
 /**

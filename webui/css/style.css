@@ -808,18 +808,17 @@ details[open] > .tree-row::before { transform: rotate(90deg); }
   .tree-name { flex-basis: 100%; }
 }
 
-/* --- The controls on a row (issues #49 and #69) ------------------------- */
+/* --- The checkbox on a row (issues #49, #62 and #71) -------------------- */
 
-/* One control per practisable row: "Practicar" by default, "Elegir" while
-   choosing several (issue #62). Both wear the same pill - the outlined
-   micro-label control the theme toggle already is, what a small, repeated,
-   optional control looks like in this system. Ticked, the checkbox becomes
-   the ink-filled primary, which is how the system says "this one is
+/* One control per selectable row, and one kind of control: the "Elegir"
+   checkbox, on every row, always (issue #71). It wears the outlined
+   micro-label pill the theme toggle wears - what a small, repeated,
+   optional control looks like in this system - so sixty-four of them read as
+   a column of ticks rather than as a column of buttons. Ticked, the pill
+   becomes the ink-filled primary, which is how the system says "this one is
    chosen", so the marking needs no colour of its own and survives the dark
-   theme, where `--btn-bg` is the accent rather than the ink. The play
-   control says the word and draws no triangle: the disclosure triangle sits
-   on the very same row, and that mark already means "unfold" here. */
-.pick, .play {
+   theme, where `--btn-bg` is the accent rather than the ink. */
+.pick {
   display: inline-flex;
   flex: none;
   align-items: center;
@@ -837,10 +836,7 @@ details[open] > .tree-row::before { transform: rotate(90deg); }
   cursor: pointer;
 }
 
-/* `:not(:disabled)` only so this outranks the filled `button:hover` the
-   play control inherits as a real <button>; the pill has no disabled
-   state. */
-.pick:hover, .play:hover:not(:disabled) {
+.pick:hover {
   color: var(--ink);
   background: var(--sky);
   border-color: var(--accent);
@@ -894,15 +890,35 @@ details[open] > .tree-row::before { transform: rotate(90deg); }
   width: 100%;
   min-height: 62px;
   font-size: 15px;
-  margin-bottom: 14px;
 }
 
-/* Turning multi-selection on is the opposite weight: a text link, off to
-   the side, in the muted register - it is the occasional case (issue #69).
-   Pressed, it takes the accent underline the active nav tab takes. */
-.tree-modes { display: flex; justify-content: flex-end; margin: 0 0 28px; }
+/* The two actions, stacked and never merged (issue #71). Stacked rather
+   than side by side because the second one comes and goes: a row that
+   reflowed from one button to two every time a row was ticked would move the
+   first one under the pointer that was about to press it. The gap is the
+   system's, so the pair reads as one block of actions at the top of the
+   screen and the tree still starts on its own hairline below.
 
-#select-many[aria-pressed="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+   The second is outlined where the first is filled - the system's secondary
+   weight - and a step shorter. It has to be reachable without being what the
+   eye lands on: taking the selection is the detour, and "lo que toca" stays
+   the default even while something is marked. Both tokens, so the dark theme
+   comes out of the same two variables. */
+.practice-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0 0 28px;
+}
+
+.practice-selected {
+  width: 100%;
+  color: var(--ink);
+  background: none;
+  border-color: var(--line);
+}
+
+.practice-selected:hover:not(:disabled) { background: var(--sky); border-color: var(--accent); }
 
 /* --- The scope while practising ---------------------------------------- */
 

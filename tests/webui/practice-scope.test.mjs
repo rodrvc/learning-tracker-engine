@@ -9,8 +9,8 @@ import {
   dueActionLabel,
   emptySelection,
   isRowSelected,
-  practiceButtonLabel,
   practicingLabel,
+  selectedActionLabel,
   selectionLabel,
   selectionQuery,
   selectionSize,
@@ -109,13 +109,19 @@ test("the query repeats a parameter per ticked row, encoded, domains first", () 
   assert.equal(selectionQuery(odd), "?domain=D%263%20x");
 });
 
-// The button has to say whose choice the questions are: with the goal ticked
-// the engine decides - and that is not obvious from a button reading only
-// "Practicar AI-103".
-test("the button says when the engine is the one choosing", () => {
-  assert.equal(practiceButtonLabel(goal), "Practicar lo que toca en AI-103");
-  assert.equal(practiceButtonLabel(unit), "Practicar D3 - Visión");
-  assert.match(practiceButtonLabel(null), /Elegí una meta/);
+// The selection's action is a second button, never the first one relabelled:
+// it says "lo marcado" where the default says "lo que toca", so the
+// suggested path cannot be mistaken for the selection's (issue #71).
+test("the selection's action names what is marked, and nothing marked has none", () => {
+  assert.equal(selectedActionLabel(unit), "Practicar lo marcado (D3 - Visión)");
+  assert.equal(selectedActionLabel(mixed), "Practicar lo marcado (2 unidades y 1 objetivo)");
+  // The goal ticked is the one case with nothing narrowed. It is named by the
+  // goal, not by "lo que toca en AI-103": that is the other button's
+  // sentence, and the two may not read as the same offer.
+  assert.equal(selectedActionLabel(goal), "Practicar lo marcado (AI-103)");
+  assert.doesNotMatch(selectedActionLabel(goal), /lo que toca/);
+  // Nothing selected, nothing to label: the button is not on screen at all.
+  assert.equal(selectedActionLabel(null), null);
   assert.equal(practicingLabel(objective), "Practicando D3.2.a - Analizar imágenes");
   assert.equal(practicingLabel(goal), "Practicando lo que toca en AI-103");
 });
