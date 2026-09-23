@@ -5,7 +5,7 @@ import { buildTree, goalView, summaryProgress, unitsView } from "../tree.js";
 import {
   dueActionLabel,
   emptySelection,
-  isRowSelected,
+  rowState,
   selectedActionLabel,
   toggleRow,
 } from "../practice-scope.js";
@@ -17,6 +17,16 @@ import { renderPracticeSession } from "./practice.js";
 // that tab drew this same tree with checkboxes on it, so "there are two
 // places here" was never true: there is one place, and practising is
 // something done to it.
+//
+// **A tick covers everything under it.** Ticking a goal shows its units and
+// its objectives ticked, ticking a unit shows its objectives ticked, and a
+// parent only some of whose children are ticked is drawn `indeterminate` -
+// the three states a tree of checkboxes means everywhere else. What the
+// request says is a separate question, answered in `practice-scope.js`: the
+// display is derived from the selection, and the selection stays the
+// coarsest description of the set, so a fully ticked goal still sends no
+// parameters at all. This file only reads the shape of the tree off the DOM
+// and hands it over.
 //
 // **Two actions, above the tree, never merged** (issue #71). "Practicar lo
 // que toca" is unscoped and always there; "Practicar lo marcado" appears
@@ -182,11 +192,22 @@ export async function renderLearning(container, api, topicId, resume = {}) {
   // opened. Per checkbox, not delegated on `goals`, for one reason: these sit
   // inside a `<summary>`, and a delegated listener on an ancestor only runs
   // after the summary folded the row shut.
+  //
+  // One shape per goal, not one per checkbox: reading it inside the loop
+  // would walk every objective of a goal once per row of that goal.
   function wireRow() {
+    const shapes = new Map();
     goals.querySelectorAll(".pick-check").forEach((input) => {
-      // By value, over every checkbox in the tree: ticking the goal drops
-      // every finer row, and the boxes have to show that (`toggleRow`).
-      input.checked = isRowSelected(selection, rowOf(input));
+      const goal = input.closest(".tree-goal");
+      if (!shapes.has(goal)) shapes.set(goal, shapeOf(goal));
+      // By coverage, over every checkbox in the tree: a ticked goal marks
+      // rows that are nowhere in `items`, and the boxes have to show that.
+      const state = rowState(selection, rowOf(input), shapes.get(goal));
+      input.checked = state === "on";
+      // Not an attribute and not a class: `indeterminate` is a property, and
+      // it is what makes the browser draw its own third mark and tell a
+      // screen reader "mixed" without a role invented here.
+      input.indeterminate = state === "partial";
       if (input.dataset.wired) return;
       input.dataset.wired = "1";
       // A checkbox cannot `preventDefault` without also cancelling its own
@@ -194,7 +215,7 @@ export async function renderLearning(container, api, topicId, resume = {}) {
       // summary never sees it.
       input.addEventListener("click", (event) => event.stopPropagation());
       input.addEventListener("change", () => {
-        selection = toggleRow(selection, rowOf(input));
+        selection = toggleRow(selection, rowOf(input), shapeOf(input.closest(".tree-goal")));
         wireRow();
         paintAction();
       });
@@ -236,6 +257,41 @@ function rowOf(control) {
     objectiveId: topic && topic.dataset.objectiveId,
     label: control.dataset.pickLabel,
   };
+}
+
+/** What one goal holds, as `practice-scope.js` needs it to expand a ticked
+ * parent into its children: its units, each with the objectives that can
+ * actually be practised, and whether it also holds objectives filed under no
+ * unit at all.
+ *
+ * Read off the DOM rather than kept beside it, because the DOM is where the
+ * truth already is: a `<details>` that is folded still holds its rows, so a
+ * goal that has been opened once has its whole shape here whether or not any
+ * unit is unfolded. A goal never opened reports no unit, which is exactly
+ * right - nothing under it can have been ticked either.
+ *
+ * The objectives are found through their checkboxes, so "selectable" needs
+ * no second definition: a row with no stored question has no checkbox, and
+ * therefore is not in the shape. */
+function shapeOf(goal) {
+  if (!goal) return { units: [], ungrouped: false };
+  const units = [...goal.querySelectorAll(".tree-unit")].map((unit) => ({
+    code: unit.dataset.domain || null,
+    label: labelOf(unit.querySelector(".tree-row .pick-check")),
+    objectives: [...unit.querySelectorAll(".tree-topic .pick-check")].map((check) => ({
+      id: check.closest(".tree-topic").dataset.objectiveId,
+      label: labelOf(check),
+    })),
+  }));
+  return {
+    units: units.filter((unit) => unit.code),
+    // The "Sin unidad" bucket, which has no domain to be named by.
+    ungrouped: units.some((unit) => !unit.code),
+  };
+}
+
+function labelOf(check) {
+  return (check && check.dataset.pickLabel) || "";
 }
 
 // Once per goal per render: `dataset.loaded` is what stops a second open

@@ -95,6 +95,11 @@ test("every selectable row carries a checkbox, labelled in Spanish", () => {
   // Nothing starts ticked: the view marks what is selected itself, since a
   // selection outlives the markup a re-render throws away.
   assert.doesNotMatch(html, /checked/);
+  // And the box carries no visible word: sixty-four rows each reading
+  // "Elegir" were the wall of repetition again, quieter. The name survives
+  // for a screen reader only.
+  assert.doesNotMatch(html, />Elegir</);
+  assert.match(html, /aria-label="Elegir D1\.1\.a - Elegir un modelo"/);
   // And no practice control on any row: rows select, the two actions above
   // the tree practise.
   assert.doesNotMatch(html, /data-play|class="play"|>Practicar</);

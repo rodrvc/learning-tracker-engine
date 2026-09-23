@@ -131,14 +131,17 @@ export function progressBarView(progress) {
  * to set, because this file is pure and a selection outlives the markup a
  * re-render throws away.
  *
- * The `<label>` wrapping it makes the whole control, word included, the
- * target - the reach a button had on a phone, kept. The visible word stays
- * "Elegir" for the eye, which has the row next to it; `aria-label` names the
- * row, because a screen reader reading sixty checkboxes all called "Elegir"
- * cannot tell which one it is on. */
+ * It carries no visible word. It used to say "Elegir", and sixty-four rows
+ * each saying it were the same wall of repetition the per-row buttons were,
+ * only quieter: the row's own text already says what is being ticked, and
+ * the box is the one mark in this system that means "choose me". The
+ * `<label>` stays, because it is what makes the padding around the box part
+ * of the target - the reach a button had on a phone, kept - and `aria-label`
+ * stays naming the row, because a screen reader has no row to read the box
+ * next to. */
 export function pickView(kind, label) {
   return `<label class="pick"><input type="checkbox" class="pick-check" data-pick="${escapeHtml(kind)}"
-      data-pick-label="${escapeHtml(label)}" aria-label="Elegir ${escapeHtml(label)}"><span>Elegir</span></label>`;
+      data-pick-label="${escapeHtml(label)}" aria-label="Elegir ${escapeHtml(label)}"></label>`;
 }
 
 export function topicRowView(topic) {
