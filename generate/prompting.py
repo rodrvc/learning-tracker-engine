@@ -29,7 +29,7 @@ from content.models import Material, Question
 from core.models import Objective
 
 from .errors import GenerationError
-from .generator import GenerationResult
+from .generator import GenerationResult, UncoveredObjective
 
 DEFAULT_MAX_TOKENS = 16000
 
@@ -53,6 +53,17 @@ one of those units, spelled exactly as given. Propose a new unit only for \
 material that no existing unit covers, and never one that is a rewording of \
 an existing unit. Leave an objective's unit empty only when the goal has no \
 units at all.
+
+You may also be given a list of objectives that have no question yet. When you \
+are, the run is aimed at exactly those: write questions only for them and \
+propose no new objective. For every one of them that THIS material does not \
+actually support, add an entry to the uncovered list naming the objective and \
+saying in one line what the material is missing. Reporting an objective as \
+uncovered is the correct, expected answer whenever the notes do not cover it; \
+writing a question from general knowledge to avoid reporting it is the one \
+thing you must never do, because a reported gap gets notes uploaded for it and \
+a papered-over gap is studied as if it were learned. Returning zero questions \
+and reporting every objective as uncovered is an entirely acceptable answer.
 
 For every question, produce exactly 4 options. Exactly one is correct, \
 drawn from the material. The other three must be plausible distractors: \
@@ -109,11 +120,25 @@ class _ProposedQuestion(BaseModel):
         return self
 
 
+class _UncoveredObjective(BaseModel):
+    objective_id: str
+    #: What the material is missing for this objective. Required, because
+    #: "uncovered" with no reason is indistinguishable from the model giving
+    #: up, and the two call for different fixes (upload notes / retry).
+    reason: str
+
+
 class _GenerationSchema(BaseModel):
     objectives: list[_ProposedObjective]
+    #: An aimed run over a page supporting none of its targets must be able to
+    #: answer with nothing: requiring one question here would make "invent
+    #: something" the only schema-valid answer. A plain per-page run returning
+    #: nothing is still an error, enforced in ``build_result``, which knows
+    #: which of the two runs this is.
     questions: list[_ProposedQuestion] = Field(
-        min_length=1, max_length=_MAX_QUESTIONS_PER_MATERIAL
+        min_length=0, max_length=_MAX_QUESTIONS_PER_MATERIAL
     )
+    uncovered: list[_UncoveredObjective] = Field(default_factory=list)
 
 
 def _target_question_count(material: Material) -> int:
@@ -149,6 +174,29 @@ def _existing_domains_digest(domains: Sequence[str]) -> str:
     if not domains:
         return "(none yet - this goal has no units, so propose the ones this material needs)"
     return "\n".join(f"- {domain}" for domain in domains)
+
+
+#: Why an aimed target came back uncovered when the model named no reason.
+#: Silence is read as "not supported", never as coverage - see ``build_result``.
+DEFAULT_UNCOVERED_REASON = (
+    "the model produced no question for this objective from this material and "
+    "gave no reason"
+)
+
+
+def _uncovered_objectives_digest(objectives: Sequence[Objective]) -> str:
+    """The objectives to aim at, for the prompt.
+
+    With their titles, not as bare ids: the model has to judge whether this page
+    supports the objective, and it cannot judge that from an id.
+    """
+    if not objectives:
+        return "(none - generate freely from this material)"
+    return "\n".join(
+        f"- {obj.objective_id}: {obj.title}"
+        + (f" [unit: {obj.domain}]" if obj.domain else "")
+        for obj in objectives
+    )
 
 
 def _shuffle_options(
@@ -202,10 +250,33 @@ def build_result(
     existing_domains: Sequence[str],
     parsed: _GenerationSchema,
     created_at: datetime,
+    uncovered_objectives: Sequence[Objective] = (),
 ) -> GenerationResult:
+    """Turns a parsed model response into a ``GenerationResult``.
+
+    With ``uncovered_objectives`` given the run is aimed, and two rules apply
+    that do not apply otherwise, both structural rather than merely asked for in
+    the prompt:
+
+    * The result is **scoped to the targets**: proposed objectives are dropped,
+      and so is any question aimed elsewhere. Not because the model misbehaved,
+      but because an aimed run writing outside its aim can report coverage of an
+      objective nobody asked about and, worse, can "cover" a target by inventing
+      a near-duplicate objective beside it. Scoping closes that door instead of
+      trying to detect it.
+    * **Coverage is computed from the questions that were actually built.** The
+      model's ``uncovered`` list contributes the reason text and nothing else:
+      it cannot claim a target was covered, and silence about a target reads as
+      uncovered rather than as success. Fabricating a question is therefore the
+      only way to make a target count as covered, and the prompt and the
+      material are what stand against that - with the report showing the outcome
+      either way.
+    """
+    aimed = tuple(uncovered_objectives)
+    target_ids = {obj.objective_id for obj in aimed}
     known_ids = {obj.objective_id for obj in existing_objectives}
     try:
-        objectives = tuple(
+        objectives: tuple[Objective, ...] = () if aimed else tuple(
             Objective(
                 objective_id=obj.objective_id,
                 title=obj.title,
@@ -217,6 +288,8 @@ def build_result(
 
         questions = []
         for proposed in parsed.questions:
+            if aimed and proposed.objective_id not in target_ids:
+                continue
             if proposed.objective_id not in known_ids:
                 raise InvalidQuestionError(
                     f"objective_id {proposed.objective_id!r} is neither an existing "
@@ -244,4 +317,22 @@ def build_result(
         # loudly instead of repairing or dropping it silently.
         raise GenerationError(f"model produced an invalid question: {exc}") from exc
 
-    return GenerationResult(objectives=objectives, questions=tuple(questions))
+    if not aimed and not questions:
+        # A plain per-page run exists to produce questions from a page; coming
+        # back with none of them is a failure worth reporting, not an empty
+        # success. An aimed run is the opposite case and is handled below.
+        raise GenerationError("the model produced no questions for this material")
+
+    covered = {question.objective_id for question in questions}
+    reasons = {entry.objective_id: entry.reason.strip() for entry in parsed.uncovered}
+    uncovered = tuple(
+        UncoveredObjective(
+            objective_id=obj.objective_id,
+            reason=reasons.get(obj.objective_id) or DEFAULT_UNCOVERED_REASON,
+        )
+        for obj in aimed
+        if obj.objective_id not in covered
+    )
+    return GenerationResult(
+        objectives=objectives, questions=tuple(questions), uncovered=uncovered
+    )

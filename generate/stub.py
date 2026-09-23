@@ -14,7 +14,8 @@ from content.models import Material, Question
 from core.clock import Clock
 from core.models import Objective
 
-from .generator import GenerationResult
+from .generator import GenerationResult, UncoveredObjective
+from .targeting import terms
 
 _MAX_QUESTIONS = 3
 _OPTION_KEYS = ("A", "B", "C", "D")
@@ -51,9 +52,15 @@ class StubGenerator:
         existing_objectives: Sequence[Objective],
         existing_domains: Sequence[str] = (),
         *,
+        uncovered_objectives: Sequence[Objective] = (),
         now: Clock,
     ) -> GenerationResult:
         """Builds up to :data:`_MAX_QUESTIONS` questions from ``material``.
+
+        Given ``uncovered_objectives`` the run is aimed instead, and handled by
+        :meth:`_aimed`, which is where the rule that matters lives: an
+        objective this page says nothing about comes back reported, never
+        answered.
 
         Attaches every question to ``existing_objectives[0]`` when there is
         one - never a near-duplicate objective for a topic that already has
@@ -67,6 +74,9 @@ class StubGenerator:
         in the field: a proposed objective must land in a unit the goal
         already has rather than found one of its own.
         """
+        if uncovered_objectives:
+            return self._aimed(material, uncovered_objectives, now)
+
         created_at = now.now()
         sentences = _sentences(material.body)
 
@@ -117,3 +127,64 @@ class StubGenerator:
             )
 
         return GenerationResult(objectives=proposed_objectives, questions=tuple(questions))
+
+    def _aimed(
+        self, material: Material, targets: Sequence[Objective], now: Clock
+    ) -> GenerationResult:
+        """One question per target the material supports, a report for the rest.
+
+        "Supports" is the crudest test that can still be called grounded: the
+        page must contain a sentence sharing a meaningful word with the
+        objective's title (``targeting.terms``, the notion the planner used to
+        pick this page). A real backend reads the page and judges, and judging is
+        what a stub cannot do; what it can do, and what the suite holds every
+        generator to, is refuse to answer for a target the page says nothing
+        about and give a reason instead. A stub that quietly invented a question
+        per target would let the suite certify the very behaviour this feature
+        exists to prevent.
+        """
+        created_at = now.now()
+        sentences = _sentences(material.body)
+        questions: list[Question] = []
+        uncovered: list[UncoveredObjective] = []
+
+        for target in targets:
+            wanted = terms(f"{target.title} {target.domain or ''}")
+            grounding = next((s for s in sentences if wanted & terms(s)), None)
+            if grounding is None:
+                uncovered.append(
+                    UncoveredObjective(
+                        objective_id=target.objective_id,
+                        reason=f'"{material.title}" says nothing about {target.title!r}',
+                    )
+                )
+                continue
+            others = [s for s in sentences if s != grounding]
+            texts = [grounding] + (others + list(_FALLBACK_DISTRACTORS))[:3]
+            # Rotated so the correct answer does not always sit first, for the
+            # same reason the per-page path above rotates.
+            pos = len(questions) % len(texts)
+            texts = texts[-pos:] + texts[:-pos] if pos else texts
+            questions.append(
+                Question(
+                    # The id carries the objective: an aimed run adds questions
+                    # rather than replacing the page's set, so a later run for a
+                    # different gap on the same page must not collide with this.
+                    question_id=f"{material.material_id}-{_slug(target.objective_id)}-q1",
+                    topic_id=material.topic_id,
+                    objective_id=target.objective_id,
+                    stem=f'According to "{material.title}", which statement is accurate?',
+                    options=tuple(zip(_OPTION_KEYS[: len(texts)], texts)),
+                    correct_key=_OPTION_KEYS[pos],
+                    explanation=(
+                        f'"{grounding}" is drawn directly from the material, which is '
+                        f"what makes it usable for {target.title!r}."
+                    ),
+                    material_id=material.material_id,
+                    created_at=created_at,
+                )
+            )
+
+        return GenerationResult(
+            objectives=(), questions=tuple(questions), uncovered=tuple(uncovered)
+        )

@@ -42,6 +42,7 @@ from .prompting import (
     _existing_domains_digest,
     _existing_objectives_digest,
     _target_question_count,
+    _uncovered_objectives_digest,
     build_result,
 )
 
@@ -81,6 +82,7 @@ class OpenAIGenerator:
         existing_objectives: Sequence[Objective],
         existing_domains: Sequence[str] = (),
         *,
+        uncovered_objectives: Sequence[Objective] = (),
         now: Clock,
     ) -> GenerationResult:
         """See ``generate.generator.QuestionGenerator.generate``."""
@@ -107,7 +109,10 @@ class OpenAIGenerator:
                     f"{_existing_domains_digest(existing_domains)}\n\n"
                     "Existing objectives for this topic:\n"
                     f"{_existing_objectives_digest(existing_objectives)}\n\n"
-                    f"Produce {_target_question_count(material)} questions.\n\n"
+                    "Objectives with no question yet, which this run is "
+                    "aimed at:\n"
+                    f"{_uncovered_objectives_digest(uncovered_objectives)}\n\n"
+                    f"{_instruction_for(material, uncovered_objectives)}\n\n"
                     f"Material title: {material.title}\n"
                     f"Material:\n{material.body}"
                 ),
@@ -141,6 +146,7 @@ class OpenAIGenerator:
                 existing_domains,
                 parsed,
                 now.now(),
+                uncovered_objectives,
             )
         except openai.AuthenticationError as exc:
             raise MissingCredentialsError(
@@ -152,6 +158,23 @@ class OpenAIGenerator:
             raise
         except Exception as exc:  # SDK errors, network errors, schema mismatches
             raise GenerationError(f"could not generate questions: {exc}") from exc
+
+
+def _instruction_for(material: Material, uncovered_objectives: Sequence[Objective]) -> str:
+    """What to ask for, which is a different thing in an aimed run.
+
+    A fixed question count is right for a page being turned into practice for
+    the first time (see ``_target_question_count``), and wrong for a run whose
+    answer may legitimately be "this page supports none of these": asking for
+    a number there is asking for that number to be reached, which is how a
+    report of gaps turns into a set of invented questions.
+    """
+    if uncovered_objectives:
+        return (
+            "Write at most one question per aimed objective, only for the ones "
+            "this material really supports, and report the rest as uncovered."
+        )
+    return f"Produce {_target_question_count(material)} questions."
 
 
 def _refusal_of(response: object) -> str | None:
