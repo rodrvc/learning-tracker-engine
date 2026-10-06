@@ -201,7 +201,7 @@ export const LEVEL_ORDER = ["UNASSESSED", "WEAK", "LEARNING", "COMPETENT", "MAST
 
 const LEVEL_LABELS = {
   UNASSESSED: "Sin evaluar",
-  WEAK: "Débil",
+  WEAK: "Por reforzar",
   LEARNING: "Aprendiendo",
   COMPETENT: "Competente",
   MASTERED: "Dominado",

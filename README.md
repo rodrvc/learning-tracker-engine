@@ -36,8 +36,8 @@ machine already owns 5432. Set `POSTGRES_PORT` in `.env` to a free port and
 change the port in `LEARNING_TRACKER_DATABASE_URL` to match, then run it again.
 
 Leave that running and open <http://127.0.0.1:8000> in a browser. That is the
-whole application: a page with four views (Tópicos, Material, Practicar,
-Progreso) served by the same process that answers the API.
+whole application: a page with three tabs (Aprendiendo, Progreso, Practicar;
+Material opens from inside a goal) served by the same process that answers the API.
 
 There is no sign-in step here: with no `LEARNING_TRACKER_CLERK_ISSUER`,
 `scripts/dev-up.sh` sets `LEARNING_TRACKER_AUTH_DISABLED=true` and says so,
@@ -96,6 +96,11 @@ curl -H 'X-Dev-User: demo_teacher' -H 'X-Dev-Org: org_demo' -H 'X-Dev-Role: admi
   http://127.0.0.1:8000/org/progress
 ```
 
+For a school-flavoured demo (two subjects with units, objectives and a
+realistic spread of practice, ideal for the Progreso tab), run
+`.venv/bin/python -m scripts.seed_school_data`. It is synthetic too, and skips
+a topic that already exists.
+
 ### The path by hand, in the browser
 
 1. **Tópicos** → create one, e.g. id `redes`, name `Redes`.
@@ -142,7 +147,7 @@ single implicit user `local` when authentication is off (migration `0004`).
 | `generate/` | Turns a page of notes into objectives and questions (OpenAI, plus a deterministic stub used by the tests and by the sample load) |
 | `web/` | The FastAPI backend: `web/config.py` is the full list of settings it reads |
 | `webui/` | The front end it serves, static files, no build step |
-| `scripts/` | `dev-up.sh` and `seed_sample_data.py`, described above |
+| `scripts/` | `dev-up.sh`, `seed_sample_data.py` and `seed_school_data.py`, described above |
 | `ui/` | A standard-library CLI over the engine — see `ui/README.md` |
 | `tests/` | Verification suite |
 

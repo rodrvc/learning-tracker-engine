@@ -7,6 +7,7 @@ import { renderLearning } from "./views/learning.js";
 import { renderMaterial } from "./views/material.js";
 import { renderOrg } from "./views/org.js";
 import { DEMO_IDENTITIES, demoEnabled, loadIdentity, saveIdentity } from "./dev-identity.js";
+import { renderProgress } from "./views/progress.js";
 import { initTheme } from "./theme.js";
 
 const content = document.getElementById("view");
@@ -27,6 +28,8 @@ async function render() {
   highlightNav(view);
   if (view === "learning") {
     await renderLearning(content, api, param);
+  } else if (view === "progress") {
+    await renderProgress(content, api, param);
   } else if (view === "material") {
     await renderMaterial(content, api, param);
   } else if (view === "org") {
