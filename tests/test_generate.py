@@ -463,7 +463,16 @@ class TestAimedAtUncoveredObjectives:
     stayed missing.
     """
 
+    SEARCH = Material(
+        material_id="mat-search",
+        topic_id="ai-103",
+        title="Azure AI Search",
+        source="notes.md",
+        body="A skillset enriches the documents of an index during indexing.\n",
+        created_at=T0,
+    )
     BLOB = Objective(objective_id="D1.1", title="Blob storage", domain="D1")
+    SKILLSET = Objective(objective_id="D2.1", title="Search skillsets", domain="D2")
     ABSENT = Objective(objective_id="D3.1", title="Conversational intents", domain="D3")
 
     def _aimed(self, targets, existing=None):
@@ -474,12 +483,47 @@ class TestAimedAtUncoveredObjectives:
             now=FixedClock(T0),
         )
 
-    def test_terms_carry_across_a_plural_and_drop_the_noise(self):
-        """What "this page mentions that objective" means, and the one piece of
-        morphology behind it: "Search skillsets" against a page writing "a
-        skillset enriches documents" must not read as no mention at all."""
-        assert "skillset" in targeting.terms("Search skillsets")
-        assert targeting.terms("the and for a 12") == frozenset()
+    def test_the_gap_is_read_off_the_questions(self):
+        """Not off a per-objective counter, for the reason SPEC's decision 1
+        gives about the attempt history: a counter can disagree with the facts."""
+        remaining = targeting.objectives_without_questions(
+            [self.BLOB, self.SKILLSET], self._aimed([self.BLOB]).questions
+        )
+        assert [obj.objective_id for obj in remaining] == ["D2.1"]
+
+    def test_the_plan_aims_each_page_at_the_objectives_it_talks_about(self):
+        plan = targeting.plan_coverage_run(
+            [MATERIAL, self.SEARCH], [self.BLOB, self.SKILLSET], max_pages=5
+        )
+        assert {
+            step.material.material_id: [obj.objective_id for obj in step.targets]
+            for step in plan
+        } == {"mat-1": ["D1.1"], "mat-search": ["D2.1"]}
+
+    def test_a_page_sharing_nothing_with_a_target_is_never_scheduled(self):
+        """An objective no page mentions costs no model call: the call would
+        spend money to be told what the ranking knows, and the gap is reported
+        either way. ``max_pages`` bounds the rest."""
+        assert (
+            targeting.plan_coverage_run([MATERIAL], [self.ABSENT], max_pages=5) == ()
+        )
+        assert len(
+            targeting.plan_coverage_run(
+                [MATERIAL, self.SEARCH], [self.BLOB, self.SKILLSET], max_pages=1
+            )
+        ) == 1
+
+    def test_no_page_is_aimed_at_more_targets_than_one_call_can_answer(self):
+        """One word of overlap makes a page a candidate, so a broad page matches
+        dozens of objectives; aiming all of them at one call gets most reported
+        uncovered by a page that was never about them, with no second page ever
+        tried (seen on the owner's real data: 33 of 37 on one page)."""
+        targets = [
+            Objective(objective_id=f"D1.{i}", title="Blob storage", domain="D1")
+            for i in range(12)
+        ]
+        plan = targeting.plan_coverage_run([MATERIAL], targets, max_pages=1)
+        assert len(plan[0].targets) == targeting.MAX_TARGETS_PER_PAGE
 
     def test_stub_covers_an_objective_the_material_supports(self):
         result = self._aimed([self.BLOB])
