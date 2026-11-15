@@ -25,7 +25,7 @@ Delivery strategy: single-pr (two work-unit commits, one per issue).
   `org_id`/`org_role`), membership record, read-only teacher endpoint + web UI
   view for `org:admin`, members see only own data, seed demo org (teacher + 3-4
   students with history), dev-only impersonation when auth is off, tests.
-- [ ] T3 Push branch, open PR against main (Closes #58, Closes #75), update Orca
+- [x] T3 Push branch, open PR against main (Closes #58, Closes #75), update Orca
   worktree comment.
 
 ## Acceptance
@@ -52,3 +52,5 @@ Delivery strategy: single-pr (two work-unit commits, one per issue).
   Full suite vs Postgres (port 5460): 775 passed, 0 skipped (756 + 19 new).
   Skipped: entitlement check (LEARNING_TRACKER_REQUIRE_ENTITLEMENT), pruning
   members who left the org.
+
+- T2 commit 798090e. T3 done: PR https://github.com/rodrvc/learning-tracker-engine/pull/80 (Closes #58, #75); Orca worktree comment updated.
