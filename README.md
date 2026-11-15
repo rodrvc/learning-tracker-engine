@@ -59,6 +59,38 @@ objective already shows up as due for review. Nobody's real study material,
 generated on the spot; safe to skip and start from an empty topic list
 instead.
 
+### Teacher view (demo with a class in it)
+
+Every learner's data is private to them (issue #58); an *organization admin* (a
+teacher) additionally gets a read-only table of their organization's members:
+per member and topic, the typical level, how many objectives are due and how
+many were never practised (issue #75). Members never see each other's data.
+
+With Clerk, the organization and role come from the verified session token
+(`o.id` / `o.rol` in v2 tokens, `org_id` / `org_role` in v1) and the app records
+each member it sees, so a teacher lists the people who have actually used it.
+
+To see it without Clerk, seed a demo organization and impersonate its users. The
+impersonation exists **only while `LEARNING_TRACKER_CLERK_ISSUER` is unset**;
+with it set, the headers below are never read.
+
+```sh
+.venv/bin/python -m scripts.seed_demo_org
+# then run the app as usual (auth off) and open http://127.0.0.1:8000/?demo=1
+```
+
+This creates the organization `org_demo`, a teacher (`demo_teacher`) and four
+students (`demo_ana`, `demo_bruno`, `demo_carla`, `demo_diego`) with backdated
+histories. In the browser, `?demo=1` adds a selector to the header: pick
+"Docente Demo (docente)" and a "Vista docente" tab appears; pick a student and
+it disappears, and the student sees only their own topic. By hand, the same
+thing is three headers: `X-Dev-User`, `X-Dev-Org`, `X-Dev-Role`.
+
+```sh
+curl -H 'X-Dev-User: demo_teacher' -H 'X-Dev-Org: org_demo' -H 'X-Dev-Role: admin' \
+  http://127.0.0.1:8000/org/progress
+```
+
 ### The path by hand, in the browser
 
 1. **Tópicos** → create one, e.g. id `redes`, name `Redes`.
@@ -89,6 +121,9 @@ The CLI (`ui/`, see below) is a separate, older path that predates the web
 application: it keeps its own store as JSON on disk, in the standard user
 data directory of the operating system, controlled by `LEARNING_TRACKER_DATA`.
 The two do not share data.
+
+In the web application every row belongs to a user: the Clerk session's `sub`, or the
+single implicit user `local` when authentication is off (migration `0004`).
 
 ## Layout
 

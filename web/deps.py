@@ -23,6 +23,7 @@ from generate.openai_backend import OpenAIGenerator
 from generate.generator import QuestionGenerator
 from core.tracker import LearningTracker
 from store import SystemClock
+from store.members import PostgresMemberStore
 from store.postgres import PostgresAttemptStore, PostgresProfileStore
 
 from .auth import Identity, require_session
@@ -43,6 +44,7 @@ class Resources:
     questions: PostgresQuestionStore
     generator: QuestionGenerator
     clock: Clock
+    members: PostgresMemberStore
 
     def for_user(self, user_id: str) -> "Resources":
         """The same collaborators with every store bound to ``user_id``.
@@ -118,6 +120,7 @@ def build_resources(settings: Settings) -> Resources:
     attempts = PostgresAttemptStore(pool.connection, **kwargs)
     materials = PostgresMaterialStore(pool.connection, **kwargs)
     questions = PostgresQuestionStore(pool.connection, **kwargs)
+    members = PostgresMemberStore(pool.connection, **kwargs)
     return Resources(
         pool=pool,
         profiles=profiles,
@@ -129,6 +132,7 @@ def build_resources(settings: Settings) -> Resources:
         # else: uploading, reading, practising and progress keep working.
         generator=OpenAIGenerator(),
         clock=SystemClock(),
+        members=members,
     )
 
 
@@ -143,8 +147,22 @@ def get_resources(
     """FastAPI dependency: the resources built at startup, scoped to the
     caller. ``require_session`` is resolved once per request (FastAPI caches
     it), so this is the same verified identity the router-level dependency
-    already checked."""
-    return request.app.state.resources.for_user(identity.user_id)
+    already checked.
+
+    A session with an active organization is also recorded as a member of it
+    (``store.members``): that is how a teacher later finds out who is there.
+    """
+    base: Resources = request.app.state.resources
+    if identity.org_id is not None:
+        base.members.upsert(
+            identity.org_id,
+            identity.user_id,
+            identity.org_role or "org:member",
+            base.clock.now(),
+            display_name=identity.name,
+            email=identity.email,
+        )
+    return base.for_user(identity.user_id)
 
 
 __all__ = ["Resources", "build_resources", "close_resources", "get_resources"]

@@ -245,6 +245,24 @@ backfills existing rows to `local`. `attempt_id`, `material_id` and `question_id
 globally unique (SPEC C9), so an id another user already used is a `409`, not a second row.
 The JSON and in-memory stores used by the CLI stay single-user.
 
+**Teacher view (#75):** the verified token also gives the session's active organization
+and role (v2 tokens: `o.id` and `o.rol`, where the role may be short, e.g. `admin`; v1:
+`org_id` and `org_role`). The role is normalized to Clerk's key (`org:admin`). Every
+authenticated request that carries an organization upserts the user into `org_members`
+(migration `0005`), so the table holds the members seen so far, not Clerk's full roster.
+`GET /org/progress` answers only to `org:admin` (`403` otherwise, before storage is
+touched) and returns, for each other member of the caller's own organization and each
+non-archived topic: typical level (median of the objectives' levels), objectives due,
+objectives never practised, attempts and mean score, all from the engine's own
+`get_summary`. `GET /me` reports `{user_id, org_id, org_role, is_teacher}` so a front end
+can decide whether to offer the view. Not done: an optional entitlement check
+(`LEARNING_TRACKER_REQUIRE_ENTITLEMENT`), and dropping members who left the organization.
+
+**Demo impersonation (auth off only):** with `LEARNING_TRACKER_CLERK_ISSUER` unset, the
+headers `X-Dev-User`, `X-Dev-Org`, `X-Dev-Role` (and `X-Dev-Name`) choose the identity of a
+request. With the issuer set they are not read at all. `python -m scripts.seed_demo_org`
+creates the matching demo organization; see the README, "Teacher view".
+
 **A source that grades something other than this engine's own quiz bank** — free text, a
 written exercise, a spoken answer, a simulated exam — uses two routes in
 `web/routers/ingest.py` instead of `POST .../practice/answer`:

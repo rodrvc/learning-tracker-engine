@@ -42,7 +42,7 @@ test("the retired views redirect, and material routes without a tab", () => {
 // tree, so it is not a place the header can send anyone to.
 test("the nav is the one tab of issue #69", () => {
   assert.deepEqual(NAV_VIEWS, ["learning"]);
-  assert.deepEqual(VIEWS, ["learning", "material"]);
+  assert.deepEqual(VIEWS, ["learning", "material", "org"]);
 });
 
 test("every NAV_VIEWS entry has a nav link in index.html, and nothing else does", () => {

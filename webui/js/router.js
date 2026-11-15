@@ -3,11 +3,13 @@
 // One tab (issue #69), and one view that is reachable but not a tab.
 // `NAV_VIEWS` is what the header offers; `VIEWS` is what the router
 // answers. Material is in the second list only: it is an action inside a
-// goal, so it has a route and no tab of its own. A nav of one entry is not
+// goal, so it has a route and no tab of its own. `org` (issue #75) is the
+// teacher view: reachable by anyone who types it, but the server answers 403
+// to a non-admin, and app.js only offers the link to an admin. A nav of one entry is not
 // a nav, which is the point: there is one place, and practising is a mode
 // inside it rather than somewhere else to be.
 export const NAV_VIEWS = ["learning"];
-export const VIEWS = [...NAV_VIEWS, "material"];
+export const VIEWS = [...NAV_VIEWS, "material", "org"];
 const DEFAULT_VIEW = "learning";
 
 // The views that stopped existing, pointed at the one that absorbed them:
