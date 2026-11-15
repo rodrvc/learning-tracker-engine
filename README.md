@@ -36,7 +36,7 @@ machine already owns 5432. Set `POSTGRES_PORT` in `.env` to a free port and
 change the port in `LEARNING_TRACKER_DATABASE_URL` to match, then run it again.
 
 Leave that running and open <http://127.0.0.1:8000> in a browser. That is the
-whole application: a page with three tabs (Aprendiendo, Progreso, Practicar;
+whole application: a page with two tabs (Aprendiendo, Progreso; practising is a mode of the tree, and
 Material opens from inside a goal) served by the same process that answers the API.
 
 There is no sign-in step here: with no `LEARNING_TRACKER_CLERK_ISSUER`,

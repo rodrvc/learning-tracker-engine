@@ -81,10 +81,30 @@ test("overview adds the goals up", () => {
   assert.equal(overview.total, 10);
   assert.equal(overview.due, 2);
   assert.equal(overview.counts.mastered, 2);
-  const html = overviewView(overview, 4);
+  const html = overviewView(overview);
   assert.match(html, /Objetivos que domina/);
   assert.match(html, /Por reforzar/);
-  assert.match(html, /Repasos próximos/);
+});
+
+// Coverage is the share of objectives the engine has assessed at all, and the
+// due tile is the engine's own is_due count - not the length of the capped
+// upcoming list, which would stop at six.
+test("overview reports coverage and what is due now", () => {
+  const one = buildProgress(topic, states, { mean_score: 0.5 });
+  const overview = buildOverview([one, one]);
+  assert.equal(overview.practised, overview.total - overview.counts.new);
+  const html = overviewView(overview);
+  const coverage = Math.round((overview.practised / overview.total) * 100);
+  assert.match(html, new RegExp(`>${coverage}%<`));
+  assert.match(html, /Cobertura/);
+  assert.match(html, /Repasos pendientes/);
+  assert.match(html, new RegExp(`>${overview.due}<`));
+});
+
+test("an empty overview shows zero coverage, not NaN", () => {
+  const html = overviewView(buildOverview([]));
+  assert.match(html, />0%</);
+  assert.doesNotMatch(html, /NaN/);
 });
 
 test("upcoming reviews are sorted, skip never-practised objectives and honour the limit", () => {

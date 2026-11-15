@@ -41,7 +41,7 @@ export async function renderProgress(container, api, topicId) {
     const upcoming = upcomingReviews(models);
     const now = Date.now();
     body.innerHTML = `
-      ${overviewView(buildOverview(models), upcoming.length)}
+      ${overviewView(buildOverview(models))}
       <h3>Cómo vas en cada materia</h3>
       ${models.map(goalProgressView).join("")}
       <h3 class="prog-section">Próximos repasos</h3>

@@ -28,3 +28,14 @@ objectives grouped in calm bands and the next scheduled reviews.
 ## Checks / progress
 - `.venv/bin/python -m pytest -q` and `node --test tests/webui` (see commit message / final report).
 - Verified visually on a throwaway stack (Postgres :5544, API :8011), torn down afterwards.
+
+## Rebase and demo pass (2026-11-15)
+
+- Rebased onto main (one-screen tree, checkboxes, multi-scope practice). Kept
+  practising as a mode of the tree; Progreso is the second tab and
+  `#/practice/<id>` still aliases to the learning tree.
+- Overview strip now shows coverage (objectives assessed at least once) and the
+  engine's own due count instead of the length of the capped upcoming list.
+- Checks: `node --test tests/webui/` 136 passed; `pytest` 754 passed, 0 skipped
+  (Postgres via docker compose on port 5461). Seeded school + sample data and
+  checked Progreso and Aprendiendo in the browser.

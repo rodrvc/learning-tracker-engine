@@ -100,7 +100,10 @@ export function buildOverview(models) {
     total += model.total;
     due += model.due;
   }
-  return { counts, total, due, goals: models.length };
+  // Coverage: objectives the engine has assessed at least once, i.e. every
+  // band but "Por empezar". A count of engine levels, not a new score.
+  const practised = total - counts.new;
+  return { counts, total, due, practised, goals: models.length };
 }
 
 /**
@@ -219,12 +222,17 @@ function legendView(counts) {
     .join("")}</ul>`;
 }
 
-export function overviewView(overview, upcomingCount) {
+export function overviewView(overview) {
+  const coverage = overview.total ? percent(overview.practised / overview.total) : 0;
   const tiles = [
+    {
+      value: `${coverage}%`,
+      label: `Cobertura: ${overview.practised} de ${overview.total} objetivos practicados`,
+      band: "overall",
+    },
     { value: overview.counts.mastered, label: "Objetivos que domina", band: "mastered" },
-    { value: overview.counts.good, label: "Van bien", band: "good" },
     { value: overview.counts.reinforce, label: "Por reforzar", band: "reinforce" },
-    { value: upcomingCount, label: "Repasos próximos", band: "review" },
+    { value: overview.due, label: "Repasos pendientes hoy", band: "review" },
   ];
   return `<ul class="prog-tiles">${tiles
     .map(
