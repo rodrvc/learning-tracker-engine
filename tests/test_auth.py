@@ -24,7 +24,15 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
 
 from web.app import create_app
-from web.config import Settings
+from web.config import (
+    AUTH_DISABLED_VAR,
+    CLERK_AUTHORIZED_PARTIES_VAR,
+    CLERK_ISSUER_VAR,
+    DATABASE_URL_VAR,
+    ConfigurationError,
+    Settings,
+)
+import web.app as app_module
 import web.auth as auth_module
 
 DEAD_DSN = "postgresql://nobody:nobody@127.0.0.1:1/nowhere"
@@ -32,6 +40,9 @@ ISSUER = "https://example-app.clerk.accounts.example"
 
 
 def _settings(**overrides) -> Settings:
+    # Auth off unless a test configures an issuer: the explicit switch, since
+    # leaving both unset is now a configuration error (fail closed).
+    overrides.setdefault("auth_disabled", not overrides.get("clerk_issuer"))
     return Settings(
         database_url=DEAD_DSN, schema=None, host="127.0.0.1", port=8000, **overrides
     )
@@ -59,9 +70,11 @@ class _StubJwksClient:
         return _StubSigningKey(self._public_key)
 
 
-def _token(private_key, *, issuer=ISSUER, expires_delta=timedelta(minutes=5)) -> str:
+def _token(private_key, *, issuer=ISSUER, expires_delta=timedelta(minutes=5), **extra) -> str:
     now = datetime.now(timezone.utc)
     claims = {"iss": issuer, "sub": "user_123", "iat": now, "exp": now + expires_delta}
+    claims.update(extra)
+    claims = {key: value for key, value in claims.items() if value is not None}
     return jwt.encode(claims, private_key, algorithm="RS256")
 
 
@@ -76,11 +89,11 @@ def stub_jwks(monkeypatch, keypair):
 
 
 @pytest.mark.spec
-def test_auth_disabled_by_default_every_route_answers_with_no_token():
-    """The off switch: no `clerk_issuer` configured, exactly what every one
-    of the pre-existing 661 tests relies on."""
+def test_auth_disabled_switch_lets_every_route_answer_with_no_token():
+    """The explicit off switch, which the rest of the suite relies on."""
     settings = _settings()
     assert settings.clerk_issuer is None
+    assert settings.auth_disabled is True
     with TestClient(create_app(settings), raise_server_exceptions=False) as client:
         response = client.get("/topics")
     # No 401: the dead DSN is reached and answers 503, proving the request
@@ -195,6 +208,98 @@ def test_token_for_a_different_issuer_is_rejected(stub_jwks, keypair):
         response = client.get("/topics", headers={"Authorization": f"Bearer {token}"})
     assert response.status_code == 401
     assert response.json() == {"detail": "invalid session"}
+
+
+@pytest.mark.spec
+def test_no_issuer_and_no_switch_refuses_to_start():
+    """Fail closed: a deploy that forgot the issuer must not serve anyone."""
+    with pytest.raises(ConfigurationError, match=CLERK_ISSUER_VAR):
+        Settings.from_env({DATABASE_URL_VAR: DEAD_DSN})
+    with pytest.raises(ConfigurationError):
+        Settings(database_url=DEAD_DSN, schema=None, host="127.0.0.1", port=8000)
+
+
+@pytest.mark.spec
+def test_issuer_and_switch_together_is_a_configuration_error():
+    env = {DATABASE_URL_VAR: DEAD_DSN, CLERK_ISSUER_VAR: ISSUER, AUTH_DISABLED_VAR: "true"}
+    with pytest.raises(ConfigurationError, match=AUTH_DISABLED_VAR):
+        Settings.from_env(env)
+
+
+@pytest.mark.spec
+@pytest.mark.parametrize("value", ["true", "TRUE", "1", "yes", " Yes "])
+def test_auth_disabled_switch_accepts_the_contract_spellings(value):
+    settings = Settings.from_env({DATABASE_URL_VAR: DEAD_DSN, AUTH_DISABLED_VAR: value})
+    assert settings.auth_disabled is True
+
+
+@pytest.mark.edge
+@pytest.mark.parametrize("value", ["false", "0", "no"])
+def test_auth_disabled_switch_off_still_requires_an_issuer(value):
+    with pytest.raises(ConfigurationError, match=CLERK_ISSUER_VAR):
+        Settings.from_env({DATABASE_URL_VAR: DEAD_DSN, AUTH_DISABLED_VAR: value})
+
+
+@pytest.mark.edge
+def test_auth_disabled_switch_rejects_an_ambiguous_value():
+    with pytest.raises(ConfigurationError, match=AUTH_DISABLED_VAR):
+        Settings.from_env({DATABASE_URL_VAR: DEAD_DSN, AUTH_DISABLED_VAR: "enabled"})
+
+
+@pytest.mark.spec
+def test_main_exits_with_one_line_on_a_configuration_error(monkeypatch, capsys):
+    monkeypatch.setattr("os.environ", {DATABASE_URL_VAR: DEAD_DSN})
+    # `--migrate` included: the config check must come before the database
+    # is touched (the DSN is dead, so a migration attempt would not exit 2).
+    with pytest.raises(SystemExit) as raised:
+        app_module.main(["--migrate"])
+    assert raised.value.code == 2
+    assert capsys.readouterr().err.startswith("error: authentication is not configured")
+
+
+@pytest.mark.spec
+def test_authorized_parties_are_parsed_from_a_comma_separated_list():
+    env = {
+        DATABASE_URL_VAR: DEAD_DSN,
+        CLERK_ISSUER_VAR: ISSUER,
+        CLERK_AUTHORIZED_PARTIES_VAR: "https://a.example/, https://b.example ,,",
+    }
+    settings = Settings.from_env(env)
+    assert settings.clerk_authorized_parties == ("https://a.example", "https://b.example")
+
+
+@pytest.mark.spec
+def test_token_with_an_authorized_azp_reaches_the_route(stub_jwks, keypair):
+    private_key, _ = keypair
+    token = _token(private_key, azp="https://learning.example")
+    settings = _settings(clerk_issuer=ISSUER, clerk_authorized_parties=("https://learning.example",))
+    with TestClient(create_app(settings), raise_server_exceptions=False) as client:
+        response = client.get("/topics", headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == 503  # past auth, into the dead database
+
+
+@pytest.mark.edge
+@pytest.mark.parametrize("azp", ["https://other-product.example", None])
+def test_token_minted_for_another_origin_is_rejected(stub_jwks, keypair, azp):
+    """One Clerk instance serves every product: a token for another
+    product's origin, or one with no `azp` at all, must not get in."""
+    private_key, _ = keypair
+    token = _token(private_key, azp=azp)
+    settings = _settings(clerk_issuer=ISSUER, clerk_authorized_parties=("https://learning.example",))
+    with TestClient(create_app(settings), raise_server_exceptions=False) as client:
+        response = client.get("/topics", headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == 401
+    assert response.json() == {"detail": "invalid session"}
+
+
+@pytest.mark.edge
+def test_token_without_sub_is_rejected(stub_jwks, keypair):
+    private_key, _ = keypair
+    token = _token(private_key, sub=None)
+    settings = _settings(clerk_issuer=ISSUER)
+    with TestClient(create_app(settings), raise_server_exceptions=False) as client:
+        response = client.get("/topics", headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == 401
 
 
 @pytest.mark.spec

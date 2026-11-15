@@ -25,17 +25,34 @@ HOST_VAR = "LEARNING_TRACKER_WEB_HOST"
 #: Port the HTTP server binds to.
 PORT_VAR = "LEARNING_TRACKER_WEB_PORT"
 
+#: The port a platform such as Railway injects. Read when ``PORT_VAR`` is
+#: unset, so a deploy needs no product-specific port setting (product
+#: contract, section 5).
+PLATFORM_PORT_VAR = "PORT"
+
 #: Clerk's issuer / frontend API for this instance, e.g.
-#: ``https://example-app.clerk.accounts.example``. This is also how
-#: authentication is switched on: unset (the default everywhere the test
-#: suite runs), every route accepts every request, exactly as before this
-#: setting existed. Set it and every request to the API (except ``/health``
-#: and ``/auth/config``, see ``web/app.py``) must carry a Clerk session token
-#: that verifies against this issuer's JWKS. There is deliberately no
-#: separate on/off flag: two settings that can disagree (enabled with no
-#: issuer, or an issuer nobody asked to enforce) is a state this module does
-#: not want to have to explain.
+#: ``https://example-app.clerk.accounts.example``. Set it and every request to
+#: the API (except ``/health`` and ``/auth/config``, see ``web/app.py``) must
+#: carry a Clerk session token that verifies against this issuer's JWKS.
+#:
+#: Authentication fails closed (product contract, section 2): leaving this
+#: unset is a configuration error unless ``AUTH_DISABLED_VAR`` says, in so
+#: many words, that authentication is meant to be off. A deploy that simply
+#: forgot the issuer must refuse to start, not serve everyone's data to
+#: anyone.
 CLERK_ISSUER_VAR = "LEARNING_TRACKER_CLERK_ISSUER"
+
+#: The explicit off switch for authentication, for local development and
+#: single-user installs. ``true``/``1``/``yes`` turns it on; setting it
+#: together with an issuer is a configuration error, since the two disagree
+#: about whether sessions are checked.
+AUTH_DISABLED_VAR = "LEARNING_TRACKER_AUTH_DISABLED"
+
+#: Comma-separated origins accepted in a session token's ``azp`` claim, e.g.
+#: ``https://learning.acuarialabs.cl``. Every Acuaria product shares one Clerk
+#: instance, so without this a token minted for another product's origin
+#: would be accepted here. Unset means ``azp`` is not checked.
+CLERK_AUTHORIZED_PARTIES_VAR = "LEARNING_TRACKER_CLERK_AUTHORIZED_PARTIES"
 
 #: Clerk's publishable key, handed to the browser so it can start a session.
 #: Not a secret - Clerk documents it as safe to ship to a client - but kept
@@ -48,7 +65,16 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
 
 
-class MissingSettingError(RuntimeError):
+_TRUE_VALUES = frozenset({"true", "1", "yes"})
+_FALSE_VALUES = frozenset({"", "false", "0", "no"})
+
+
+class ConfigurationError(RuntimeError):
+    """The environment describes a configuration the application refuses to
+    run with. Raised at startup, before any request is accepted."""
+
+
+class MissingSettingError(ConfigurationError):
     """A required environment variable is absent.
 
     Raised at startup, before the application accepts any request, naming the
@@ -62,6 +88,19 @@ class MissingSettingError(RuntimeError):
         self.var_name = var_name
 
 
+def _parse_flag(var_name: str, raw: str | None) -> bool:
+    """A boolean switch. Anything that is not clearly on or off is an error
+    rather than a guess: ``enabled`` read as off would be a quiet surprise."""
+    value = (raw or "").strip().lower()
+    if value in _TRUE_VALUES:
+        return True
+    if value in _FALSE_VALUES:
+        return False
+    raise ConfigurationError(
+        f"{var_name} must be one of true/1/yes or false/0/no, got {raw!r}"
+    )
+
+
 @dataclass(frozen=True)
 class Settings:
     """Every environment-derived setting the web backend needs.
@@ -72,9 +111,14 @@ class Settings:
         host: interface the HTTP server binds to.
         port: TCP port the HTTP server binds to.
         clerk_issuer: Clerk issuer to validate sessions against, or ``None``
-            to run with authentication switched off.
+            when ``auth_disabled`` is set.
         clerk_publishable_key: Clerk publishable key served to the browser,
             or ``None``.
+        auth_disabled: authentication explicitly switched off. Exactly one
+            of this and ``clerk_issuer`` must be set; the constructor
+            enforces it, so no code path can end up with neither.
+        clerk_authorized_parties: origins accepted in the ``azp`` claim;
+            empty means ``azp`` is not checked.
     """
 
     database_url: str
@@ -83,6 +127,22 @@ class Settings:
     port: int
     clerk_issuer: str | None = None
     clerk_publishable_key: str | None = None
+    auth_disabled: bool = False
+    clerk_authorized_parties: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        # Checked here rather than only in ``from_env`` so a hand-built
+        # ``Settings`` cannot fail open either.
+        if self.auth_disabled and self.clerk_issuer:
+            raise ConfigurationError(
+                f"{AUTH_DISABLED_VAR} and {CLERK_ISSUER_VAR} are both set: "
+                "unset one of them"
+            )
+        if not self.auth_disabled and not self.clerk_issuer:
+            raise ConfigurationError(
+                f"authentication is not configured: set {CLERK_ISSUER_VAR}, "
+                f"or set {AUTH_DISABLED_VAR}=true to run without it"
+            )
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str]) -> "Settings":
@@ -98,22 +158,31 @@ class Settings:
                 or empty. There is no default: a database is not something
                 this codebase can guess and it must never point at a
                 personal machine by accident.
+            ConfigurationError: authentication is neither configured nor
+                explicitly disabled, or is both; or a value is malformed.
         """
         database_url = environ.get(DATABASE_URL_VAR)
         if not database_url:
             raise MissingSettingError(DATABASE_URL_VAR)
         schema = environ.get(SCHEMA_VAR) or None
         host = environ.get(HOST_VAR) or DEFAULT_HOST
-        raw_port = environ.get(PORT_VAR)
+        port_var = PORT_VAR if environ.get(PORT_VAR) else PLATFORM_PORT_VAR
+        raw_port = environ.get(port_var)
         if raw_port:
             try:
                 port = int(raw_port)
             except ValueError as exc:
-                raise ValueError(
-                    f"{PORT_VAR} must be an integer, got {raw_port!r}"
+                raise ConfigurationError(
+                    f"{port_var} must be an integer, got {raw_port!r}"
                 ) from exc
         else:
             port = DEFAULT_PORT
+        auth_disabled = _parse_flag(AUTH_DISABLED_VAR, environ.get(AUTH_DISABLED_VAR))
+        authorized_parties = tuple(
+            party.strip().rstrip("/")
+            for party in (environ.get(CLERK_AUTHORIZED_PARTIES_VAR) or "").split(",")
+            if party.strip()
+        )
         clerk_issuer = environ.get(CLERK_ISSUER_VAR) or None
         if clerk_issuer:
             # A trailing slash would build a JWKS URL with a doubled slash
@@ -128,6 +197,8 @@ class Settings:
             port=port,
             clerk_issuer=clerk_issuer,
             clerk_publishable_key=clerk_publishable_key,
+            auth_disabled=auth_disabled,
+            clerk_authorized_parties=authorized_parties,
         )
 
 
@@ -136,10 +207,14 @@ __all__ = [
     "SCHEMA_VAR",
     "HOST_VAR",
     "PORT_VAR",
+    "PLATFORM_PORT_VAR",
     "CLERK_ISSUER_VAR",
     "CLERK_PUBLISHABLE_KEY_VAR",
+    "AUTH_DISABLED_VAR",
+    "CLERK_AUTHORIZED_PARTIES_VAR",
     "DEFAULT_HOST",
     "DEFAULT_PORT",
+    "ConfigurationError",
     "MissingSettingError",
     "Settings",
 ]

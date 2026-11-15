@@ -22,7 +22,7 @@ from fastapi.testclient import TestClient
 from core.errors import StorageError
 from core.models import ObjectiveState, ProfileSummary, StateComparison
 from web.app import STORAGE_UNAVAILABLE_DETAIL, create_app
-from web.config import DATABASE_URL_VAR, MissingSettingError, Settings
+from web.config import DATABASE_URL_VAR, ConfigurationError, MissingSettingError, Settings
 from web import deps
 from web.deps import build_resources, close_resources
 from web.routers.progress import ObjectiveStateOut, ProfileSummaryOut, StateComparisonOut
@@ -34,7 +34,7 @@ DEAD_DSN = "postgresql://leaky_user:leaky_password@127.0.0.1:1/nowhere"
 
 @pytest.fixture
 def dead_settings() -> Settings:
-    return Settings(database_url=DEAD_DSN, schema=None, host="127.0.0.1", port=8000)
+    return Settings(database_url=DEAD_DSN, schema=None, host="127.0.0.1", port=8000, auth_disabled=True)
 
 
 @pytest.mark.spec
@@ -42,6 +42,27 @@ def test_missing_database_url_fails_at_startup_naming_it():
     with pytest.raises(MissingSettingError) as raised:
         Settings.from_env({})
     assert DATABASE_URL_VAR in str(raised.value)
+
+
+_BASE_ENV = {DATABASE_URL_VAR: DEAD_DSN, "LEARNING_TRACKER_AUTH_DISABLED": "true"}
+
+
+@pytest.mark.spec
+def test_platform_port_is_used_when_the_product_port_is_unset():
+    """Railway injects PORT; a deploy needs no product-specific port."""
+    assert Settings.from_env({**_BASE_ENV, "PORT": "4321"}).port == 4321
+
+
+@pytest.mark.spec
+def test_product_port_wins_over_the_platform_port():
+    env = {**_BASE_ENV, "PORT": "4321", "LEARNING_TRACKER_WEB_PORT": "9000"}
+    assert Settings.from_env(env).port == 9000
+
+
+@pytest.mark.edge
+def test_non_numeric_port_names_the_variable():
+    with pytest.raises(ConfigurationError, match="PORT"):
+        Settings.from_env({**_BASE_ENV, "PORT": "eighty"})
 
 
 @pytest.mark.spec

@@ -39,11 +39,16 @@ Leave that running and open <http://127.0.0.1:8000> in a browser. That is the
 whole application: a page with four views (Tópicos, Material, Practicar,
 Progreso) served by the same process that answers the API.
 
-There is no sign-in step here: `LEARNING_TRACKER_CLERK_ISSUER` is unset by
-default, which switches authentication off entirely (see `.env.example` and
-`web/config.py`) — every request is accepted, exactly as the test suite
-expects. Set that variable and `LEARNING_TRACKER_CLERK_PUBLISHABLE_KEY` to
-require a Clerk session instead; nothing else in this quickstart changes.
+There is no sign-in step here: with no `LEARNING_TRACKER_CLERK_ISSUER`,
+`scripts/dev-up.sh` sets `LEARNING_TRACKER_AUTH_DISABLED=true` and says so,
+and every request is accepted. Authentication fails closed everywhere else:
+starting the app (`python -m web.app`, the Docker image) with neither variable
+set refuses to start, and setting both is a configuration error. Set the
+issuer and `LEARNING_TRACKER_CLERK_PUBLISHABLE_KEY` to require a Clerk session
+instead; nothing else in this quickstart changes.
+
+To run the production image locally, or to deploy it on Railway, see
+[`docs/deploy.md`](docs/deploy.md).
 
 ### See it with data in it
 
