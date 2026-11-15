@@ -232,9 +232,18 @@ session) so a caller can tell which mode it is talking to instead of guessing fr
 
 When `LEARNING_TRACKER_CLERK_ISSUER` is unset — the default everywhere the test suite
 runs — the API takes every request exactly as before this existed: no header, no session,
-nothing to change in an existing integration. This does not partition data by caller: a
-valid session is only proof that *someone* signed in, still against the one shared set of
-topics (see `SPEC.md`, and the note on `profile_id` in the ACU-278 ticket).
+nothing to change in an existing integration. In that mode everything belongs to one
+implicit user whose id is `local`.
+
+**Per-user data (#58):** with authentication on, every topic, objective, attempt, page of
+material and question belongs to the user whose Clerk session made the request. The user id
+is the verified token's `sub` claim and nothing else: it is never read from a path, a query
+string or a body, so two users can each have a topic called `redes` and neither sees the
+other's. The Postgres stores take a `user_id` (`PostgresProfileStore(...).for_user("user_x")`)
+and every query is filtered by it; migration `0004_user_scope.sql` adds the column and
+backfills existing rows to `local`. `attempt_id`, `material_id` and `question_id` stay
+globally unique (SPEC C9), so an id another user already used is a `409`, not a second row.
+The JSON and in-memory stores used by the CLI stay single-user.
 
 **A source that grades something other than this engine's own quiz bank** — free text, a
 written exercise, a spoken answer, a simulated exam — uses two routes in

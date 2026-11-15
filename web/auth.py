@@ -18,17 +18,33 @@ talking to the API with no notion of a session.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from functools import lru_cache
 
 import jwt
 from fastapi import HTTPException, Request
 from jwt import PyJWKClient
 
+from store.postgres import LOCAL_USER_ID
+
 #: Clerk signs session tokens with RS256. Pinning the algorithm list is the
 #: point of PyJWT's ``algorithms=`` argument: without it, a token that names
 #: its own algorithm (including ``none``) would be trusted to say how it
 #: should be checked.
 ALGORITHMS = ["RS256"]
+
+
+@dataclass(frozen=True)
+class Identity:
+    """Who a request is from, as established by this module and nobody else.
+
+    ``user_id`` comes only from the verified session token's ``sub`` claim
+    (or is ``LOCAL_USER_ID`` when authentication is off). Routes never read
+    it from a path, a query string or a body: every store the request touches
+    is bound to this value in ``web/deps.py``.
+    """
+
+    user_id: str
 
 
 class SessionError(HTTPException):
@@ -60,14 +76,14 @@ def _bearer_token(authorization: str | None) -> str:
     return token
 
 
-def require_session(request: Request) -> None:
+def require_session(request: Request) -> Identity:
     """FastAPI dependency: raises unless the request carries a valid Clerk
-    session for the configured issuer.
+    session for the configured issuer, and returns who it is from.
 
-    A no-op - returns without reading the ``Authorization`` header at all -
-    when ``clerk_issuer`` is unset, which is how the suite and any
-    single-user deployment that never configured Clerk keep working exactly
-    as they did before this module existed.
+    With ``clerk_issuer`` unset it returns the one implicit local user
+    without reading the ``Authorization`` header at all, which is how the
+    suite and any single-user deployment that never configured Clerk keep
+    working exactly as they did before this module existed.
 
     Reads ``request.app.state.settings`` rather than taking ``Settings`` as
     a parameter so it can be attached to a router with a plain
@@ -76,17 +92,27 @@ def require_session(request: Request) -> None:
     """
     issuer = request.app.state.settings.clerk_issuer
     if not issuer:
-        return
+        return Identity(user_id=LOCAL_USER_ID)
     token = _bearer_token(request.headers.get("authorization"))
     client = _jwks_client(issuer)
     try:
         signing_key = client.get_signing_key_from_jwt(token)
         # Without ``require`` a token from this issuer carrying no ``exp`` verifies and never expires.
-        jwt.decode(token, signing_key.key, algorithms=ALGORITHMS, issuer=issuer, options={"require": ["exp"]})
+        claims = jwt.decode(
+            token,
+            signing_key.key,
+            algorithms=ALGORITHMS,
+            issuer=issuer,
+            options={"require": ["exp", "sub"]},
+        )
     except jwt.ExpiredSignatureError as exc:
         raise SessionError("session expired") from exc
     except jwt.PyJWTError as exc:
         raise SessionError("invalid session") from exc
+    subject = claims.get("sub")
+    if not isinstance(subject, str) or not subject.strip():
+        raise SessionError("invalid session")
+    return Identity(user_id=subject)
 
 
-__all__ = ["SessionError", "require_session"]
+__all__ = ["Identity", "SessionError", "require_session"]
