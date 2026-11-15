@@ -137,7 +137,8 @@ single implicit user `local` when authentication is off (migration `0004`).
 | `generate/` | Turns a page of notes into objectives and questions (OpenAI, plus a deterministic stub used by the tests and by the sample load) |
 | `web/` | The FastAPI backend: `web/config.py` is the full list of settings it reads |
 | `webui/` | The front end it serves, static files, no build step |
-| `scripts/` | `dev-up.sh`, `seed_demo.py` and `seed_sample_data.py`, described above |
+| `scripts/` | `dev-up.sh`, `seed_demo.py` and `seed_sample_data.py`, described above; `send_due_digest.py`, the daily email of what is due (`docs/due-digest.md`) |
+| `notify/` | The due digest and its senders (console, file, SMTP) |
 | `ui/` | A standard-library CLI over the engine — see `ui/README.md` |
 | `tests/` | Verification suite |
 
