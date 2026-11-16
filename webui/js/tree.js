@@ -156,7 +156,7 @@ export function topicRowView(topic) {
   const disabled = topic.hasQuestions ? "" : ' aria-disabled="true"';
   return `<li class="tree-topic" data-scope="topic" ${id}${disabled}>
       <span class="tree-topic-title">${escapeHtml(topic.title)}</span>
-      ${chip}${topic.isDue ? '<span class="due-marker">Vencido</span>' : ""}${action}
+      ${chip}${topic.isDue ? '<span class="due-marker">Repaso pendiente</span>' : ""}${action}
     </li>`;
 }
 

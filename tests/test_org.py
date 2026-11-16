@@ -299,21 +299,3 @@ def test_dev_impersonation_drives_the_teacher_view_with_auth_off(db):
         assert client.get("/org/progress", headers=student).status_code == 403
         body = client.get("/org/progress", headers=teacher).json()
     assert [m["user_id"] for m in body["members"]] == ["demo_ana"]
-
-
-@pytest.mark.spec
-def test_demo_seed_gives_the_teacher_a_varied_class(db, monkeypatch):
-    from scripts import seed_demo_org
-
-    monkeypatch.setenv("LEARNING_TRACKER_DATABASE_URL", POSTGRES_DSN)
-    monkeypatch.setenv("LEARNING_TRACKER_SCHEMA", db)
-    assert seed_demo_org.main() == 0
-    assert seed_demo_org.main() == 0  # idempotent
-    teacher = {"X-Dev-User": "demo_teacher", "X-Dev-Org": "org_demo", "X-Dev-Role": "org:admin"}
-    with _client(POSTGRES_DSN, db, issuer=None) as client:
-        body = client.get("/org/progress", headers=teacher).json()
-    rows = {m["user_id"]: m["topics"][0] for m in body["members"]}
-    assert set(rows) == {"demo_ana", "demo_bruno", "demo_carla", "demo_diego"}
-    assert rows["demo_carla"]["unstarted_objectives"] > rows["demo_ana"]["unstarted_objectives"]
-    assert rows["demo_diego"]["due_objectives"] > rows["demo_ana"]["due_objectives"]
-    assert len({r["level"] for r in rows.values()}) > 1

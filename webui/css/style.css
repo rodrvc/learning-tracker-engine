@@ -794,10 +794,10 @@ details[open] > .tree-row::before { transform: rotate(90deg); }
   background: var(--rung, var(--rung-unassessed));
 }
 
-/* Due is not a rung: it is a deadline that has passed, whatever level the
-   objective sits on. It borrows the danger ink rather than a level colour so
-   it never reads as a sixth step on the ladder. */
-.due-marker { --rung: var(--danger); }
+/* Due is not a rung: it is a review that is waiting, whatever level the
+   objective sits on. It is a calm amber (it reads "pending", not "alarm"),
+   and it says so in words, so it never reads as a sixth step on the ladder. */
+.due-marker { --rung: var(--rung-learning); }
 
 @media (max-width: 34rem) {
   .goal-body { padding-left: 12px; }
@@ -979,3 +979,191 @@ button.back-link:hover:not(:disabled) { background: none; border-bottom-color: v
 .org-table .num { text-align: right; font-variant-numeric: tabular-nums; }
 .org-table .muted { color: var(--muted); }
 #auth select { max-width: 16rem; }
+
+/* --- Progreso dashboard (issue #74) ------------------------------------- */
+
+/* Four friendly bands over the engine's five levels. Calm on purpose: green,
+   blue, amber - no red anywhere on this screen. Every band also prints its
+   name, so colour never carries it alone. */
+:root {
+  --band-mastered: light-dark(#14855a, #3fae62);
+  --band-good: light-dark(#2f7fc4, #6aa6e0);
+  --band-reinforce: light-dark(#d79a1f, #e0b04a);
+  --band-new: light-dark(#b7c8d2, #3d5563);
+  --band-overall: var(--accent);
+  --band-review: var(--accent);
+}
+
+[data-band="mastered"] { --band: var(--band-mastered); }
+[data-band="good"] { --band: var(--band-good); }
+[data-band="reinforce"] { --band: var(--band-reinforce); }
+[data-band="new"] { --band: var(--band-new); }
+[data-band="overall"] { --band: var(--band-overall); }
+[data-band="review"] { --band: var(--band-review); }
+
+.prog-tiles {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 8px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+  gap: 12px;
+}
+
+.prog-tile {
+  padding: 16px 16px 14px;
+  border: 1px solid var(--line);
+  border-top: 3px solid var(--band);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--band) 7%, var(--paper));
+}
+
+.prog-tile-value {
+  display: block;
+  font: 400 2.4rem/1.1 var(--display);
+  letter-spacing: -0.04em;
+}
+
+.prog-tile-label { display: block; margin-top: 4px; font-size: 13px; color: var(--muted); }
+
+.prog-upcoming { list-style: none; padding: 0; margin: 0 0 8px; }
+
+.prog-upcoming li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 4px;
+  border-top: 1px solid var(--line);
+}
+
+.prog-upcoming li:last-child { border-bottom: 1px solid var(--line); }
+.prog-upcoming-title { font-size: 15px; }
+
+.prog-upcoming-title small {
+  display: block;
+  font: 10px/1.6 var(--mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.prog-upcoming-when {
+  flex: none;
+  font: 11px/1.6 var(--mono);
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.prog-upcoming .pending .prog-upcoming-when { color: color-mix(in srgb, var(--band-reinforce) 70%, var(--ink)); }
+
+.prog-goal { margin-top: 36px; padding-top: 24px; }
+
+.prog-goal-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.prog-goal { border-top: 1px solid var(--line); }
+.prog-goal-head h3 {
+  flex: 1;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  font: 400 1.6rem/1.2 var(--display);
+  letter-spacing: -0.03em;
+  text-transform: none;
+  color: var(--ink);
+}
+.prog-goal-head h3::before { display: none; }
+
+.prog-goal-summary { display: flex; align-items: center; gap: 20px; padding: 14px 0 6px; }
+
+.prog-goal-percent {
+  flex: none;
+  font: 400 3rem/1 var(--display);
+  letter-spacing: -0.05em;
+}
+
+.prog-goal-percent small { font-size: 1.2rem; color: var(--muted); letter-spacing: 0; }
+
+.prog-goal-bars { flex: 1; min-width: 0; display: grid; gap: 10px; }
+
+/* The headline meter and the per-objective meters. */
+.meter {
+  display: block;
+  height: 10px;
+  border-radius: var(--radius-full);
+  background: var(--sky);
+  overflow: hidden;
+}
+
+.meter-fill {
+  display: block;
+  height: 100%;
+  border-radius: var(--radius-full);
+  background: var(--band);
+}
+
+/* The mix of bands in a goal or a unit: one segment per band, as wide as its
+   share of objectives. */
+.stack { display: flex; gap: 2px; height: 8px; border-radius: var(--radius-full); overflow: hidden; }
+.stack-seg { display: block; background: var(--band); }
+
+.legend {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.legend li { display: inline-flex; align-items: center; gap: 7px; }
+.legend-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--band); }
+
+.prog-unit { margin-top: 22px; }
+
+.prog-unit-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.prog-unit-head h4 { margin: 0; font: 500 15px/1.4 "Inter", system-ui, sans-serif; letter-spacing: -0.01em; }
+.prog-unit-count { font: 10px/1.6 var(--mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); white-space: nowrap; }
+
+.prog-objectives { list-style: none; padding: 0; margin: 10px 0 0; }
+
+.prog-objective {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 7rem auto;
+  align-items: center;
+  gap: 4px 14px;
+  padding: 9px 0;
+  border-top: 1px solid var(--line);
+}
+
+.prog-objective-title { font-size: 14px; line-height: 1.4; }
+.prog-objective .meter { height: 7px; }
+.meter-none { font-size: 12px; color: var(--muted); }
+
+.band-chip, .pending-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-self: end;
+  padding: 2px 10px;
+  font: 9px/1.6 var(--mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  border-radius: var(--radius-full);
+  color: var(--ink);
+  background: color-mix(in srgb, var(--band, var(--band-reinforce)) 22%, var(--paper));
+  border: 1px solid color-mix(in srgb, var(--band, var(--band-reinforce)) 50%, transparent);
+}
+
+.band-chip { min-width: 6.2rem; justify-content: center; }
+.pending-chip { --band: var(--band-reinforce); margin-left: 8px; vertical-align: 1px; }
+
+@media (max-width: 34rem) {
+  .prog-objective { grid-template-columns: minmax(0, 1fr) auto; }
+  .prog-objective .meter, .prog-objective .meter-none { grid-column: 1 / -1; grid-row: 2; }
+  .prog-goal-summary { flex-direction: column; align-items: stretch; gap: 8px; }
+}
+
+.prog-section { margin-top: 48px; }
