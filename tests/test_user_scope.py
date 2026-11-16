@@ -223,6 +223,14 @@ def test_auth_off_is_one_implicit_local_user():
 
 
 @pytest.mark.spec
+def test_list_user_ids_names_every_owner_once():
+    base = PostgresProfileStore.from_dsn(POSTGRES_DSN, schema=POSTGRES_SCHEMA)
+    for user in ("zoe", "ann", "ann"):
+        base.for_user(user).save_profile(Profile(profile_id=f"p-{user}", name=user))
+    assert [u for u in base.list_user_ids() if u in {"ann", "zoe"}] == ["ann", "zoe"]
+
+
+@pytest.mark.spec
 def test_stores_bound_to_different_users_are_disjoint():
     base = PostgresProfileStore.from_dsn(POSTGRES_DSN, schema=POSTGRES_SCHEMA)
     ann, ben = base.for_user("ann"), base.for_user("ben")
