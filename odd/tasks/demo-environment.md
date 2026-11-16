@@ -24,11 +24,11 @@ Strategy: ask-on-risk; forecast ~900 authored lines, mostly seed content data (q
 - [x] T2 Demo mode flag: config validation, banner, grouped persona switcher (route: delegated writer)
 - [x] T3 docs/demo.md (route: delegated writer)
 - [x] T4 Browser verification screenshots (route: inline)
-- [ ] T5 Push, PR against feat/68-due-reminders, Orca worktree comment (route: inline)
+- [x] T5 Push, PR against feat/68-due-reminders, Orca worktree comment (route: inline)
 
 ## Progress / evidence
 - T2 (demo mode): 8690ee1. T1 (seed, Azure content, agency org, --reset): 7d18ee4. T3 (docs/demo.md, dev-up demo seeding, demo-reset.sh, README): 8d47ebd.
 - Tests: full pytest 828 passed (baseline 822), node tests 142 passed; Postgres on port 54381 via `docker compose -p lt81`.
 - Route: single writer inline (delegation not available to the writer); seed with a pooled connection takes ~20 s.
 - T4: agent-browser against demo mode (port 8781, fresh --reset seed): docs/demo-screenshots/{coordinator-org-view,student-progress,practice-question}.png; banner, grouped switcher and Vista docente verified.
-- Pending: T5.
+- T5: PR https://github.com/rodrvc/learning-tracker-engine/pull/82, Orca comment updated.
