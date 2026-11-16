@@ -55,5 +55,15 @@ docker compose up -d --wait postgres
 echo "==> applying migrations to schema '${schema}'"
 "$python" -m migrations.runner "$LEARNING_TRACKER_DATABASE_URL" "$schema"
 
+# Demo mode (docs/demo.md): seed the two demo organizations before serving.
+# The seed is retry-safe, so restarting does not duplicate anything; use
+# scripts/demo-reset.sh to put the data back to the known state.
+case "${LEARNING_TRACKER_DEMO_MODE:-}" in
+  true|1|yes)
+    echo "==> demo mode: seeding the demo organizations"
+    "$python" -m scripts.seed_demo
+    ;;
+esac
+
 echo "==> starting the API on ${LEARNING_TRACKER_WEB_HOST:-127.0.0.1}:${LEARNING_TRACKER_WEB_PORT:-8000}"
 exec "$python" -m web.app

@@ -6,7 +6,7 @@ import { parseHash, buildHash } from "./router.js";
 import { renderLearning } from "./views/learning.js";
 import { renderMaterial } from "./views/material.js";
 import { renderOrg } from "./views/org.js";
-import { DEMO_IDENTITIES, demoEnabled, loadIdentity, saveIdentity } from "./dev-identity.js";
+import { DEMO_IDENTITIES, demoEnabled, demoGroups, loadIdentity, saveIdentity } from "./dev-identity.js";
 import { renderProgress } from "./views/progress.js";
 import { initTheme } from "./theme.js";
 
@@ -56,22 +56,36 @@ async function syncTeacherLink() {
   highlightNav(parseHash(location.hash).view);
 }
 
-// Demo-only (`?demo=1`, authentication off): pick who the page acts as, so the
-// teacher view can be shown without Clerk. See dev-identity.js.
-function mountDevSelector(slot) {
+// Demo-only (authentication off): pick who the page acts as, so the teacher
+// view can be shown without Clerk. See dev-identity.js. In demo mode the server
+// supplies the identities grouped by organization (`/demo/config`); the older
+// opt-in `?demo=1` keeps the built-in flat list.
+function mountDevSelector(slot, demo) {
   const select = document.createElement("select");
   select.setAttribute("aria-label", "Identidad de demostración");
-  for (const identity of DEMO_IDENTITIES) {
+  const identities = demo ? demo.flat : DEMO_IDENTITIES;
+  const addOption = (parent, identity) => {
     const option = document.createElement("option");
     option.value = identity.id;
     option.textContent = identity.label;
-    select.appendChild(option);
+    parent.appendChild(option);
+  };
+  if (demo) {
+    addOption(select, demo.local);
+    for (const group of demo.groups) {
+      const optgroup = document.createElement("optgroup");
+      optgroup.label = group.name;
+      group.identities.forEach((identity) => addOption(optgroup, identity));
+      select.appendChild(optgroup);
+    }
+  } else {
+    identities.forEach((identity) => addOption(select, identity));
   }
-  const current = loadIdentity(localStorage);
+  const current = loadIdentity(localStorage, identities);
   select.value = current.id;
   setDevIdentity(current);
   select.addEventListener("change", async () => {
-    const chosen = loadIdentity({ getItem: () => select.value });
+    const chosen = loadIdentity({ getItem: () => select.value }, identities);
     saveIdentity(localStorage, chosen.id);
     setDevIdentity(chosen);
     await syncTeacherLink();
@@ -81,6 +95,23 @@ function mountDevSelector(slot) {
   slot.appendChild(select);
 }
 
+function mountDemoBanner() {
+  const banner = document.createElement("div");
+  banner.className = "demo-banner";
+  banner.setAttribute("role", "note");
+  banner.textContent = "Entorno de demostración · datos sintéticos";
+  document.body.prepend(banner);
+}
+
+async function loadDemoConfig() {
+  try {
+    const config = await api.getDemoConfig();
+    return config.enabled ? config : null;
+  } catch {
+    return null;
+  }
+}
+
 window.addEventListener("hashchange", render);
 window.addEventListener("DOMContentLoaded", async () => {
   // Wired before the first render: `setTokenProvider` decides whether
@@ -88,8 +119,12 @@ window.addEventListener("DOMContentLoaded", async () => {
   // rendering before Clerk reports its state would race a call against it.
   try {
     const config = await api.getAuthConfig();
-    if (!config.enabled && demoEnabled(location.search, localStorage)) {
-      mountDevSelector(authSlot);
+    const demo = config.enabled ? null : await loadDemoConfig();
+    if (demo) {
+      mountDemoBanner();
+      mountDevSelector(authSlot, demoGroups(demo));
+    } else if (!config.enabled && demoEnabled(location.search, localStorage)) {
+      mountDevSelector(authSlot, null);
     }
     await mountAuth(config, authSlot, (getToken) => {
       setTokenProvider(getToken);

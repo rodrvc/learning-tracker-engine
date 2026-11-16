@@ -1,46 +1,70 @@
-"""The one demo command: a school-style organization with a teacher and students.
+"""The one demo command: two synthetic organizations a client can be shown.
 
-``python -m scripts.seed_demo`` creates the organization ``org_demo``, a teacher
-(``demo_teacher``, ``org:admin``) and four students. Each student has the same
-two school subjects (units, objectives) but a different, backdated practice
-history: one strong and steady, one uneven, one who just started, one who
-stopped weeks ago and has everything due. So a student's Progreso dashboard
-and the teacher's organization table tell the same story (issues #74, #75).
+``python -m scripts.seed_demo`` creates
 
-Everything is synthetic: made-up study subjects and people. It writes straight
-to the Postgres stores so it can backdate attempts through
+* ``org_demo``, a school: a teacher (``demo_teacher``, ``org:admin``) and four
+  students over two school subjects, each with a different backdated practice
+  history (issues #74, #75), and
+* ``org_servicio_publico``, a public agency: a coordinator
+  (``demo_sp_coordinacion``, ``org:admin``) and seven staff members training on
+  Azure (AI-900 and AZ-900, content in ``scripts/demo_content_azure.py``): one
+  strong, two steady, two struggling, one who stopped two weeks ago and one who
+  never started. Each has notes and multiple-choice questions to practise, and
+  several have reviews due today.
+
+So a student's Progreso, the coordinator's organization table and the daily
+digest (``docs/due-digest.md``) tell one story (issue #81, ``docs/demo.md``).
+
+Everything is synthetic: made-up study subjects and people, no private
+material and no model call (it needs no API key). It writes straight to the
+Postgres stores so it can backdate attempts through
 ``LearningTracker.record_attempt``'s injected ``at`` (the HTTP API deliberately
-cannot, SPEC I2). Units are carried in ``Objective.domain``.
+cannot, SPEC I2). Every date is relative to the moment it runs, so the demo
+never goes stale. Units are carried in ``Objective.domain``.
 
 Retry-safe: every write is keyed by a deterministic id, an existing profile or
 attempt is left alone, so running it again (or after a crash half way) neither
-duplicates nor fails.
+duplicates nor fails. Dates are the exception to "again changes nothing": a
+second run does not move the first run's attempts, so a demo seeded last week
+looks a week older. ``--reset`` deletes the demo organizations' data (the fixed
+demo user ids and the two demo organizations, nothing else) and seeds it back
+to the known state relative to now.
 
-Usage, from the repo root, after ``scripts/dev-up.sh`` has applied migrations
-(the app then runs with authentication off; open the page with ``?demo=1`` to
-switch between the teacher and a student, see README.md, "Demo data")::
+Usage, from the repo root, after ``scripts/dev-up.sh`` has applied migrations::
 
-    python -m scripts.seed_demo
+    python -m scripts.seed_demo            # seed (or top up)
+    python -m scripts.seed_demo --reset    # wipe the demo data and reseed it
 """
+
 
 from __future__ import annotations
 
+import argparse
 import os
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 
+import psycopg
+from psycopg_pool import ConnectionPool
+
+from content.models import Material, Question
+from content.postgres import PostgresMaterialStore, PostgresQuestionStore
 from core.clock import FixedClock
 from core.errors import DuplicateAttemptError, UnknownProfileError
 from core.models import Objective, Profile
 from core.tracker import LearningTracker
 from store.members import PostgresMemberStore
-from store.postgres import PostgresAttemptStore, PostgresProfileStore
+from store.postgres import ConnectionProvider, PostgresAttemptStore, PostgresProfileStore
 from web.config import DATABASE_URL_VAR, SCHEMA_VAR
+from web.demo import PUBLIC_SERVICE_ORG_ID, SCHOOL_ORG_ID
 
-ORG_ID = "org_demo"
+from .demo_content_azure import COURSES, NOTES_SOURCE, Course
+
+ORG_ID = SCHOOL_ORG_ID
 TEACHER = ("demo_teacher", "Docente Demo")
+COORDINATOR = ("demo_sp_coordinacion", "Marcela Fuentes")
 
 
 @dataclass(frozen=True)
@@ -182,14 +206,15 @@ def personal_practice(student: Student, topic: SeedTopic) -> dict[str, Practice 
     return out
 
 
-def seed_student_topic(
-    student: Student,
+def seed_topic(
+    user_id: str,
     topic: SeedTopic,
+    practice: dict[str, Practice | None],
     profiles: PostgresProfileStore,
     attempts: PostgresAttemptStore,
     now: datetime,
 ) -> int:
-    """Writes one student's topic; returns the number of new attempts."""
+    """Writes one learner's topic; returns the number of new attempts."""
     try:
         profiles.get_profile(topic.topic_id)
     except UnknownProfileError:
@@ -200,16 +225,16 @@ def seed_student_topic(
     )
     tracker = LearningTracker(topic.topic_id, profiles, attempts, FixedClock(now))
     recorded = 0
-    for objective_id, practice in personal_practice(student, topic).items():
-        if practice is None:
+    for objective_id, history in practice.items():
+        if history is None:
             continue
-        for index, (correct, at) in enumerate(attempt_times(practice, now)):
+        for index, (correct, at) in enumerate(attempt_times(history, now)):
             try:
                 tracker.record_attempt(
                     objective_id=objective_id,
                     correct=correct,
                     at=at,
-                    attempt_id=f"demo-{student.user_id}-{objective_id}-{index + 1}",
+                    attempt_id=f"demo-{user_id}-{objective_id}-{index + 1}",
                 )
             except DuplicateAttemptError:
                 continue
@@ -217,7 +242,194 @@ def seed_student_topic(
     return recorded
 
 
-def main() -> int:
+def seed_student_topic(
+    student: Student,
+    topic: SeedTopic,
+    profiles: PostgresProfileStore,
+    attempts: PostgresAttemptStore,
+    now: datetime,
+) -> int:
+    """Writes one student's topic; returns the number of new attempts."""
+    return seed_topic(student.user_id, topic, personal_practice(student, topic), profiles, attempts, now)
+
+
+# --- The public agency: Azure training ---------------------------------------
+
+
+def _azure_topic(course: Course) -> SeedTopic:
+    return SeedTopic(
+        topic_id=course.topic_id,
+        name=course.name,
+        objectives=tuple(
+            SeedObjective(objective.objective_id, objective.title, unit.name)
+            for unit in course.units
+            for objective in unit.objectives
+        ),
+    )
+
+
+AI_900_TOPIC, AZ_900_TOPIC = (_azure_topic(course) for course in COURSES)
+AZURE_TOPICS = (AI_900_TOPIC, AZ_900_TOPIC)
+_COURSE_BY_TOPIC = {course.topic_id: course for course in COURSES}
+
+
+@dataclass(frozen=True)
+class Staff:
+    """A member of the public agency. ``cycle`` is dealt out over the
+    objectives in order, so one persona gets a believable mix, not a flat line."""
+
+    user_id: str
+    name: str
+    topics: tuple[SeedTopic, ...]
+    cycle: tuple[Practice, ...]
+    #: How many objectives of each topic they reached; ``None`` is all of them.
+    reach: int | None = None
+
+
+STAFF = (
+    # Strong and steady: practises every few days, mostly right.
+    Staff(
+        "demo_sp_camila", "Camila Araya", AZURE_TOPICS,
+        (Practice("ccccccc", 1, 4), Practice("cccwcccc", 2, 4), Practice("cccccc", 4, 5), Practice("cwccccc", 0.5, 5)),
+    ),
+    # Steady: a few slips, comes back regularly.
+    Staff(
+        "demo_sp_felipe", "Felipe Gutiérrez", AZURE_TOPICS,
+        (Practice("cwcccwc", 1, 4), Practice("ccwcc", 1, 5), Practice("wcccc", 3, 6), Practice("cccwcc", 0.5, 4)),
+    ),
+    Staff(
+        "demo_sp_javiera", "Javiera Muñoz", (AI_900_TOPIC,),
+        (Practice("ccwccc", 1, 5), Practice("cwcc", 3, 6), Practice("cccw", 6, 6)),
+        reach=11,
+    ),
+    # Struggling: practises, but keeps missing; needs help.
+    Staff(
+        "demo_sp_sebastian", "Sebastián Vega", AZURE_TOPICS,
+        (Practice("wwcwcw", 1, 3), Practice("wcwwcw", 2, 4), Practice("wwcw", 3, 5)),
+    ),
+    Staff(
+        "demo_sp_daniela", "Daniela Poblete", (AI_900_TOPIC,),
+        (Practice("wcwwcwc", 2, 4), Practice("wwcw", 1, 5), Practice("cwwc", 4, 5)),
+        reach=12,
+    ),
+    # Stalled: was doing fine, then stopped about two weeks ago.
+    Staff(
+        "demo_sp_ignacio", "Ignacio Tapia", AZURE_TOPICS,
+        (Practice("cwcccc", 15, 4), Practice("ccwcc", 16, 5), Practice("wcccw", 14, 4)),
+        reach=9,
+    ),
+    # Never started: enrolled in the topics, no attempts.
+    Staff("demo_sp_constanza", "Constanza Bravo", AZURE_TOPICS, (), reach=0),
+)
+
+ORG_ADMINS = ((ORG_ID, TEACHER), (PUBLIC_SERVICE_ORG_ID, COORDINATOR))
+
+#: Every user id the seed creates. ``--reset`` deletes exactly these, never anything else.
+DEMO_USER_IDS = (
+    TEACHER[0],
+    COORDINATOR[0],
+    *(student.user_id for student in STUDENTS),
+    *(person.user_id for person in STAFF),
+)
+DEMO_ORG_IDS = (ORG_ID, PUBLIC_SERVICE_ORG_ID)
+
+
+def staff_practice(person: Staff, topic: SeedTopic) -> dict[str, Practice | None]:
+    """Objective id -> this person's practice (``None``: never practised)."""
+    reach = len(topic.objectives) if person.reach is None else person.reach
+    return {
+        objective.objective_id: person.cycle[position % len(person.cycle)]
+        if position < reach and person.cycle
+        else None
+        for position, objective in enumerate(topic.objectives)
+    }
+
+
+def seed_azure_content(
+    user_id: str,
+    course: Course,
+    materials: PostgresMaterialStore,
+    questions: PostgresQuestionStore,
+    now: datetime,
+) -> int:
+    """One page of notes per unit and its questions; returns the question count.
+
+    Ids carry the user: material and question ids are unique across users, and
+    each learner owns their own copy of the content (issue #58).
+    """
+    total = 0
+    for unit in course.units:
+        material_id = f"demo-{user_id}-{course.topic_id}-{unit.unit_id}"
+        if not materials.exists(material_id):
+            materials.add(
+                Material(
+                    material_id=material_id,
+                    topic_id=course.topic_id,
+                    title=unit.notes_title,
+                    source=NOTES_SOURCE,
+                    body=unit.notes,
+                    created_at=now - timedelta(days=45),
+                )
+            )
+        built = [
+            Question(
+                question_id=f"{material_id}-{objective.objective_id}-q{number}",
+                topic_id=course.topic_id,
+                objective_id=objective.objective_id,
+                stem=item.stem,
+                options=tuple(zip("ABCD", item.options)),
+                correct_key="ABCD"[item.correct],
+                explanation=item.explanation,
+                material_id=material_id,
+                created_at=now - timedelta(days=45),
+            )
+            for objective in unit.objectives
+            for number, item in enumerate(objective.questions, start=1)
+        ]
+        questions.replace_for_material(material_id, built)
+        total += len(built)
+    return total
+
+
+def seed_staff(person: Staff, connect: ConnectionProvider, schema: str, now: datetime) -> int:
+    """Seeds one staff member's topics, notes and questions; returns new attempts."""
+    profiles = PostgresProfileStore(connect, schema=schema, user_id=person.user_id)
+    attempts = PostgresAttemptStore(connect, schema=schema, user_id=person.user_id)
+    materials = PostgresMaterialStore(connect, schema=schema, user_id=person.user_id)
+    questions = PostgresQuestionStore(connect, schema=schema, user_id=person.user_id)
+    new_attempts = 0
+    for topic in person.topics:
+        new_attempts += seed_topic(
+            person.user_id, topic, staff_practice(person, topic), profiles, attempts, now
+        )
+        seed_azure_content(person.user_id, _COURSE_BY_TOPIC[topic.topic_id], materials, questions, now)
+    return new_attempts
+
+
+def reset(dsn: str, schema: str) -> None:
+    """Deletes the demo organizations' data, and only that.
+
+    The scope is the fixed ``DEMO_USER_IDS`` and ``DEMO_ORG_IDS``: another
+    user's rows, the implicit local user's included, are never matched. Attempts
+    are append-only everywhere else (SPEC I1); this is the one place allowed to
+    delete them, because they are synthetic and exist to be re-seeded.
+    """
+    users, orgs = list(DEMO_USER_IDS), list(DEMO_ORG_IDS)
+    with psycopg.connect(dsn) as conn:
+        # Questions before materials (foreign key); objectives go with their profile.
+        for table in ("attempts", "questions", "materials", "profiles"):
+            conn.execute(f"DELETE FROM {schema}.{table} WHERE user_id = ANY(%s)", (users,))
+        conn.execute(f"DELETE FROM {schema}.org_members WHERE org_id = ANY(%s)", (orgs,))
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Seed the demo organizations.")
+    parser.add_argument(
+        "--reset",
+        action="store_true",
+        help="delete the demo organizations' data first and reseed to the known state",
+    )
+    args = parser.parse_args(argv)
     dsn = os.environ.get(DATABASE_URL_VAR)
     if not dsn:
         print(f"error: set {DATABASE_URL_VAR} first (see .env.example)", file=sys.stderr)
@@ -225,18 +437,30 @@ def main() -> int:
     schema = os.environ.get(SCHEMA_VAR) or "learning"
     now = datetime.now(timezone.utc)
 
-    members = PostgresMemberStore.from_dsn(dsn, schema=schema)
-    members.upsert(ORG_ID, TEACHER[0], "org:admin", now, display_name=TEACHER[1])
-    new_attempts = 0
-    for student in STUDENTS:
-        members.upsert(ORG_ID, student.user_id, "org:member", now, display_name=student.name)
-        profiles = PostgresProfileStore.from_dsn(dsn, schema=schema, user_id=student.user_id)
-        attempts = PostgresAttemptStore.from_dsn(dsn, schema=schema, user_id=student.user_id)
-        for topic in student.topics:
-            new_attempts += seed_student_topic(student, topic, profiles, attempts, now)
+    if args.reset:
+        reset(dsn, schema)
+        print("demo data deleted.")
+    # One pool for the whole run: a connection per store call made the seed
+    # take minutes (about a thousand attempts, each needing several calls).
+    with ConnectionPool(conninfo=dsn, min_size=1, max_size=2, open=True) as pool:
+        connect = pool.connection
+        members = PostgresMemberStore(connect, schema=schema)
+        for org_id, (user_id, name) in ORG_ADMINS:
+            members.upsert(org_id, user_id, "org:admin", now, display_name=name)
+        new_attempts = 0
+        for student in STUDENTS:
+            members.upsert(ORG_ID, student.user_id, "org:member", now, display_name=student.name)
+            profiles = PostgresProfileStore(connect, schema=schema, user_id=student.user_id)
+            attempts = PostgresAttemptStore(connect, schema=schema, user_id=student.user_id)
+            for topic in student.topics:
+                new_attempts += seed_student_topic(student, topic, profiles, attempts, now)
+        for person in STAFF:
+            members.upsert(PUBLIC_SERVICE_ORG_ID, person.user_id, "org:member", now, display_name=person.name)
+            new_attempts += seed_staff(person, connect, schema, now)
     print(
-        f"organization '{ORG_ID}': teacher '{TEACHER[0]}' and {len(STUDENTS)} students ready "
-        f"({new_attempts} new attempt(s))."
+        f"organization '{ORG_ID}': teacher '{TEACHER[0]}' and {len(STUDENTS)} students ready; "
+        f"organization '{PUBLIC_SERVICE_ORG_ID}': coordinator '{COORDINATOR[0]}' and "
+        f"{len(STAFF)} staff ready ({new_attempts} new attempt(s))."
     )
     return 0
 
