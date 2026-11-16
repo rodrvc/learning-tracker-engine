@@ -50,56 +50,46 @@ instead; nothing else in this quickstart changes.
 To run the production image locally, or to deploy it on Railway, see
 [`docs/deploy.md`](docs/deploy.md).
 
-### See it with data in it
+### Demo data
 
-Optional, and independent of the steps above:
+One command seeds a school-style demo, and the same data feeds the student's
+Progreso tab and the teacher's organization table (issues #74, #75):
 
 ```sh
-.venv/bin/python -m scripts.seed_sample_data   # or just `python` with the venv activated
+.venv/bin/python -m scripts.seed_demo   # after scripts/dev-up.sh; safe to run again
+# then open http://127.0.0.1:8000/?demo=1
 ```
 
-Creates one topic ("Redes de computadoras") with a page of synthetic notes,
-a few generated questions and a short practice history old enough that one
-objective already shows up as due for review. Nobody's real study material,
-generated on the spot; safe to skip and start from an empty topic list
-instead.
-
-### Teacher view (demo with a class in it)
+It creates the organization `org_demo`, a teacher (`demo_teacher`) and four
+students, all synthetic, each with school subjects (units, objectives) and a
+different backdated practice history: `demo_ana` strong and steady,
+`demo_bruno` uneven, `demo_carla` just started, `demo_diego` stopped weeks ago
+and has things due (only Historia). Re-running it neither duplicates nor fails.
 
 Every learner's data is private to them (issue #58); an *organization admin* (a
 teacher) additionally gets a read-only table of their organization's members:
 per member and topic, the typical level, how many objectives are due and how
 many were never practised (issue #75). Members never see each other's data.
-
 With Clerk, the organization and role come from the verified session token
 (`o.id` / `o.rol` in v2 tokens, `org_id` / `org_role` in v1) and the app records
-each member it sees, so a teacher lists the people who have actually used it.
+each member it sees.
 
-To see it without Clerk, seed a demo organization and impersonate its users. The
-impersonation exists **only while `LEARNING_TRACKER_CLERK_ISSUER` is unset**;
-with it set, the headers below are never read.
-
-```sh
-.venv/bin/python -m scripts.seed_demo_org
-# then run the app as usual (auth off) and open http://127.0.0.1:8000/?demo=1
-```
-
-This creates the organization `org_demo`, a teacher (`demo_teacher`) and four
-students (`demo_ana`, `demo_bruno`, `demo_carla`, `demo_diego`) with backdated
-histories. In the browser, `?demo=1` adds a selector to the header: pick
-"Docente Demo (docente)" and a "Vista docente" tab appears; pick a student and
-it disappears, and the student sees only their own topic. By hand, the same
-thing is three headers: `X-Dev-User`, `X-Dev-Org`, `X-Dev-Role`.
+Without Clerk, you impersonate the seeded users. The impersonation exists
+**only while authentication is explicitly off** (`LEARNING_TRACKER_AUTH_DISABLED=true`,
+which `scripts/dev-up.sh` sets); with an issuer configured the headers are never
+read, and a deploy with neither variable refuses to start. In the browser,
+`?demo=1` adds a selector to the header: pick "Docente Demo (docente)" and a
+"Vista docente" tab appears; pick a student and it disappears, and the student's
+Progreso shows only their own topics. By hand, it is three headers:
+`X-Dev-User`, `X-Dev-Org`, `X-Dev-Role`.
 
 ```sh
 curl -H 'X-Dev-User: demo_teacher' -H 'X-Dev-Org: org_demo' -H 'X-Dev-Role: admin' \
   http://127.0.0.1:8000/org/progress
 ```
 
-For a school-flavoured demo (two subjects with units, objectives and a
-realistic spread of practice, ideal for the Progreso tab), run
-`.venv/bin/python -m scripts.seed_school_data`. It is synthetic too, and skips
-a topic that already exists.
+For a single topic with notes and generated questions instead, run
+`.venv/bin/python -m scripts.seed_sample_data`.
 
 ### The path by hand, in the browser
 
@@ -147,7 +137,7 @@ single implicit user `local` when authentication is off (migration `0004`).
 | `generate/` | Turns a page of notes into objectives and questions (OpenAI, plus a deterministic stub used by the tests and by the sample load) |
 | `web/` | The FastAPI backend: `web/config.py` is the full list of settings it reads |
 | `webui/` | The front end it serves, static files, no build step |
-| `scripts/` | `dev-up.sh`, `seed_sample_data.py` and `seed_school_data.py`, described above |
+| `scripts/` | `dev-up.sh`, `seed_demo.py` and `seed_sample_data.py`, described above |
 | `ui/` | A standard-library CLI over the engine — see `ui/README.md` |
 | `tests/` | Verification suite |
 

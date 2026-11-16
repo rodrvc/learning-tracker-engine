@@ -258,10 +258,10 @@ objectives never practised, attempts and mean score, all from the engine's own
 can decide whether to offer the view. Not done: an optional entitlement check
 (`LEARNING_TRACKER_REQUIRE_ENTITLEMENT`), and dropping members who left the organization.
 
-**Demo impersonation (auth off only):** with `LEARNING_TRACKER_CLERK_ISSUER` unset, the
+**Demo impersonation (auth off only):** with `LEARNING_TRACKER_AUTH_DISABLED=true`, the
 headers `X-Dev-User`, `X-Dev-Org`, `X-Dev-Role` (and `X-Dev-Name`) choose the identity of a
-request. With the issuer set they are not read at all. `python -m scripts.seed_demo_org`
-creates the matching demo organization; see the README, "Teacher view".
+request. With the issuer set they are not read at all. `python -m scripts.seed_demo`
+creates the matching demo organization; see the README, "Demo data".
 
 **A source that grades something other than this engine's own quiz bank** — free text, a
 written exercise, a spoken answer, a simulated exam — uses two routes in

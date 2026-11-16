@@ -5,7 +5,7 @@
 // Only meaningful when the server runs with authentication OFF: that is the one
 // mode in which it reads the `X-Dev-*` headers built here (web/auth.py). With
 // authentication on the headers are ignored, so a stale choice stored in this
-// browser cannot grant anything. The ids match `scripts/seed_demo_org.py`.
+// browser cannot grant anything. The ids match `scripts/seed_demo.py`.
 //
 // Pure and DOM-free (unit tested under Node), apart from the storage object the
 // caller hands in.
