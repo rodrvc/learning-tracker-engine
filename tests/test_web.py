@@ -64,7 +64,7 @@ def _postgres_test_schema():
 
 @pytest.fixture
 def settings() -> Settings:
-    return Settings(database_url=POSTGRES_DSN, schema=POSTGRES_SCHEMA, host="127.0.0.1", port=8000)
+    return Settings(database_url=POSTGRES_DSN, schema=POSTGRES_SCHEMA, host="127.0.0.1", port=8000, auth_disabled=True)
 
 
 @pytest.fixture
@@ -90,6 +90,23 @@ def test_health_reports_real_storage_state(client: TestClient) -> None:
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+@pytest.mark.edge
+def test_health_is_unhealthy_when_the_schema_was_never_migrated() -> None:
+    """#29: the database answers but the schema is empty, so no real route
+    can serve. Health must say so, without naming the host or database."""
+    unmigrated = Settings(
+        database_url=POSTGRES_DSN,
+        schema=f"learning_test_unmigrated_{uuid.uuid4().hex[:8]}",
+        host="127.0.0.1",
+        port=8000,
+        auth_disabled=True,
+    )
+    with TestClient(create_app(unmigrated), raise_server_exceptions=False) as client:
+        response = client.get("/health")
+    assert response.status_code == 503
+    assert response.json() == {"status": "unhealthy"}
 
 
 @pytest.mark.spec

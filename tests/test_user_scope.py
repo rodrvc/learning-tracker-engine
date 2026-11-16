@@ -207,7 +207,11 @@ def test_attempt_ids_stay_globally_unique_across_users(secured, private_key):
 @pytest.mark.spec
 def test_auth_off_is_one_implicit_local_user():
     settings = Settings(
-        database_url=POSTGRES_DSN, schema=POSTGRES_SCHEMA, host="127.0.0.1", port=8000
+        database_url=POSTGRES_DSN,
+        schema=POSTGRES_SCHEMA,
+        host="127.0.0.1",
+        port=8000,
+        auth_disabled=True,
     )
     with TestClient(create_app(settings)) as client:
         assert client.post("/topics", json={"topic_id": "t1", "name": "T1"}).status_code == 201
