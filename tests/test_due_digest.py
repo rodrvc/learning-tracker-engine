@@ -197,9 +197,9 @@ def test_smtp_sender_uses_starttls_and_login_without_network():
 
 
 def test_parse_recipients():
-    parsed = send_due_digest.parse_recipients(json.dumps({"a@example.com": ["redes"], "b@example.com": "*"}))
-    assert parsed == {"a@example.com": ["redes"], "b@example.com": None}
-    for bad in (None, "", "[]", "{}", "not json", '{"nope": "*"}', '{"a@example.com": 3}'):
+    parsed = send_due_digest.parse_recipients(json.dumps({"u_ana": "a@example.com", "u_bruno": "b@example.com"}))
+    assert parsed == {"u_ana": "a@example.com", "u_bruno": "b@example.com"}
+    for bad in (None, "", "[]", "{}", "not json", '{"u": "nope"}', '{"u": 3}', '{" ": "a@example.com"}'):
         with pytest.raises(send_due_digest.ConfigError):
             send_due_digest.parse_recipients(bad)
 
@@ -215,38 +215,98 @@ class RecordingSender:
         self.sent.append(message)
 
 
-def test_run_sends_only_to_recipients_with_something_due():
-    profiles, attempts = _stores()
+def _bruno_stores():
+    """A different user with different topics and different due items."""
+    profiles = InMemoryProfileStore()
+    attempts = InMemoryAttemptStore()
+    profiles.save_profile(
+        Profile(profile_id="calc", name="Cálculo", objectives={"lim": Objective("lim", "Límites de Bruno")})
+    )
+    LearningTracker("calc", profiles, attempts, FixedClock(NOW)).record_attempt(
+        objective_id="lim", correct=False, at=NOW - timedelta(days=4)
+    )
+    return profiles, attempts
+
+
+def _idle_stores():
+    profiles = InMemoryProfileStore()
+    profiles.save_profile(Profile(profile_id="x", name="X", objectives={"o": Objective("o", "O")}))
+    return profiles, InMemoryAttemptStore()
+
+
+def test_each_user_gets_a_digest_built_only_from_their_own_data():
+    per_user = {"u_ana": _stores(), "u_bruno": _bruno_stores()}
+    sender = RecordingSender()
+    code = send_due_digest.run(
+        per_user.__getitem__,
+        ["u_ana", "u_bruno"],
+        sender,
+        {"u_ana": "a@example.com", "u_bruno": "b@example.com"},
+        NOW,
+        BASE,
+        log=io.StringIO(),
+    )
+    assert code == 0
+    ana, bruno = sender.sent
+    assert (ana.to, bruno.to) == ("a@example.com", "b@example.com")
+    assert "Capas del modelo OSI" in ana.body and "Límites" not in ana.body
+    assert "Límites de Bruno" in bruno.body and "Capas del modelo OSI" not in bruno.body
+    assert "#/learning/calc" in bruno.body and "#/learning/redes" not in bruno.body
+
+
+def test_a_user_without_a_mapped_email_is_skipped_and_logged():
     sender = RecordingSender()
     log = io.StringIO()
     code = send_due_digest.run(
-        profiles,
-        attempts,
+        {"u_ana": _stores(), "u_ghost": _bruno_stores()}.__getitem__,
+        ["u_ana", "u_ghost"],
         sender,
-        {"a@example.com": ["redes"], "b@example.com": ["calc"], "c@example.com": None},
+        {"u_ana": "a@example.com"},
         NOW,
         BASE,
         log=log,
     )
     assert code == 0
-    assert [m.to for m in sender.sent] == ["a@example.com", "c@example.com"]
-    assert "b@example.com: nothing due, nothing sent" in log.getvalue()
+    assert [m.to for m in sender.sent] == ["a@example.com"]
+    assert "u_ghost: no email mapped, skipped" in log.getvalue()
+
+
+def test_a_user_with_nothing_due_gets_nothing():
+    sender = RecordingSender()
+    log = io.StringIO()
+    send_due_digest.run(
+        {"u_idle": _idle_stores()}.__getitem__,
+        ["u_idle"],
+        sender,
+        {"u_idle": "i@example.com"},
+        NOW,
+        BASE,
+        log=log,
+    )
+    assert sender.sent == []
+    assert "u_idle: nothing due, nothing sent" in log.getvalue()
 
 
 def test_run_keeps_going_after_a_failed_send():
-    profiles, attempts = _stores()
+    per_user = {"u_ana": _stores(), "u_bruno": _bruno_stores()}
     sender = RecordingSender(fail_for={"a@example.com"})
     code = send_due_digest.run(
-        profiles, attempts, sender, {"a@example.com": None, "c@example.com": None}, NOW, BASE, log=io.StringIO()
+        per_user.__getitem__,
+        ["u_ana", "u_bruno"],
+        sender,
+        {"u_ana": "a@example.com", "u_bruno": "b@example.com"},
+        NOW,
+        BASE,
+        log=io.StringIO(),
     )
     assert code == 1
-    assert [m.to for m in sender.sent] == ["c@example.com"]
+    assert [m.to for m in sender.sent] == ["b@example.com"]
 
 
 def test_main_reports_config_errors_without_touching_the_database(capsys):
     assert send_due_digest.main([], env={}) == 2
     assert "LEARNING_TRACKER_DIGEST_RECIPIENTS" in capsys.readouterr().err
-    env = {"LEARNING_TRACKER_DIGEST_RECIPIENTS": '{"a@example.com": "*"}'}
+    env = {"LEARNING_TRACKER_DIGEST_RECIPIENTS": '{"u_ana": "a@example.com"}'}
     assert send_due_digest.main(["--sender", "smtp"], env=env) == 2
     assert send_due_digest.main(["--as-of", "2026-11-15T11:00:00"], env=env) == 2
     assert send_due_digest.main([], env=env) == 2  # no database URL

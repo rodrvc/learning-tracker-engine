@@ -7,11 +7,15 @@ Tells each learner what is due today without them opening the app (issue
 python -m scripts.send_due_digest [--sender console|file|smtp] [--out PATH] [--as-of ISO]
 ```
 
-For every configured recipient it computes, from the engine, the objectives
-due for review in the topics they follow (`LearningTracker.get_due`, SPEC
-section 5.2), names the most overdue ones, and adds a link that opens the
-topic in the web app. **A recipient with nothing due gets nothing**: a
-reminder that arrives every day regardless teaches people to ignore it.
+Data is per user (issue #58), so the digest is too. The job visits every user
+that owns data and, for each one, computes from *that user's* topics only the
+objectives due for review (`LearningTracker.get_due`, SPEC section 5.2),
+names the most overdue ones, and adds a link that opens the topic in the web
+app. Each user gets their own message about their own items; two users are
+never mixed in one digest. **A user with nothing due gets nothing**: a
+reminder that arrives every day regardless teaches people to ignore it. A user
+with no email address configured (see below) is skipped, and the skip is
+written to the job's log.
 
 Exit codes: `0` sent or silent, `1` a send or a database read failed, `2`
 configuration error.
@@ -22,7 +26,7 @@ configuration error.
 | --- | --- | --- |
 | `LEARNING_TRACKER_DATABASE_URL` | yes | Same DSN as the web app |
 | `LEARNING_TRACKER_SCHEMA` | no | Same schema as the web app (default `learning`) |
-| `LEARNING_TRACKER_DIGEST_RECIPIENTS` | yes | JSON: email -> list of topic ids, or `"*"` for all |
+| `LEARNING_TRACKER_DIGEST_RECIPIENTS` | yes | JSON object: user id -> email address |
 | `LEARNING_TRACKER_PUBLIC_URL` | no | Public URL of the web app, for the links (default `http://127.0.0.1:8000`) |
 | `LEARNING_TRACKER_SMTP_HOST` | smtp only | SMTP server |
 | `LEARNING_TRACKER_SMTP_FROM` | smtp only | Sender address |
@@ -30,14 +34,18 @@ configuration error.
 | `LEARNING_TRACKER_SMTP_SECURITY` | no | `starttls` (default), `ssl` or `none` |
 | `LEARNING_TRACKER_SMTP_USER` / `LEARNING_TRACKER_SMTP_PASSWORD` | no | Both or neither |
 
-Example recipients mapping:
+Example recipients mapping (the keys are the user ids the app stores, i.e.
+Clerk's `sub` claim; `local` is the single implicit user when authentication
+is off):
 
 ```json
-{"ana@example.com": ["redes-de-computadoras"], "profe@example.com": "*"}
+{"user_2abc": "ana@example.com", "user_2def": "profe@example.com"}
 ```
 
-The mapping is a stop-gap: the engine has no per-user data yet. When topics
-belong to users, it is replaced by a query; the digest and the senders do not
+**This mapping is a stop-gap.** Clerk is the source of truth for who a user is
+and what their email is, but the app does not store emails yet, so for now the
+operator lists them by hand. Once the email comes from Clerk (token claim or
+Backend API), this variable goes away; the digest and the senders do not
 change. SMTP uses the standard library only, so any provider (Resend, SES,
 Postmark, Gmail...) works through its SMTP endpoint.
 
@@ -47,7 +55,7 @@ The digest is computed at the moment the job runs (`--as-of` overrides it).
 "Due" is an instant, not a calendar day, so the only time decision is when
 the cron fires. Railway cron schedules are in **UTC**: `0 11 * * *` is 08:00
 in Chile during summer time (UTC-3) and 07:00 in winter (UTC-4). One schedule
-for the whole deployment; per-learner hours come with per-user data.
+for the whole deployment; per-learner hours are a later step.
 
 ## Railway cron setup
 
@@ -70,7 +78,7 @@ the deploy logs.
 ## Locally
 
 ```sh
-scripts/dev-up.sh && python -m scripts.seed_sample_data
-LEARNING_TRACKER_DIGEST_RECIPIENTS='{"me@example.com": "*"}' \
+scripts/dev-up.sh && python -m scripts.seed_demo
+LEARNING_TRACKER_DIGEST_RECIPIENTS='{"demo_diego": "diego@example.com", "demo_ana": "ana@example.com"}' \
   python -m scripts.send_due_digest
 ```

@@ -422,6 +422,19 @@ class PostgresProfileStore:
             raise StorageError(f"no se pudo guardar el perfil: {exc}") from exc
         return profile
 
+    def list_user_ids(self) -> list[str]:
+        """Every user that owns at least one profile, sorted. Not scoped to
+        this store's user: it is for jobs that fan out over users (the daily
+        digest), which then open ``for_user`` stores one at a time."""
+        try:
+            with self._connect() as conn:
+                rows = conn.execute(
+                    f"SELECT DISTINCT user_id FROM {self._schema}.profiles ORDER BY user_id"
+                ).fetchall()
+        except psycopg.Error as exc:
+            raise StorageError(f"no se pudo listar los usuarios: {exc}") from exc
+        return [user_id for (user_id,) in rows]
+
     def list_profiles(self) -> list[Profile]:
         """Every profile, archived ones included, sorted by ``profile_id``.
 

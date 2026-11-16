@@ -1,4 +1,4 @@
-"""Send each recipient the daily digest of what is due (issue #68).
+"""Send each user the daily digest of what is due (issue #68).
 
 Meant to be run by a cron once a day. See ``docs/due-digest.md`` for the
 Railway cron setup.
@@ -10,17 +10,18 @@ Usage, from the repo root::
     python -m scripts.send_due_digest --sender smtp   # real email, SMTP vars required
     python -m scripts.send_due_digest --as-of 2026-11-15T11:00:00+00:00
 
-Recipients come from ``LEARNING_TRACKER_DIGEST_RECIPIENTS``, a JSON object
-mapping an email address to the topic ids it follows, or ``"*"`` for every
-topic::
+Data is per user (issue #58), so the digest is too: for every user that owns
+data, the job reads *that user's* topics only and sends *that user* a message
+about their own items; two users are never mixed in one message. The address
+of each user comes from ``LEARNING_TRACKER_DIGEST_RECIPIENTS``, a JSON object
+mapping a user id to an email address::
 
-    {"ana@example.com": ["redes-de-computadoras"], "profe@example.com": "*"}
+    {"user_2abc": "ana@example.com", "user_2def": "profe@example.com"}
 
-This is a stop-gap: the engine has no per-user data yet, so who gets what is
-plain configuration. When users own their topics, this mapping is replaced by
-a query and nothing else here changes.
+This mapping is a stop-gap until the email comes from Clerk. A user without a
+mapped address is skipped, and the skip is logged.
 
-A recipient with nothing due gets nothing. Exit code: 0 on success (sent or
+A user with nothing due gets nothing. Exit code: 0 on success (sent or
 silent), 2 on configuration errors, 1 if any send failed.
 """
 
@@ -31,7 +32,7 @@ import json
 import os
 import sys
 from datetime import datetime
-from typing import Mapping, Sequence
+from typing import Callable, Iterable, Mapping, Sequence
 
 from core.errors import StorageError
 from core.storage import AttemptStore, ProfileStore
@@ -57,8 +58,8 @@ class ConfigError(RuntimeError):
     pass
 
 
-def parse_recipients(raw: str | None) -> dict[str, list[str] | None]:
-    """Parses the recipients mapping. ``None`` as value means every topic."""
+def parse_recipients(raw: str | None) -> dict[str, str]:
+    """Parses the user id -> email mapping."""
     if not raw:
         raise ConfigError(f"set {RECIPIENTS_VAR} (see docs/due-digest.md)")
     try:
@@ -67,45 +68,50 @@ def parse_recipients(raw: str | None) -> dict[str, list[str] | None]:
         raise ConfigError(f"{RECIPIENTS_VAR} is not valid JSON: {exc}") from exc
     if not isinstance(data, dict) or not data:
         raise ConfigError(f"{RECIPIENTS_VAR} must be a non-empty JSON object")
-    parsed: dict[str, list[str] | None] = {}
-    for email, topics in data.items():
+    parsed: dict[str, str] = {}
+    for user_id, email in data.items():
+        if not user_id.strip():
+            raise ConfigError(f"{RECIPIENTS_VAR}: empty user id")
         if not isinstance(email, str) or "@" not in email:
-            raise ConfigError(f"{RECIPIENTS_VAR}: {email!r} is not an email address")
-        if topics == ALL_TOPICS:
-            parsed[email] = None
-        elif isinstance(topics, list) and all(isinstance(t, str) for t in topics):
-            parsed[email] = topics
-        else:
-            raise ConfigError(
-                f"{RECIPIENTS_VAR}: topics for {email} must be a list of ids or \"*\""
-            )
+            raise ConfigError(f"{RECIPIENTS_VAR}: {email!r} (for {user_id}) is not an email address")
+        parsed[user_id] = email
     return parsed
 
 
+#: Opens one user's stores. Every store it returns is scoped to that user, so
+#: nothing the digest reads can belong to anyone else.
+StoresFor = Callable[[str], tuple[ProfileStore, AttemptStore]]
+
+
 def run(
-    profiles: ProfileStore,
-    attempts: AttemptStore,
+    stores_for: StoresFor,
+    user_ids: Iterable[str],
     sender: Sender,
-    recipients: Mapping[str, list[str] | None],
+    recipients: Mapping[str, str],
     as_of: datetime,
     base_url: str,
     log=sys.stderr,
 ) -> int:
-    """Builds and sends one digest per recipient. Returns the exit code."""
+    """Builds and sends one digest per user. Returns the exit code."""
     failures = 0
-    for email, topics in recipients.items():
-        digest = build_digest(profiles, attempts, as_of, base_url, topic_ids=topics)
+    for user_id in user_ids:
+        email = recipients.get(user_id)
+        if email is None:
+            print(f"{user_id}: no email mapped, skipped", file=log)
+            continue
+        profiles, attempts = stores_for(user_id)
+        digest = build_digest(profiles, attempts, as_of, base_url)
         if digest.is_empty:
-            print(f"{email}: nothing due, nothing sent", file=log)
+            print(f"{user_id}: nothing due, nothing sent", file=log)
             continue
         message = Message(to=email, subject=render_subject(digest), body=render_text(digest))
         try:
             sender.send(message)
         except Exception as exc:  # one bad address must not silence everyone else
             failures += 1
-            print(f"{email}: send failed: {exc}", file=log)
+            print(f"{user_id}: send failed: {exc}", file=log)
         else:
-            print(f"{email}: sent ({digest.total_due} due)", file=log)
+            print(f"{user_id}: sent ({digest.total_due} due)", file=log)
     return 1 if failures else 0
 
 
@@ -156,9 +162,11 @@ def main(argv: Sequence[str] | None = None, env: Mapping[str, str] | None = None
         return 2
     schema = env.get(SCHEMA_VAR) or "learning"
     try:
+        base_profiles = PostgresProfileStore.from_dsn(dsn, schema=schema)
+        base_attempts = PostgresAttemptStore.from_dsn(dsn, schema=schema)
         return run(
-            PostgresProfileStore.from_dsn(dsn, schema=schema),
-            PostgresAttemptStore.from_dsn(dsn, schema=schema),
+            lambda user_id: (base_profiles.for_user(user_id), base_attempts.for_user(user_id)),
+            base_profiles.list_user_ids(),
             sender,
             recipients,
             as_of,
