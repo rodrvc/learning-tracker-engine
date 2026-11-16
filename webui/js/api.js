@@ -88,6 +88,8 @@ export const api = {
   // Unauthenticated on purpose (web/app.py): a page cannot sign in to learn
   // how to sign in.
   getAuthConfig: () => request("/auth/config"),
+  // `{enabled: false}` unless the server runs in demo mode (web/demo.py).
+  getDemoConfig: () => request("/demo/config"),
   // Who the session is, and whether it may open the teacher view (a hint for
   // the UI only: the server enforces it on `/org/progress`).
   getMe: () => request("/me"),

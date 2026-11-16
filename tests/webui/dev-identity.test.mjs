@@ -6,6 +6,7 @@ import {
   DEMO_IDENTITIES,
   devHeaders,
   demoEnabled,
+  demoGroups,
   loadIdentity,
   saveIdentity,
 } from "../../webui/js/dev-identity.js";
@@ -62,4 +63,21 @@ test("a storage that throws still yields the local user", () => {
   assert.equal(loadIdentity(broken).id, "");
   assert.equal(demoEnabled("?demo=1", broken), false);
   saveIdentity(broken, "demo_ana");
+});
+
+test("demo mode lists the local user first, then one group per organization", () => {
+  const ana = { id: "demo_ana", label: "Ana (estudiante)", org: "org_demo", role: "org:member", name: "Ana" };
+  const camila = { id: "demo_sp_camila", label: "Camila (funcionario/a)", org: "org_sp", role: "org:member", name: "Camila" };
+  const { local, groups, flat } = demoGroups({
+    enabled: true,
+    groups: [
+      { name: "Colegio Demo", identities: [ana] },
+      { name: "Vacío", identities: [] },
+      { name: "Servicio Público Demo", identities: [camila] },
+    ],
+  });
+  assert.equal(local.id, "");
+  assert.deepEqual(groups.map((group) => group.name), ["Colegio Demo", "Servicio Público Demo"]);
+  assert.deepEqual(flat.map((identity) => identity.id), ["", "demo_ana", "demo_sp_camila"]);
+  assert.equal(loadIdentity(memoryStorage({ "lt-dev-identity": "demo_sp_camila" }), flat).org, "org_sp");
 });

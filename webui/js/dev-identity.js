@@ -45,13 +45,22 @@ export function demoEnabled(search, storage) {
   }
 }
 
-export function loadIdentity(storage) {
+/** `identities` defaults to the built-in list; demo mode (`/demo/config`)
+ * passes the ones the server read from the seeded organizations. */
+export function loadIdentity(storage, identities = DEMO_IDENTITIES) {
   try {
     const id = storage.getItem(STORAGE_KEY);
-    return DEMO_IDENTITIES.find((identity) => identity.id === id) || DEMO_IDENTITIES[0];
+    return identities.find((identity) => identity.id === id) || identities[0];
   } catch {
-    return DEMO_IDENTITIES[0];
+    return identities[0];
   }
+}
+
+/** The switcher's entries for a `/demo/config` answer: the local user first,
+ * then one group per organization. `flat` is every identity, for lookups. */
+export function demoGroups(config) {
+  const groups = (config.groups || []).filter((group) => group.identities.length > 0);
+  return { local: DEMO_IDENTITIES[0], groups, flat: [DEMO_IDENTITIES[0], ...groups.flatMap((g) => g.identities)] };
 }
 
 export function saveIdentity(storage, id) {

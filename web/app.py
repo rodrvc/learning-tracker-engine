@@ -31,6 +31,7 @@ from core.errors import StorageError
 from .auth import require_session
 from .config import ConfigurationError, Settings
 from .deps import build_resources, close_resources
+from .demo import router as demo_router
 from .routers import ingest, material, org, practice, progress, topics
 
 logger = logging.getLogger(__name__)
@@ -104,6 +105,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "issuer": resolved.clerk_issuer,
             }
         )
+
+    # Outside ``require_session`` for the same reason as ``/auth/config``: the
+    # page asks it before anyone has picked an identity. It answers
+    # ``enabled: false`` unless demo mode is on, which needs auth off.
+    app.include_router(demo_router)
 
     @app.exception_handler(StorageError)
     @app.exception_handler(ContentStorageError)
