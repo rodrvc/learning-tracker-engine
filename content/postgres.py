@@ -325,6 +325,10 @@ class PostgresQuestionStore:
         incoming = list(questions)
         try:
             with self._connect() as conn:
+                # The foreign key on material_id ignores user_id, so ownership
+                # of the material is checked here, not left to the database.
+                for material_id in dict.fromkeys(q.material_id for q in incoming):
+                    self._check_material_exists(conn, material_id)
                 self._check_no_duplicates(conn, incoming)
                 for question in incoming:
                     self._insert(conn, question)

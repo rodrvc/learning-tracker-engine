@@ -20,6 +20,9 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
 
 import web.auth as auth_module
+from content.errors import UnknownMaterialError
+from content.models import Material, Question
+from content.postgres import PostgresMaterialStore, PostgresQuestionStore
 from core.models import Attempt, AttemptKind, Profile
 from migrations.runner import apply_migrations
 from store.postgres import LOCAL_USER_ID, PostgresAttemptStore, PostgresProfileStore
@@ -240,3 +243,33 @@ def test_stores_bound_to_different_users_are_disjoint():
 def test_empty_user_id_is_rejected():
     with pytest.raises(ValueError):
         PostgresProfileStore.from_dsn(POSTGRES_DSN, schema=POSTGRES_SCHEMA, user_id="  ")
+
+
+@pytest.mark.spec
+def test_a_user_cannot_attach_questions_to_another_users_material():
+    """``material_id`` is a global key and the foreign key on it does not look
+    at ``user_id``, so the question store has to: user B writing a question
+    that points at user A's material must fail, and must leave A's set alone."""
+    now = datetime.now(timezone.utc)
+    materials = PostgresMaterialStore.from_dsn(POSTGRES_DSN, schema=POSTGRES_SCHEMA)
+    questions = PostgresQuestionStore.from_dsn(POSTGRES_DSN, schema=POSTGRES_SCHEMA)
+    materials.for_user("ann").add(
+        Material(material_id="m1", topic_id="t", title="T", source="S", body="B", created_at=now)
+    )
+    foreign = Question(
+        question_id="q-ben",
+        topic_id="t",
+        objective_id="o",
+        stem="Stem?",
+        options=(("a", "A"), ("b", "B")),
+        correct_key="a",
+        explanation="Because.",
+        material_id="m1",
+        created_at=now,
+    )
+    with pytest.raises(UnknownMaterialError):
+        questions.for_user("ben").add_many([foreign])
+    assert questions.for_user("ann").list_for_topic("t") == []
+    assert questions.for_user("ben").list_for_topic("t") == []
+    with pytest.raises(UnknownMaterialError):
+        questions.for_user("ben").replace_for_material("m1", [foreign])
