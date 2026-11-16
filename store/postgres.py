@@ -71,6 +71,23 @@ from ._common import validate_attempt, validate_objective, validate_profile
 
 DEFAULT_SCHEMA = "learning"
 
+#: The one implicit user of a deployment that never configured authentication
+#: (and of the CLI, the test suite and every row that predates migration 0004).
+#: It is a real value in the ``user_id`` column, not an absence: auth off is
+#: "single user whose id is ``local``", so the same queries serve both modes.
+LOCAL_USER_ID = "local"
+
+
+def validate_user_id(user_id: str) -> str:
+    """Rejects an empty or non-string user id before it can become a scope.
+
+    A store bound to ``""`` would silently read and write a namespace nobody
+    owns; failing at construction is the loud version of that mistake.
+    """
+    if not isinstance(user_id, str) or not user_id.strip():
+        raise ValueError("user_id must be a non-empty string")
+    return user_id
+
 #: A zero-argument callable that returns a **context manager** yielding an
 #: open ``psycopg.Connection``. The stores below call it once per operation,
 #: use the result with ``with ... as conn:``, and never hold on to it between
@@ -160,18 +177,34 @@ class PostgresAttemptStore:
             DSN is all that is needed.
         schema: schema the tables live in. Defaults to ``"learning"``, the
             production schema; tests point it at a throwaway one.
+        user_id: the user every operation is scoped to. Defaults to
+            :data:`LOCAL_USER_ID`; see :meth:`for_user`.
     """
 
     def __init__(
-        self, connect: ConnectionProvider, schema: str = DEFAULT_SCHEMA
+        self,
+        connect: ConnectionProvider,
+        schema: str = DEFAULT_SCHEMA,
+        user_id: str = LOCAL_USER_ID,
     ) -> None:
         self._connect_fn = connect
         self._schema = schema
+        self._user_id = validate_user_id(user_id)
+
+    def for_user(self, user_id: str) -> "PostgresAttemptStore":
+        """The same store bound to another user. Shares the connection provider.
+
+        Every read and write of the returned store is scoped to ``user_id``;
+        nothing the instance it came from wrote or reads is visible through it.
+        """
+        return PostgresAttemptStore(self._connect_fn, schema=self._schema, user_id=user_id)
 
     @classmethod
-    def from_dsn(cls, dsn: str, schema: str = DEFAULT_SCHEMA) -> "PostgresAttemptStore":
+    def from_dsn(
+        cls, dsn: str, schema: str = DEFAULT_SCHEMA, user_id: str = LOCAL_USER_ID
+    ) -> "PostgresAttemptStore":
         """Convenience constructor: opens a plain ``psycopg.connect(dsn)`` per operation."""
-        return cls(lambda: psycopg.connect(dsn), schema=schema)
+        return cls(lambda: psycopg.connect(dsn), schema=schema, user_id=user_id)
 
     def _connect(self) -> ContextManager[psycopg.Connection]:
         return _open_connection(self._connect_fn)
@@ -184,12 +217,13 @@ class PostgresAttemptStore:
                 conn.execute(
                     f"""
                     INSERT INTO {self._schema}.attempts
-                        (attempt_id, profile_id, objective_id, at, correct,
+                        (attempt_id, user_id, profile_id, objective_id, at, correct,
                          kind, confidence, note, recorded_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         attempt.attempt_id,
+                        self._user_id,
                         profile_id,
                         attempt.objective_id,
                         attempt.at,
@@ -227,8 +261,8 @@ class PostgresAttemptStore:
         self, profile_id: str, objective_id: str, until: datetime | None = None
     ) -> list[Attempt]:
         """Attempts of an objective, sorted by ``at`` and ``attempt_id``."""
-        where = "WHERE profile_id = %s AND objective_id = %s"
-        params = (profile_id, objective_id)
+        where = "WHERE user_id = %s AND profile_id = %s AND objective_id = %s"
+        params = (self._user_id, profile_id, objective_id)
         if until is not None:
             where += " AND at <= %s"
             params += (until,)
@@ -238,8 +272,8 @@ class PostgresAttemptStore:
         self, profile_id: str, until: datetime | None = None
     ) -> list[Attempt]:
         """Every attempt of the profile, sorted, with an optional cut."""
-        where = "WHERE profile_id = %s"
-        params = (profile_id,)
+        where = "WHERE user_id = %s AND profile_id = %s"
+        params = (self._user_id, profile_id)
         if until is not None:
             where += " AND at <= %s"
             params += (until,)
@@ -247,8 +281,8 @@ class PostgresAttemptStore:
 
     def count(self, profile_id: str, objective_id: str | None = None) -> int:
         """Number of attempts of the profile (or of the objective, when given)."""
-        where = "WHERE profile_id = %s"
-        params: tuple = (profile_id,)
+        where = "WHERE user_id = %s AND profile_id = %s"
+        params: tuple = (self._user_id, profile_id)
         if objective_id is not None:
             where += " AND objective_id = %s"
             params += (objective_id,)
@@ -262,7 +296,13 @@ class PostgresAttemptStore:
         return total
 
     def exists(self, attempt_id: str) -> bool:
-        """Whether an attempt with that id already exists, in any profile."""
+        """Whether an attempt with that id already exists, for any profile or user.
+
+        Deliberately not scoped to the user: ``attempt_id`` is the table's only
+        primary key (SPEC C9), so an id taken by another user would still be a
+        duplicate on insert. Answering ``False`` for it would just move the
+        failure to a later ``append``.
+        """
         try:
             with self._connect() as conn:
                 row = conn.execute(
@@ -283,18 +323,34 @@ class PostgresProfileStore:
             :data:`ConnectionProvider`). Use :meth:`from_dsn` when a plain
             DSN is all that is needed.
         schema: schema the tables live in. Defaults to ``"learning"``.
+        user_id: the user every operation is scoped to. Defaults to
+            :data:`LOCAL_USER_ID`; see :meth:`for_user`.
     """
 
     def __init__(
-        self, connect: ConnectionProvider, schema: str = DEFAULT_SCHEMA
+        self,
+        connect: ConnectionProvider,
+        schema: str = DEFAULT_SCHEMA,
+        user_id: str = LOCAL_USER_ID,
     ) -> None:
         self._connect_fn = connect
         self._schema = schema
+        self._user_id = validate_user_id(user_id)
+
+    def for_user(self, user_id: str) -> "PostgresProfileStore":
+        """The same store bound to another user. Shares the connection provider.
+
+        Every read and write of the returned store is scoped to ``user_id``;
+        nothing the instance it came from wrote or reads is visible through it.
+        """
+        return PostgresProfileStore(self._connect_fn, schema=self._schema, user_id=user_id)
 
     @classmethod
-    def from_dsn(cls, dsn: str, schema: str = DEFAULT_SCHEMA) -> "PostgresProfileStore":
+    def from_dsn(
+        cls, dsn: str, schema: str = DEFAULT_SCHEMA, user_id: str = LOCAL_USER_ID
+    ) -> "PostgresProfileStore":
         """Convenience constructor: opens a plain ``psycopg.connect(dsn)`` per operation."""
-        return cls(lambda: psycopg.connect(dsn), schema=schema)
+        return cls(lambda: psycopg.connect(dsn), schema=schema, user_id=user_id)
 
     def _connect(self) -> ContextManager[psycopg.Connection]:
         return _open_connection(self._connect_fn)
@@ -305,15 +361,16 @@ class PostgresProfileStore:
             with self._connect() as conn:
                 row = conn.execute(
                     f"""SELECT name, archived FROM {self._schema}.profiles
-                        WHERE profile_id = %s""",
-                    (profile_id,),
+                        WHERE user_id = %s AND profile_id = %s""",
+                    (self._user_id, profile_id),
                 ).fetchone()
                 if row is None:
                     raise UnknownProfileError(profile_id)
                 rows = conn.execute(
                     f"""SELECT objective_id, title, domain, weight, tags
-                        FROM {self._schema}.objectives WHERE profile_id = %s""",
-                    (profile_id,),
+                        FROM {self._schema}.objectives
+                        WHERE user_id = %s AND profile_id = %s""",
+                    (self._user_id, profile_id),
                 ).fetchall()
         except UnknownProfileError:
             raise
@@ -331,25 +388,28 @@ class PostgresProfileStore:
             with self._connect() as conn:
                 conn.execute(
                     f"""
-                    INSERT INTO {self._schema}.profiles (profile_id, name, archived)
-                    VALUES (%s, %s, %s)
-                    ON CONFLICT (profile_id) DO UPDATE SET
+                    INSERT INTO {self._schema}.profiles
+                        (user_id, profile_id, name, archived)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (user_id, profile_id) DO UPDATE SET
                         name = EXCLUDED.name, archived = EXCLUDED.archived
                     """,
-                    (profile.profile_id, profile.name, profile.archived),
+                    (self._user_id, profile.profile_id, profile.name, profile.archived),
                 )
                 conn.execute(
-                    f"DELETE FROM {self._schema}.objectives WHERE profile_id = %s",
-                    (profile.profile_id,),
+                    f"""DELETE FROM {self._schema}.objectives
+                        WHERE user_id = %s AND profile_id = %s""",
+                    (self._user_id, profile.profile_id),
                 )
                 for objective in profile.objectives.values():
                     conn.execute(
                         f"""
                         INSERT INTO {self._schema}.objectives
-                            (profile_id, objective_id, title, domain, weight, tags)
-                        VALUES (%s, %s, %s, %s, %s, %s)
+                            (user_id, profile_id, objective_id, title, domain, weight, tags)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
                         """,
                         (
+                            self._user_id,
                             profile.profile_id,
                             objective.objective_id,
                             objective.title,
@@ -374,11 +434,13 @@ class PostgresProfileStore:
             with self._connect() as conn:
                 profile_rows = conn.execute(
                     f"""SELECT profile_id, name, archived FROM {self._schema}.profiles
-                        ORDER BY profile_id"""
+                        WHERE user_id = %s ORDER BY profile_id""",
+                    (self._user_id,),
                 ).fetchall()
                 objective_rows = conn.execute(
                     f"""SELECT profile_id, objective_id, title, domain, weight, tags
-                        FROM {self._schema}.objectives"""
+                        FROM {self._schema}.objectives WHERE user_id = %s""",
+                    (self._user_id,),
                 ).fetchall()
         except psycopg.Error as exc:
             raise StorageError(f"no se pudo listar los perfiles: {exc}") from exc
@@ -412,8 +474,9 @@ class PostgresProfileStore:
             with self._connect() as conn:
                 row = conn.execute(
                     f"""UPDATE {self._schema}.profiles SET archived = %s
-                        WHERE profile_id = %s RETURNING profile_id""",
-                    (archived, profile_id),
+                        WHERE user_id = %s AND profile_id = %s
+                        RETURNING profile_id""",
+                    (archived, self._user_id, profile_id),
                 ).fetchone()
                 if row is None:
                     raise UnknownProfileError(profile_id)
@@ -446,8 +509,9 @@ class PostgresProfileStore:
         try:
             with self._connect() as conn:
                 row = conn.execute(
-                    f"SELECT 1 FROM {self._schema}.profiles WHERE profile_id = %s",
-                    (profile_id,),
+                    f"""SELECT 1 FROM {self._schema}.profiles
+                        WHERE user_id = %s AND profile_id = %s""",
+                    (self._user_id, profile_id),
                 ).fetchone()
                 if row is None:
                     raise UnknownProfileError(profile_id)
@@ -455,13 +519,14 @@ class PostgresProfileStore:
                     conn.execute(
                         f"""
                         INSERT INTO {self._schema}.objectives
-                            (profile_id, objective_id, title, domain, weight, tags)
-                        VALUES (%s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (profile_id, objective_id) DO UPDATE SET
+                            (user_id, profile_id, objective_id, title, domain, weight, tags)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (user_id, profile_id, objective_id) DO UPDATE SET
                             title = EXCLUDED.title, domain = EXCLUDED.domain,
                             weight = EXCLUDED.weight, tags = EXCLUDED.tags
                         """,
                         (
+                            self._user_id,
                             profile_id,
                             objective.objective_id,
                             objective.title,
@@ -482,4 +547,5 @@ __all__ = [
     "PostgresProfileStore",
     "ConnectionProvider",
     "DEFAULT_SCHEMA",
+    "LOCAL_USER_ID",
 ]

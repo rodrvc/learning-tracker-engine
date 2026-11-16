@@ -31,7 +31,7 @@ from core.errors import StorageError
 from .auth import require_session
 from .config import MissingSettingError, Settings
 from .deps import build_resources, close_resources
-from .routers import ingest, material, practice, progress, topics
+from .routers import ingest, material, org, practice, progress, topics
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +135,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(practice.router, dependencies=session_required)
     app.include_router(progress.router, dependencies=session_required)
     app.include_router(ingest.router, dependencies=session_required)
+    app.include_router(org.router, dependencies=session_required)
     # Registered last: a Mount only ever answers a request no router above
     # already matched, so the API keeps owning its paths and this is purely
     # the fallback that serves the page and its assets.

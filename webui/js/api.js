@@ -1,6 +1,7 @@
 "use strict";
 
 import { authHeaders } from "./auth.js";
+import { devHeaders } from "./dev-identity.js";
 import { selectionQuery } from "./practice-scope.js";
 
 // Single place the API's base URL lives, so moving the front end to its own
@@ -16,6 +17,15 @@ let tokenProvider = null;
 
 export function setTokenProvider(fn) {
   tokenProvider = fn;
+}
+
+// A demo identity (dev-identity.js), only ever set when the server reports
+// authentication off. It is sent as `X-Dev-*` headers, which the server reads
+// in that mode alone.
+let devIdentity = null;
+
+export function setDevIdentity(identity) {
+  devIdentity = identity;
 }
 
 /** Raised for a network failure and a non-2xx response alike, so a caller can
@@ -52,7 +62,12 @@ export async function request(path, options = {}, fetchImpl = globalThis.fetch) 
       ...options,
       // After `...options`, not before: spreading it last is what makes a
       // caller's own `headers` merge with this default instead of erasing it.
-      headers: { "Content-Type": "application/json", ...authHeaders(token), ...options.headers },
+      headers: {
+        "Content-Type": "application/json",
+        ...authHeaders(token),
+        ...devHeaders(devIdentity),
+        ...options.headers,
+      },
     });
   } catch {
     throw new ApiError("No se pudo conectar con el servidor.", 0);
@@ -73,6 +88,10 @@ export const api = {
   // Unauthenticated on purpose (web/app.py): a page cannot sign in to learn
   // how to sign in.
   getAuthConfig: () => request("/auth/config"),
+  // Who the session is, and whether it may open the teacher view (a hint for
+  // the UI only: the server enforces it on `/org/progress`).
+  getMe: () => request("/me"),
+  getOrgProgress: () => request("/org/progress"),
   listTopics: () => request("/topics"),
   createTopic: (topicId, name) =>
     request("/topics", {
