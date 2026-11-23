@@ -108,6 +108,18 @@ a { color: inherit; }
 
 /* --- Header ------------------------------------------------------------ */
 
+/* Demo mode (LEARNING_TRACKER_DEMO_MODE): a strip above the header so nobody
+   mistakes the synthetic data for a real deployment. */
+.demo-banner {
+  background: var(--ink, #111);
+  color: var(--paper, #fff);
+  text-align: center;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  padding: 6px var(--gutter);
+}
+
 .shell { max-width: var(--shell); margin-inline: auto; width: 100%; }
 
 header {

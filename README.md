@@ -52,19 +52,24 @@ To run the production image locally, or to deploy it on Railway, see
 
 ### Demo data
 
-One command seeds a school-style demo, and the same data feeds the student's
-Progreso tab and the teacher's organization table (issues #74, #75):
+One command seeds two synthetic organizations, and the same data feeds the
+student's Progreso tab, the teacher's organization table and the daily digest
+(issues #74, #75, #81). The full demo, with a five-minute click-by-click script
+in Spanish, is in [`docs/demo.md`](docs/demo.md).
 
 ```sh
-.venv/bin/python -m scripts.seed_demo   # after scripts/dev-up.sh; safe to run again
-# then open http://127.0.0.1:8000/?demo=1
+LEARNING_TRACKER_DEMO_MODE=true scripts/dev-up.sh   # seeds, then serves: banner + persona switcher
+scripts/demo-reset.sh                               # back to the known state (--reset)
+.venv/bin/python -m scripts.seed_demo               # just the data; safe to run again
+# without demo mode, open http://127.0.0.1:8000/?demo=1 for the plain selector
 ```
 
-It creates the organization `org_demo`, a teacher (`demo_teacher`) and four
-students, all synthetic, each with school subjects (units, objectives) and a
-different backdated practice history: `demo_ana` strong and steady,
-`demo_bruno` uneven, `demo_carla` just started, `demo_diego` stopped weeks ago
-and has things due (only Historia). Re-running it neither duplicates nor fails.
+It creates the school `org_demo` (a teacher and four students, each with a
+different backdated history) and `org_servicio_publico` (a coordinator and
+seven staff training on Azure, AI-900 and AZ-900, with notes and questions to
+practise). `LEARNING_TRACKER_DEMO_MODE=true` is only valid with authentication
+off: with an issuer configured the app refuses to start. Re-running the seed
+neither duplicates nor fails; `--reset` deletes only the demo data first.
 
 Every learner's data is private to them (issue #58); an *organization admin* (a
 teacher) additionally gets a read-only table of their organization's members:
@@ -137,7 +142,7 @@ single implicit user `local` when authentication is off (migration `0004`).
 | `generate/` | Turns a page of notes into objectives and questions (OpenAI, plus a deterministic stub used by the tests and by the sample load) |
 | `web/` | The FastAPI backend: `web/config.py` is the full list of settings it reads |
 | `webui/` | The front end it serves, static files, no build step |
-| `scripts/` | `dev-up.sh`, `seed_demo.py` and `seed_sample_data.py`, described above; `send_due_digest.py`, the daily email of what is due, one per user and built from that user's own data; the user id -> email mapping is `LEARNING_TRACKER_DIGEST_RECIPIENTS`, a stopgap until emails come from Clerk (`docs/due-digest.md`) |
+| `scripts/` | `dev-up.sh`, `seed_demo.py` (+ `demo_content_azure.py`), `demo-reset.sh` and `seed_sample_data.py`, described above; `send_due_digest.py`, the daily email of what is due, one per user and built from that user's own data; the user id -> email mapping is `LEARNING_TRACKER_DIGEST_RECIPIENTS`, a stopgap until emails come from Clerk (`docs/due-digest.md`) |
 | `notify/` | The due digest and its senders (console, file, SMTP) |
 | `ui/` | A standard-library CLI over the engine — see `ui/README.md` |
 | `tests/` | Verification suite |

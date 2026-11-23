@@ -19,14 +19,17 @@ from fastapi.testclient import TestClient
 from core.leveling import compute_state
 from core.models import Attempt, Level
 from migrations.runner import apply_migrations
-from scripts import seed_demo
+from scripts import demo_content_azure, seed_demo
 from scripts.seed_demo import (
+    AZURE_TOPICS,
     HISTORIA,
+    STAFF,
     STUDENTS,
     TOPICS,
     Practice,
     attempt_times,
     personal_practice,
+    staff_practice,
 )
 from web.app import create_app
 from web.config import Settings
@@ -98,6 +101,52 @@ def test_the_lapsed_student_has_things_due_and_the_beginner_has_unstarted_ones()
     assert sum(s.level is Level.UNASSESSED for s in carla.values()) > 6
 
 
+def _staff(user_id):
+    return next(p for p in STAFF if p.user_id == user_id)
+
+
+def _staff_states(person):
+    return {
+        topic.topic_id: _states(staff_practice(person, topic)) for topic in person.topics
+    }
+
+
+def test_azure_content_covers_every_objective_with_valid_questions():
+    ids = [o.objective_id for course in demo_content_azure.COURSES for u in course.units for o in u.objectives]
+    assert len(ids) == len(set(ids))
+    assert [c.topic_id for c in demo_content_azure.COURSES] == [t.topic_id for t in AZURE_TOPICS]
+    for course in demo_content_azure.COURSES:
+        assert len(course.units) >= 3
+        for unit in course.units:
+            assert unit.notes.strip() and unit.objectives
+            for objective in unit.objectives:
+                assert objective.questions, objective.objective_id
+                for item in objective.questions:
+                    assert 0 <= item.correct < 4 and len(set(item.options)) == 4
+
+
+def test_the_agency_personas_tell_the_five_stories_with_reviews_due_today():
+    strong = _staff_states(_staff("demo_sp_camila"))["azure-ai-900"].values()
+    struggling = _staff_states(_staff("demo_sp_sebastian"))["azure-ai-900"].values()
+    assert all(s.level in (Level.MASTERED, Level.COMPETENT) for s in strong)
+    assert sum(s.level is Level.WEAK for s in struggling) > len(struggling) / 2
+    # Stopped about two weeks ago: nothing recent, and reviews have piled up.
+    stalled = _staff_states(_staff("demo_sp_ignacio"))["azure-ai-900"].values()
+    assert all(
+        (NOW - at).days >= 12
+        for practice in staff_practice(_staff("demo_sp_ignacio"), AZURE_TOPICS[0]).values()
+        if practice
+        for _, at in attempt_times(practice, NOW)[-1:]
+    )
+    assert sum(s.is_due for s in stalled) > 5
+    # Never started: enrolled, no attempts at all.
+    never = _staff_states(_staff("demo_sp_constanza"))["azure-ai-900"].values()
+    assert all(s.level is Level.UNASSESSED and not s.is_due for s in never)
+    with_due = [p for p in STAFF if any(s.is_due for t in _staff_states(p).values() for s in t.values())]
+    assert len(with_due) >= 4
+    assert 6 <= len(STAFF) + 1 <= 8
+
+
 def _postgres_reachable() -> bool:
     try:
         with psycopg.connect(POSTGRES_DSN, connect_timeout=1):
@@ -130,10 +179,10 @@ def _as(user_id, role="member"):
 
 @pytest.mark.spec
 def test_one_command_seeds_a_class_the_teacher_and_each_student_see_consistently(seeded):
-    assert seed_demo.main() == 0
+    assert seed_demo.main([]) == 0
     first = _count_attempts()
     assert first > 0
-    assert seed_demo.main() == 0  # retry-safe: nothing duplicated, nothing crashes
+    assert seed_demo.main([]) == 0  # retry-safe: nothing duplicated, nothing crashes
     assert _count_attempts() == first
 
     settings = Settings(
@@ -151,3 +200,54 @@ def test_one_command_seeds_a_class_the_teacher_and_each_student_see_consistently
             assert {t["topic_id"] for t in topics} == {t.topic_id for t in student.topics}
             assert len(topics) == len(rows[student.user_id])
         assert client.get("/org/progress", headers=_as("demo_ana")).status_code == 403
+
+
+def _demo_config(settings):
+    with TestClient(create_app(settings)) as client:
+        return client.get("/demo/config").json()
+
+
+def test_reset_restores_the_known_state_and_leaves_other_users_alone(seeded):
+    from store.postgres import PostgresProfileStore
+    from core.models import Profile
+
+    assert seed_demo.main([]) == 0
+    seeded_attempts = _count_attempts()
+    local = PostgresProfileStore.from_dsn(POSTGRES_DSN, schema=SCHEMA)
+    local.save_profile(Profile(profile_id="mi-tema", name="Mi tema", objectives={}))
+
+    settings = Settings(
+        database_url=POSTGRES_DSN, schema=SCHEMA, host="127.0.0.1", port=8000,
+        auth_disabled=True, demo_mode=True,
+    )
+    agency = {"X-Dev-User": "demo_sp_coordinacion", "X-Dev-Org": seed_demo.PUBLIC_SERVICE_ORG_ID, "X-Dev-Role": "org:admin"}
+    with TestClient(create_app(settings)) as client:
+        # The agency from the coordinator's side: seven staff, reviews due today.
+        rows = {m["user_id"]: m["topics"] for m in client.get("/org/progress", headers=agency).json()["members"]}
+        assert set(rows) == {p.user_id for p in STAFF}
+        due = {uid: sum(t["due_objectives"] for t in topics) for uid, topics in rows.items()}
+        assert sum(1 for count in due.values() if count) >= 4 and due["demo_sp_constanza"] == 0
+        # A student practises: the answer is recorded (this is the demo's own flow).
+        student = {"X-Dev-User": "demo_sp_sebastian", "X-Dev-Org": seed_demo.PUBLIC_SERVICE_ORG_ID}
+        question = client.get("/topics/azure-ai-900/practice/next", headers=student).json()
+        answered = client.post(
+            "/topics/azure-ai-900/practice/answer",
+            headers=student,
+            json={"question_id": question["question_id"], "attempt_id": "demo-test-1", "selected_key": "A"},
+        )
+        assert answered.status_code == 200
+        # The switcher is grouped by organization.
+        groups = client.get("/demo/config").json()
+        assert groups["enabled"] is True
+        assert [(g["name"], len(g["identities"])) for g in groups["groups"]] == [
+            ("Colegio Demo", 5),
+            ("Servicio Público Demo", 8),
+        ]
+        assert groups["groups"][1]["identities"][0]["role"] == "org:admin"
+
+    assert _count_attempts() == seeded_attempts + 1
+    assert seed_demo.main(["--reset"]) == 0
+    assert _count_attempts() == seeded_attempts  # back to the known state, the stray answer gone
+    assert local.get_profile("mi-tema").name == "Mi tema"  # not a demo user: untouched
+    off = Settings(database_url=POSTGRES_DSN, schema=SCHEMA, host="127.0.0.1", port=8000, auth_disabled=True)
+    assert _demo_config(off) == {"enabled": False, "groups": []}

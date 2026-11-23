@@ -61,6 +61,13 @@ CLERK_AUTHORIZED_PARTIES_VAR = "LEARNING_TRACKER_CLERK_AUTHORIZED_PARTIES"
 #: the web layer never inspects it itself.
 CLERK_PUBLISHABLE_KEY_VAR = "LEARNING_TRACKER_CLERK_PUBLISHABLE_KEY"
 
+#: Turns the instance into a demo environment: a visible banner in the UI and
+#: a persona switcher grouped by organization (``web/demo.py``). Only valid
+#: with authentication off - the personas are impersonated through the
+#: ``X-Dev-*`` headers, which exist only in that mode - so combining it with a
+#: Clerk issuer is a configuration error and the app refuses to start.
+DEMO_MODE_VAR = "LEARNING_TRACKER_DEMO_MODE"
+
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
 
@@ -119,6 +126,8 @@ class Settings:
             enforces it, so no code path can end up with neither.
         clerk_authorized_parties: origins accepted in the ``azp`` claim;
             empty means ``azp`` is not checked.
+        demo_mode: show the demo banner and persona switcher. Requires
+            ``auth_disabled``; the constructor enforces it.
     """
 
     database_url: str
@@ -129,6 +138,7 @@ class Settings:
     clerk_publishable_key: str | None = None
     auth_disabled: bool = False
     clerk_authorized_parties: tuple[str, ...] = ()
+    demo_mode: bool = False
 
     def __post_init__(self) -> None:
         # Checked here rather than only in ``from_env`` so a hand-built
@@ -142,6 +152,12 @@ class Settings:
             raise ConfigurationError(
                 f"authentication is not configured: set {CLERK_ISSUER_VAR}, "
                 f"or set {AUTH_DISABLED_VAR}=true to run without it"
+            )
+        if self.demo_mode and not self.auth_disabled:
+            raise ConfigurationError(
+                f"{DEMO_MODE_VAR} needs {AUTH_DISABLED_VAR}=true: the demo personas "
+                "are impersonated without a session, which must never be possible "
+                "with authentication on"
             )
 
     @classmethod
@@ -199,6 +215,7 @@ class Settings:
             clerk_publishable_key=clerk_publishable_key,
             auth_disabled=auth_disabled,
             clerk_authorized_parties=authorized_parties,
+            demo_mode=_parse_flag(DEMO_MODE_VAR, environ.get(DEMO_MODE_VAR)),
         )
 
 
@@ -211,6 +228,7 @@ __all__ = [
     "CLERK_ISSUER_VAR",
     "CLERK_PUBLISHABLE_KEY_VAR",
     "AUTH_DISABLED_VAR",
+    "DEMO_MODE_VAR",
     "CLERK_AUTHORIZED_PARTIES_VAR",
     "DEFAULT_HOST",
     "DEFAULT_PORT",
