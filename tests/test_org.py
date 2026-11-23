@@ -24,7 +24,7 @@ from store.members import PostgresMemberStore
 from store.postgres import PostgresAttemptStore, PostgresProfileStore
 from web.app import create_app
 from web.auth import identity_from_claims, normalize_role
-from web.config import Settings
+from web.config import ConfigurationError, Settings
 
 from .clerk_support import ISSUER, StubJwksClient, bearer
 
@@ -55,7 +55,12 @@ def stub_jwks(monkeypatch, private_key):
 
 def _client(dsn=DEAD_DSN, schema=None, issuer=ISSUER) -> TestClient:
     settings = Settings(
-        database_url=dsn, schema=schema, host="127.0.0.1", port=8000, clerk_issuer=issuer
+        database_url=dsn,
+        schema=schema,
+        host="127.0.0.1",
+        port=8000,
+        clerk_issuer=issuer,
+        auth_disabled=issuer is None,
     )
     return TestClient(create_app(settings), raise_server_exceptions=False)
 
@@ -128,6 +133,21 @@ def test_dev_headers_are_never_honoured_when_auth_is_on(stub_jwks, private_key):
         forged = client.get("/org/progress", headers={**bearer(private_key, "real_student", **STUDENT), **DEV})
     assert body["user_id"] == "real_student" and body["is_teacher"] is False
     assert forged.status_code == 403
+
+
+@pytest.mark.spec
+def test_a_deploy_missing_its_issuer_refuses_to_start_instead_of_trusting_dev_headers():
+    # The review risk: with the issuer unset the app used to fall back to
+    # X-Dev-* identities, so anyone could claim org:admin. Authentication now
+    # fails closed: no issuer and no explicit opt-out means no app at all, so
+    # there is nothing to send dev headers to.
+    env = {"LEARNING_TRACKER_DATABASE_URL": DEAD_DSN}
+    with pytest.raises(ConfigurationError):
+        Settings.from_env(env)
+    # Only the explicit opt-out makes the headers meaningful.
+    off = Settings.from_env({**env, "LEARNING_TRACKER_AUTH_DISABLED": "true"})
+    with TestClient(create_app(off), raise_server_exceptions=False) as client:
+        assert client.get("/me", headers=DEV).json()["is_teacher"] is True
 
 
 @pytest.mark.spec

@@ -15,6 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 
 from fastapi import Depends, Request
+from psycopg import sql
 from psycopg_pool import ConnectionPool
 
 from content.postgres import PostgresMaterialStore, PostgresQuestionStore
@@ -24,7 +25,7 @@ from generate.generator import QuestionGenerator
 from core.tracker import LearningTracker
 from store import SystemClock
 from store.members import PostgresMemberStore
-from store.postgres import PostgresAttemptStore, PostgresProfileStore
+from store.postgres import DEFAULT_SCHEMA, PostgresAttemptStore, PostgresProfileStore
 
 from .auth import Identity, require_session
 from .config import Settings
@@ -62,6 +63,7 @@ class Resources:
             materials=self.materials.for_user(user_id),
             questions=self.questions.for_user(user_id),
         )
+    schema: str = DEFAULT_SCHEMA
 
     def tracker_for(self, profile_id: str) -> LearningTracker:
         """A ``LearningTracker`` bound to one profile.
@@ -74,10 +76,20 @@ class Resources:
         return LearningTracker(profile_id, self.profiles, self.attempts, self.clock)
 
     def is_healthy(self) -> bool:
-        """Whether storage actually answers, not merely that the process is up."""
+        """Whether storage actually answers, not merely that the process is up.
+
+        Reads the migrations table rather than a bare ``SELECT 1``: a reachable
+        database whose schema was never migrated cannot serve a single route,
+        and a probe that calls it healthy sends traffic to a service that
+        answers 503 to everything (#29). One indexed one-row read per probe.
+        """
+        query = sql.SQL("SELECT 1 FROM {}.schema_migrations LIMIT 1").format(
+            sql.Identifier(self.schema)
+        )
         try:
             with self.pool.connection(timeout=HEALTH_CHECK_TIMEOUT_SECONDS) as conn:
-                conn.execute("SELECT 1")
+                if conn.execute(query).fetchone() is None:
+                    return False
         except Exception:
             return False
         return True
@@ -133,6 +145,7 @@ def build_resources(settings: Settings) -> Resources:
         generator=OpenAIGenerator(),
         clock=SystemClock(),
         members=members,
+        schema=settings.schema or DEFAULT_SCHEMA,
     )
 
 

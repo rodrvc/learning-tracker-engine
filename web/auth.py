@@ -11,9 +11,10 @@ without checking its signature is worse than none, because it looks like
 protection while checking nothing.
 
 Authentication is switched on by configuring ``Settings.clerk_issuer``
-(``web/config.py``) and switched off by leaving it unset - which is the
-default everywhere the test suite runs, so 661 pre-existing tests keep
-talking to the API with no notion of a session.
+(``web/config.py``) and off only by ``Settings.auth_disabled``, which the
+test suite sets explicitly. Neither set is a configuration error raised at
+startup, so this module never sees that state (fail closed, product contract
+section 2).
 """
 
 from __future__ import annotations
@@ -122,7 +123,7 @@ def identity_from_claims(claims: dict) -> Identity:
 def _dev_identity(request: Request) -> Identity:
     """A demo identity chosen by request headers, for showing the teacher view
     without Clerk. Reached only from the authentication-off branch of
-    :func:`require_session`: with an issuer configured these headers are never
+    :func:`require_session` (``auth_disabled``): with an issuer configured these headers are never
     read, so they cannot be used to claim an identity on a real deployment.
     """
     headers = request.headers
@@ -158,20 +159,23 @@ def require_session(request: Request) -> Identity:
     """FastAPI dependency: raises unless the request carries a valid Clerk
     session for the configured issuer, and returns who it is from.
 
-    With ``clerk_issuer`` unset it returns the one implicit local user (or a
+    With ``auth_disabled`` set it returns the one implicit local user (or a
     demo identity named by ``X-Dev-*`` headers, see :func:`_dev_identity`)
     without reading the ``Authorization`` header at all, which is how the
-    suite and any single-user deployment that never configured Clerk keep
-    working exactly as they did before this module existed.
+    suite and a single-user install keep working. When
+    ``clerk_authorized_parties`` is configured, the token's ``azp`` must be
+    one of them: every product shares one Clerk instance, so otherwise a
+    token minted for another product's origin would pass.
 
     Reads ``request.app.state.settings`` rather than taking ``Settings`` as
     a parameter so it can be attached to a router with a plain
     ``Depends(require_session)``, the same shape every other dependency in
     this codebase uses (``web/deps.py``'s ``get_resources``).
     """
-    issuer = request.app.state.settings.clerk_issuer
-    if not issuer:
+    settings = request.app.state.settings
+    if settings.auth_disabled:
         return _dev_identity(request)
+    issuer = settings.clerk_issuer
     token = _bearer_token(request.headers.get("authorization"))
     client = _jwks_client(issuer)
     try:
@@ -188,6 +192,9 @@ def require_session(request: Request) -> Identity:
         raise SessionError("session expired") from exc
     except jwt.PyJWTError as exc:
         raise SessionError("invalid session") from exc
+    parties = settings.clerk_authorized_parties
+    if parties and claims.get("azp") not in parties:
+        raise SessionError("invalid session")
     subject = claims.get("sub")
     if not isinstance(subject, str) or not subject.strip():
         raise SessionError("invalid session")

@@ -29,7 +29,7 @@ from content.errors import StorageError as ContentStorageError
 from core.errors import StorageError
 
 from .auth import require_session
-from .config import MissingSettingError, Settings
+from .config import ConfigurationError, Settings
 from .deps import build_resources, close_resources
 from .routers import ingest, material, org, practice, progress, topics
 
@@ -122,7 +122,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         503 is the honest code: the service cannot serve the request now and
         the caller may retry.
         """
-        logger.exception("storage failure serving %s %s", request.method, request.url.path)
+        # ``exc_info=exc``, not ``logger.exception``: an exception handler is
+        # not inside an ``except`` block, so ``logger.exception`` logged
+        # ``NoneType: None`` and the operator got no cause at all (#29).
+        logger.error(
+            "storage failure serving %s %s", request.method, request.url.path, exc_info=exc
+        )
         return JSONResponse({"detail": STORAGE_UNAVAILABLE_DETAIL}, status_code=503)
 
     # Every data route requires a session (a no-op check while
@@ -143,20 +148,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     return app
 
 
-def main() -> None:
-    """Entry point for ``python -m web.app``.
+def main(argv: list[str] | None = None) -> None:
+    """Entry point for ``python -m web.app [--migrate]``.
 
     A missing setting exits with a single line rather than a traceback. This is
     the first thing an operator meets on a deploy with an unset variable, and a
     stack trace makes them hunt for the one line that matters.
+
+    ``--migrate`` applies pending migrations before serving (the container
+    does this, see ``Dockerfile``). Settings are validated first, so a
+    misconfigured deploy refuses to start without touching the database.
     """
     import uvicorn
 
+    argv = sys.argv[1:] if argv is None else argv
     try:
         settings = Settings.from_env(os.environ)
-    except MissingSettingError as exc:
+    except ConfigurationError as exc:
         print(f"error: {exc}", file=sys.stderr)
         raise SystemExit(2) from None
+    if "--migrate" in argv:
+        from migrations.runner import DEFAULT_SCHEMA, apply_migrations
+
+        schema = settings.schema or DEFAULT_SCHEMA
+        applied = apply_migrations(settings.database_url, schema=schema)
+        print(f"{applied} migration(s) applied to schema {schema!r}", flush=True)
     uvicorn.run(create_app(settings), host=settings.host, port=settings.port)
 
 

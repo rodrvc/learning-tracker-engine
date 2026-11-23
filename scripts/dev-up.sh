@@ -25,6 +25,14 @@ fi
 : "${LEARNING_TRACKER_DATABASE_URL:?Set LEARNING_TRACKER_DATABASE_URL first: cp .env.example .env (and edit it), or export it yourself.}"
 schema="${LEARNING_TRACKER_SCHEMA:-learning}"
 
+# The application refuses to start with authentication neither configured
+# nor explicitly off (fail closed, docs/deploy.md). This script is for a local
+# machine only, so with no Clerk issuer it turns the switch on, out loud.
+if [ -z "${LEARNING_TRACKER_CLERK_ISSUER:-}" ] && [ -z "${LEARNING_TRACKER_AUTH_DISABLED:-}" ]; then
+  echo "==> no LEARNING_TRACKER_CLERK_ISSUER: running locally with LEARNING_TRACKER_AUTH_DISABLED=true"
+  export LEARNING_TRACKER_AUTH_DISABLED=true
+fi
+
 # Checked here rather than left to fail two steps later. Forgetting to activate
 # the virtualenv is the most likely way a first run goes wrong, and without this
 # it surfaces as `python: command not found` from the migration step, which

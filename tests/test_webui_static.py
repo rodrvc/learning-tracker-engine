@@ -19,7 +19,7 @@ DEAD_DSN = "postgresql://nobody:nobody@127.0.0.1:1/nowhere"
 
 @pytest.fixture
 def settings() -> Settings:
-    return Settings(database_url=DEAD_DSN, schema=None, host="127.0.0.1", port=8000)
+    return Settings(database_url=DEAD_DSN, schema=None, host="127.0.0.1", port=8000, auth_disabled=True)
 
 
 @pytest.mark.spec
