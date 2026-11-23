@@ -41,7 +41,7 @@ carries numbers and every example is walked through step by step.
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `profile_id` | `str` | Stable identifier. E.g.: `"ai-103"`. Unique. |
+| `profile_id` | `str` | Stable identifier. E.g.: `"ai-103"`. Unique (per user in the PostgreSQL backend, see section 9). |
 | `name` | `str` | Human readable name. E.g.: `"Microsoft AI-103"`. |
 | `objectives` | `dict[str, Objective]` | Objectives indexed by `objective_id`. |
 
@@ -665,7 +665,7 @@ The exact names, types and docstrings live in `core/`. This is the map.
 | `FixedClock` | Always returns the same date. For tests. |
 | `OffsetClock` | A base `Clock` plus a shift. To simulate moving forward. |
 | `SystemClock` | The real clock. **It lives in `store/`, not in `core/`**, so that I2 is verifiable with a grep over `core/`. |
-| `AttemptStore` (Protocol) | Persistence of attempts: `append(profile_id, attempt)`, `list_for_objective`, `list_all`, `count`, `exists`. It only appends and reads. `profile_id` travels in the call and not in `Attempt` (section 1.3 does not include it): the store indexes by profile, exactly as in `list_for_objective`, `list_all` and `count`; `attempt_id` is globally unique (C9). |
+| `AttemptStore` (Protocol) | Persistence of attempts: `append(profile_id, attempt)`, `list_for_objective`, `list_all`, `count`, `exists`. It only appends and reads. `profile_id` travels in the call and not in `Attempt` (section 1.3 does not include it): the store indexes by profile, exactly as in `list_for_objective`, `list_all` and `count`; `attempt_id` is globally unique (C9). The PostgreSQL backend adds a second axis the contract above does not see: its stores are bound to a `user_id` (default `local`, the implicit user when authentication is off) and every read and write is filtered by it, so `profile_id` only has to be unique per user. The JSON and memory backends are single-user. |
 | `ProfileStore` (Protocol) | Persistence of profiles and objectives. |
 
 ### 9.2 Model (`core/models.py`)

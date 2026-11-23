@@ -48,7 +48,13 @@ from typing import Iterable
 import psycopg
 from psycopg import errors as pg_errors
 
-from store.postgres import ConnectionProvider, DEFAULT_SCHEMA, _open_connection
+from store.postgres import (
+    LOCAL_USER_ID,
+    ConnectionProvider,
+    DEFAULT_SCHEMA,
+    _open_connection,
+    validate_user_id,
+)
 
 from ._common import reject_duplicate_ids
 from .errors import (
@@ -118,16 +124,31 @@ class PostgresMaterialStore:
             :data:`store.postgres.ConnectionProvider`). Use :meth:`from_dsn`
             when a plain DSN is all that is needed.
         schema: schema the tables live in. Defaults to ``"learning"``.
+        user_id: the user every read and write is scoped to (``LOCAL_USER_ID``
+            by default); see ``for_user``.
     """
 
-    def __init__(self, connect: ConnectionProvider, schema: str = DEFAULT_SCHEMA) -> None:
+    def __init__(
+        self,
+        connect: ConnectionProvider,
+        schema: str = DEFAULT_SCHEMA,
+        user_id: str = LOCAL_USER_ID,
+    ) -> None:
         self._connect_fn = connect
         self._schema = schema
+        self._user_id = validate_user_id(user_id)
 
     @classmethod
-    def from_dsn(cls, dsn: str, schema: str = DEFAULT_SCHEMA) -> "PostgresMaterialStore":
+    def from_dsn(
+        cls, dsn: str, schema: str = DEFAULT_SCHEMA, user_id: str = LOCAL_USER_ID
+    ) -> "PostgresMaterialStore":
         """Convenience constructor: opens a plain ``psycopg.connect(dsn)`` per operation."""
-        return cls(lambda: psycopg.connect(dsn), schema=schema)
+        return cls(lambda: psycopg.connect(dsn), schema=schema, user_id=user_id)
+
+    def for_user(self, user_id: str) -> "PostgresMaterialStore":
+        """The same store bound to another user: it shares the connection
+        provider and sees none of this instance's rows."""
+        return PostgresMaterialStore(self._connect_fn, schema=self._schema, user_id=user_id)
 
     def _connect(self):
         return _open_connection(self._connect_fn)
@@ -139,11 +160,12 @@ class PostgresMaterialStore:
                 conn.execute(
                     f"""
                     INSERT INTO {self._schema}.materials
-                        (material_id, topic_id, title, source, body, created_at)
-                    VALUES (%s, %s, %s, %s, %s, %s)
+                        (material_id, user_id, topic_id, title, source, body, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         material.material_id,
+                        self._user_id,
                         material.topic_id,
                         material.title,
                         material.source,
@@ -163,8 +185,9 @@ class PostgresMaterialStore:
             with self._connect() as conn:
                 row = conn.execute(
                     f"""SELECT material_id, topic_id, title, source, body, created_at
-                        FROM {self._schema}.materials WHERE material_id = %s""",
-                    (material_id,),
+                        FROM {self._schema}.materials
+                        WHERE user_id = %s AND material_id = %s""",
+                    (self._user_id, material_id),
                 ).fetchone()
         except psycopg.Error as exc:
             raise StorageError(f"no se pudo leer el material: {exc}") from exc
@@ -180,17 +203,20 @@ class PostgresMaterialStore:
                     f"""
                     SELECT material_id, topic_id, title, source, body, created_at
                     FROM {self._schema}.materials
-                    WHERE topic_id = %s
+                    WHERE user_id = %s AND topic_id = %s
                     ORDER BY created_at, material_id
                     """,
-                    (topic_id,),
+                    (self._user_id, topic_id),
                 ).fetchall()
         except psycopg.Error as exc:
             raise StorageError(f"no se pudo listar los materiales: {exc}") from exc
         return [_row_to_material(row) for row in rows]
 
     def exists(self, material_id: str) -> bool:
-        """Whether a material with that id already exists."""
+        """Whether a material with that id already exists, for any user.
+
+        Not scoped on purpose: ``material_id`` is the table's primary key, so an
+        id taken by another user is a collision on insert whoever asks."""
         try:
             with self._connect() as conn:
                 row = conn.execute(
@@ -211,16 +237,31 @@ class PostgresQuestionStore:
             :data:`store.postgres.ConnectionProvider`). Use :meth:`from_dsn`
             when a plain DSN is all that is needed.
         schema: schema the tables live in. Defaults to ``"learning"``.
+        user_id: the user every read and write is scoped to (``LOCAL_USER_ID``
+            by default); see ``for_user``.
     """
 
-    def __init__(self, connect: ConnectionProvider, schema: str = DEFAULT_SCHEMA) -> None:
+    def __init__(
+        self,
+        connect: ConnectionProvider,
+        schema: str = DEFAULT_SCHEMA,
+        user_id: str = LOCAL_USER_ID,
+    ) -> None:
         self._connect_fn = connect
         self._schema = schema
+        self._user_id = validate_user_id(user_id)
 
     @classmethod
-    def from_dsn(cls, dsn: str, schema: str = DEFAULT_SCHEMA) -> "PostgresQuestionStore":
+    def from_dsn(
+        cls, dsn: str, schema: str = DEFAULT_SCHEMA, user_id: str = LOCAL_USER_ID
+    ) -> "PostgresQuestionStore":
         """Convenience constructor: opens a plain ``psycopg.connect(dsn)`` per operation."""
-        return cls(lambda: psycopg.connect(dsn), schema=schema)
+        return cls(lambda: psycopg.connect(dsn), schema=schema, user_id=user_id)
+
+    def for_user(self, user_id: str) -> "PostgresQuestionStore":
+        """The same store bound to another user: it shares the connection
+        provider and sees none of this instance's rows."""
+        return PostgresQuestionStore(self._connect_fn, schema=self._schema, user_id=user_id)
 
     def _connect(self):
         return _open_connection(self._connect_fn)
@@ -230,12 +271,13 @@ class PostgresQuestionStore:
             conn.execute(
                 f"""
                 INSERT INTO {self._schema}.questions
-                    (question_id, topic_id, objective_id, stem, options,
+                    (question_id, user_id, topic_id, objective_id, stem, options,
                      correct_key, explanation, material_id, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     question.question_id,
+                    self._user_id,
                     question.topic_id,
                     question.objective_id,
                     question.stem,
@@ -283,6 +325,10 @@ class PostgresQuestionStore:
         incoming = list(questions)
         try:
             with self._connect() as conn:
+                # The foreign key on material_id ignores user_id, so ownership
+                # of the material is checked here, not left to the database.
+                for material_id in dict.fromkeys(q.material_id for q in incoming):
+                    self._check_material_exists(conn, material_id)
                 self._check_no_duplicates(conn, incoming)
                 for question in incoming:
                     self._insert(conn, question)
@@ -302,9 +348,10 @@ class PostgresQuestionStore:
                     f"""
                     SELECT question_id, topic_id, objective_id, stem, options,
                            correct_key, explanation, material_id, created_at
-                    FROM {self._schema}.questions WHERE question_id = %s
+                    FROM {self._schema}.questions
+                    WHERE user_id = %s AND question_id = %s
                     """,
-                    (question_id,),
+                    (self._user_id, question_id),
                 ).fetchone()
         except psycopg.Error as exc:
             raise StorageError(f"no se pudo leer la pregunta: {exc}") from exc
@@ -320,10 +367,10 @@ class PostgresQuestionStore:
                     SELECT question_id, topic_id, objective_id, stem, options,
                            correct_key, explanation, material_id, created_at
                     FROM {self._schema}.questions
-                    {where}
+                    WHERE user_id = %s AND {where}
                     ORDER BY created_at, question_id
                     """,
-                    params,
+                    (self._user_id, *params),
                 ).fetchall()
         except psycopg.Error as exc:
             raise StorageError(f"no se pudo leer las preguntas: {exc}") from exc
@@ -331,16 +378,19 @@ class PostgresQuestionStore:
 
     def list_for_objective(self, objective_id: str) -> list[Question]:
         """Questions assessing an objective, in the canonical order."""
-        return self._select("WHERE objective_id = %s", (objective_id,))
+        return self._select("objective_id = %s", (objective_id,))
 
     def list_for_topic(self, topic_id: str) -> list[Question]:
         """Questions of a topic, in the canonical order."""
-        return self._select("WHERE topic_id = %s", (topic_id,))
+        return self._select("topic_id = %s", (topic_id,))
 
     def count(self, topic_id: str | None = None) -> int:
         """Number of questions, optionally scoped to a topic."""
-        where = "WHERE topic_id = %s" if topic_id is not None else ""
-        params = (topic_id,) if topic_id is not None else ()
+        where = "WHERE user_id = %s"
+        params: tuple = (self._user_id,)
+        if topic_id is not None:
+            where += " AND topic_id = %s"
+            params += (topic_id,)
         try:
             with self._connect() as conn:
                 (total,) = conn.execute(
@@ -351,7 +401,8 @@ class PostgresQuestionStore:
         return total
 
     def exists(self, question_id: str) -> bool:
-        """Whether a question with that id already exists."""
+        """Whether a question with that id already exists, for any user (the
+        primary key is global, so a taken id collides whoever asks)."""
         try:
             with self._connect() as conn:
                 row = conn.execute(
@@ -364,8 +415,9 @@ class PostgresQuestionStore:
 
     def _check_material_exists(self, conn: psycopg.Connection, material_id: str) -> None:
         row = conn.execute(
-            f"SELECT 1 FROM {self._schema}.materials WHERE material_id = %s",
-            (material_id,),
+            f"""SELECT 1 FROM {self._schema}.materials
+                WHERE user_id = %s AND material_id = %s""",
+            (self._user_id, material_id),
         ).fetchone()
         if row is None:
             raise UnknownMaterialError(material_id)
@@ -391,8 +443,9 @@ class PostgresQuestionStore:
                 self._check_material_exists(conn, material_id)
                 self._check_no_duplicates(conn, incoming, exclude_material_id=material_id)
                 conn.execute(
-                    f"DELETE FROM {self._schema}.questions WHERE material_id = %s",
-                    (material_id,),
+                    f"""DELETE FROM {self._schema}.questions
+                        WHERE user_id = %s AND material_id = %s""",
+                    (self._user_id, material_id),
                 )
                 for question in incoming:
                     self._insert(conn, question)
