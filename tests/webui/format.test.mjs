@@ -284,7 +284,7 @@ test("describePracticeUnavailable shows a non-404 failure's message unchanged", 
 
 test("levelLabel translates every SPEC level to its Spanish product name", () => {
   assert.equal(levelLabel("UNASSESSED"), "Sin evaluar");
-  assert.equal(levelLabel("WEAK"), "Débil");
+  assert.equal(levelLabel("WEAK"), "Por reforzar");
   assert.equal(levelLabel("LEARNING"), "Aprendiendo");
   assert.equal(levelLabel("COMPETENT"), "Competente");
   assert.equal(levelLabel("MASTERED"), "Dominado");

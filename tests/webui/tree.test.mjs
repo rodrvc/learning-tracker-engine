@@ -76,7 +76,8 @@ test("every row carries its scope, its identifier and its state", () => {
   // must not claim one.
   assert.doesNotMatch(html, /data-domain="null"/);
   assert.equal(html.match(/due-marker/g).length, 1);
-  assert.match(html, /Débil/);
+  assert.match(html, /Por reforzar/);
+  assert.match(html, /Repaso pendiente/);
 });
 
 // --- One checkbox per selectable row (issue #71) ---
